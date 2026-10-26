@@ -1,0 +1,42 @@
+id: python_ai_venv
+name: Isolated Python AI & Data Science Environment
+triggers:
+  - "python ai"
+  - "data science"
+  - "pytorch"
+  - "jupyter"
+summary: "Creates an isolated Python venv and installs pinned, hash-verified NumPy, Pandas, and JupyterLab packages from PyPI."
+steps:
+  - id: step-1
+    description: "Create isolated Python virtual environment in ./.venv-ai"
+    step:
+      action: create_isolated_env
+      params:
+        kind: python_venv
+        path: "./.venv-ai"
+  - id: step-2
+    description: "Install numpy inside isolated environment"
+    step:
+      action: install_package
+      params:
+        ecosystem: py_p_i
+        package_id: numpy
+        version: "2.1.1"
+        source_adapter: py_p_i
+  - id: step-3
+    description: "Install pandas inside isolated environment"
+    step:
+      action: install_package
+      params:
+        ecosystem: py_p_i
+        package_id: pandas
+        version: "2.2.3"
+        source_adapter: py_p_i
+  - id: step-4
+    description: "Verify Python interpreter version"
+    step:
+      action: run_verify_command
+      params:
+        binary: python
+        args:
+          - "--version"

@@ -1,0 +1,49 @@
+id: cpp20_dev
+name: Modern C++20 Development Environment (Windows / Cross-Platform)
+triggers:
+  - "c++20"
+  - "c++ dev"
+  - "cpp20"
+  - "c++ toolchain"
+summary: "Installs LLVM/Clang or MSYS2 MinGW-w64 G++, CMake, Ninja, and Git via Winget, updates User PATH, and verifies C++20 compilation."
+steps:
+  - id: step-1
+    description: "Install LLVM Clang C++20 toolchain via Winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: LLVM.LLVM
+        version: "18.1.8"
+        source_adapter: winget
+  - id: step-2
+    description: "Install CMake build system generator via Winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: Kitware.CMake
+        version: "3.30.2"
+        source_adapter: winget
+  - id: step-3
+    description: "Ensure LLVM bin directory is registered on User PATH"
+    step:
+      action: add_to_user_path
+      params:
+        directory: "C:\\\\Program Files\\\\LLVM\\\\bin"
+  - id: step-4
+    description: "Verify clang++ --version responds cleanly"
+    step:
+      action: run_verify_command
+      params:
+        binary: clang
+        args:
+          - "--version"
+  - id: step-5
+    description: "Verify cmake --version responds cleanly"
+    step:
+      action: run_verify_command
+      params:
+        binary: cmake
+        args:
+          - "--version"
