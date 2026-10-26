@@ -1,0 +1,699 @@
+/**
+ * SetupPal: Mascot Animations for Pixel (Ghost), Byte (Cat), and Mochi (Bunny)
+ * Covers all 20 catalogue animations + pet-specific personality behaviors
+ */
+
+:root {
+  --t-float: 2.4s;
+  --t-blink: 4.8s;
+}
+
+/* Transform setup as required by SVG CSS spec */
+.ghost-root *,
+.pet-root * {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* ========================================================
+   1. IDLE-FLOAT (Default float + shadow scaling)
+   ======================================================== */
+@keyframes ghostFloat {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+@keyframes shadowScale {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.16;
+  }
+  50% {
+    transform: scale(0.85);
+    opacity: 0.09;
+  }
+}
+
+@keyframes hemWave {
+  0%, 100% {
+    transform: skewX(0deg);
+  }
+  50% {
+    transform: skewX(2.5deg);
+  }
+}
+
+.pet-body-group {
+  animation: ghostFloat var(--t-float) ease-in-out infinite;
+}
+
+.ghost-shadow ellipse {
+  animation: shadowScale var(--t-float) ease-in-out infinite;
+  transform-origin: center;
+}
+
+.ghost-hem {
+  animation: hemWave 1.8s ease-in-out infinite;
+}
+
+/* Cat-specific idle personality: Swishing tail & twitching ears */
+@keyframes catTailSwish {
+  0%, 100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(-12deg);
+  }
+}
+
+.cat-tail {
+  animation: catTailSwish 2.2s ease-in-out infinite;
+  transform-origin: 140px 148px;
+}
+
+@keyframes catEarTwitch {
+  0%, 90%, 100% {
+    transform: rotate(0deg);
+  }
+  93% {
+    transform: rotate(-6deg);
+  }
+  96% {
+    transform: rotate(4deg);
+  }
+}
+
+.cat-ear-l {
+  animation: catEarTwitch 5s ease-in-out infinite;
+  transform-origin: 72px 78px;
+}
+
+/* Bunny-specific idle personality: Floppy ear gentle bounce */
+@keyframes bunnyEarFlop {
+  0%, 100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(-4deg);
+  }
+}
+
+.bunny-ear-l {
+  animation: bunnyEarFlop 2s ease-in-out infinite;
+  transform-origin: 76px 86px;
+}
+
+.bunny-ear-r {
+  animation: bunnyEarFlop 2s 0.3s ease-in-out infinite;
+  transform-origin: 124px 86px;
+}
+
+/* ========================================================
+   2. BLINK (Eyes scaleY blink)
+   ======================================================== */
+@keyframes ghostBlink {
+  0%, 94%, 100% {
+    transform: scaleY(1);
+  }
+  97% {
+    transform: scaleY(0.12);
+  }
+}
+
+.ghost-eye {
+  animation: ghostBlink var(--t-blink) ease-in-out infinite;
+}
+
+/* ========================================================
+   3. SPEAKING (Mouth squashes with typing text)
+   ======================================================== */
+.pet-root[data-state="speaking"] .mouth-smile {
+  display: none !important;
+}
+
+.pet-root[data-state="speaking"] .mouth-open {
+  opacity: 1 !important;
+  animation: mouthSpeak 0.18s ease-in-out infinite alternate;
+}
+
+@keyframes mouthSpeak {
+  0% {
+    transform: scaleY(0.6) scaleX(0.8);
+  }
+  100% {
+    transform: scaleY(1.4) scaleX(1.1);
+  }
+}
+
+/* ========================================================
+   4. THINKING (AI drafting plan)
+   ======================================================== */
+.pet-root[data-state="thinking"] .pet-body-group {
+  transform: rotate(4deg);
+  transition: transform 0.4s ease;
+}
+
+.pet-root[data-state="thinking"] .ghost-eye {
+  transform: translate(2.5px, -2.5px);
+}
+
+.pet-root[data-state="thinking"] .fx-item[id$="fx-dots"] {
+  opacity: 1 !important;
+}
+
+@keyframes pulseDot {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.4;
+  }
+  50% {
+    transform: translateY(-5px) scale(1.2);
+    opacity: 1;
+  }
+}
+
+.pet-root[data-state="thinking"] .dot-1 {
+  animation: pulseDot 1.2s 0.0s ease-in-out infinite;
+}
+.pet-root[data-state="thinking"] .dot-2 {
+  animation: pulseDot 1.2s 0.2s ease-in-out infinite;
+}
+.pet-root[data-state="thinking"] .dot-3 {
+  animation: pulseDot 1.2s 0.4s ease-in-out infinite;
+}
+
+/* ========================================================
+   5. SCANNING (Verifying source / repo)
+   ======================================================== */
+.pet-root[data-state="scanning"] .acc-group[id$="acc-flashlight"] {
+  opacity: 1 !important;
+  animation: flashlightSweep 1.8s ease-in-out infinite alternate;
+}
+
+@keyframes flashlightSweep {
+  0% {
+    transform: rotate(-12deg);
+  }
+  100% {
+    transform: rotate(18deg);
+  }
+}
+
+.pet-root[data-state="scanning"] .pet-body-group {
+  opacity: 0.85;
+}
+
+.pet-root[data-state="scanning"] .ghost-eye {
+  animation: scanEyes 1.8s ease-in-out infinite alternate;
+}
+
+@keyframes scanEyes {
+  0% { transform: translateX(-2px); }
+  100% { transform: translateX(4px); }
+}
+
+/* ========================================================
+   6. WORKING (Task execution)
+   ======================================================== */
+.pet-root[data-state="working"] .pet-body-group {
+  animation: ghostFloat 1.05s ease-in-out infinite;
+}
+
+.pet-root[data-state="working"] .acc-group[id$="acc-hardhat"] {
+  opacity: 1 !important;
+  animation: hardhatBounce 1.05s ease-in-out infinite;
+}
+
+@keyframes hardhatBounce {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-2px) rotate(1.5deg);
+  }
+}
+
+.pet-root[data-state="working"] .fx-item[id$="fx-sparkles"] {
+  opacity: 0.8 !important;
+}
+
+/* Cat tippy-tappy typing on keyboard */
+@keyframes catPawsType {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.pet-cat[data-state="working"] .pet-arm-l {
+  animation: catPawsType 0.15s ease-in-out infinite alternate;
+}
+.pet-cat[data-state="working"] .pet-arm-r {
+  animation: catPawsType 0.15s 0.08s ease-in-out infinite alternate;
+}
+
+/* ========================================================
+   7 & 8. GLASSES-ON / GLASSES-OFF
+   ======================================================== */
+.pet-root[data-mode="hacker"] .acc-glasses,
+.pet-root[data-glasses="true"] .acc-glasses {
+  opacity: 1 !important;
+  animation: glassesSlideDown 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@keyframes glassesSlideDown {
+  0% {
+    opacity: 0;
+    transform: translateY(-24px) scale(0.9);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes glintSweep {
+  0% {
+    transform: translateX(-12px);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(12px);
+    opacity: 0.8;
+  }
+}
+
+.pet-root[data-mode="hacker"] .glasses-glint,
+.pet-root[data-glasses="true"] .glasses-glint {
+  animation: glintSweep 1.5s ease-in-out infinite alternate;
+}
+
+/* ========================================================
+   9. GREEN (Verified / Done)
+   ======================================================== */
+.pet-root[data-state="green"] .eyes-normal {
+  display: none !important;
+}
+
+.pet-root[data-state="green"] .eyes-happy {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="green"] .pet-body-group {
+  animation: greenHop 0.9s cubic-bezier(0.175, 0.885, 0.32, 1.275) 1;
+}
+
+@keyframes greenHop {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-16px) scale(1.05); }
+  75% { transform: translateY(2px) scale(0.97); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+.pet-root[data-state="green"] .fx-item[id$="fx-sparkles"] {
+  opacity: 1 !important;
+  animation: sparkleBurst 0.9s ease-out 1 forwards;
+}
+
+@keyframes sparkleBurst {
+  0% {
+    transform: scale(0.4) rotate(0deg);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2) rotate(45deg);
+  }
+  100% {
+    transform: scale(1) rotate(90deg);
+    opacity: 0.8;
+  }
+}
+
+/* ========================================================
+   10. YELLOW (Held / Review Needed)
+   ======================================================== */
+.pet-root[data-state="yellow"] .pet-body-group {
+  transform: rotate(8deg);
+  transition: transform 0.4s ease;
+}
+
+.pet-root[data-state="yellow"] .ghost-brows {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="yellow"] .fx-item[id$="fx-sweat"] {
+  opacity: 1 !important;
+  animation: sweatDrop 1.2s ease-in infinite;
+}
+
+@keyframes sweatDrop {
+  0% {
+    transform: translateY(-4px);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+}
+
+/* ========================================================
+   11. RED (Blocked / Threat Detected - SAD & CRYING!)
+   ======================================================== */
+.pet-root[data-state="red"] .mouth-smile {
+  display: none !important;
+}
+
+.pet-root[data-state="red"] .mouth-sad {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="red"] .eyes-normal {
+  display: none !important;
+}
+
+.pet-root[data-state="red"] .eyes-sad {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="red"] .brows-sad {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="red"] .fx-tears {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="red"] .pet-body-group {
+  animation: redShake 0.6s ease-in-out infinite;
+}
+
+@keyframes redShake {
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(-5px, 2px) rotate(-3deg); }
+  40% { transform: translate(5px, -2px) rotate(3deg); }
+  60% { transform: translate(-4px, -1px) rotate(-2deg); }
+  80% { transform: translate(4px, 1px) rotate(2deg); }
+}
+
+.pet-root[data-state="red"] .fx-item[id$="fx-shield"] {
+  opacity: 1 !important;
+  animation: shieldPop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@keyframes shieldPop {
+  0% { transform: scale(0.3); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ========================================================
+   12. CELEBRATE (All Tasks Done - Victory Spin)
+   ======================================================== */
+.pet-root[data-state="celebrate"] .eyes-normal {
+  display: none !important;
+}
+
+.pet-root[data-state="celebrate"] .eyes-happy {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="celebrate"] .pet-body-group {
+  animation: celebrateSpin 1.4s cubic-bezier(0.34, 1.56, 0.64, 1) 1 forwards;
+}
+
+@keyframes celebrateSpin {
+  0% { transform: translateY(0) rotate(0deg) scale(1); }
+  30% { transform: translateY(-20px) rotate(180deg) scale(1.1); }
+  70% { transform: translateY(-8px) rotate(360deg) scale(1.05); }
+  100% { transform: translateY(0) rotate(360deg) scale(1); }
+}
+
+.pet-root[data-state="celebrate"] .fx-item[id$="fx-sparkles"] {
+  opacity: 1 !important;
+  animation: sparkleBurst 1.2s ease-out infinite;
+}
+
+/* ========================================================
+   13. WAVE-HELLO (App Startup / New Chat)
+   ======================================================== */
+.pet-root[data-state="wave-hello"] .pet-body-group {
+  animation: waveTilt 1.2s ease-in-out 1;
+}
+
+@keyframes waveTilt {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-10deg); }
+  75% { transform: rotate(10deg); }
+}
+
+.pet-root[data-state="wave-hello"] .pet-arm-r {
+  animation: pawWave 1.2s ease-in-out 1;
+  transform-origin: 139px 116px;
+}
+
+@keyframes pawWave {
+  0%, 100% { transform: rotate(0deg); }
+  30%, 70% { transform: rotate(-25deg); }
+  50% { transform: rotate(15deg); }
+}
+
+/* ========================================================
+   14. LISTENING (User typing in composer)
+   ======================================================== */
+.pet-root[data-state="listening"] .pet-body-group {
+  transform: translateY(5px) rotate(3deg) scale(1.02);
+  transition: transform 0.25s ease;
+}
+
+.pet-root[data-state="listening"] .ghost-eye {
+  transform: scale(1.15) translate(1px, 2px);
+}
+
+.pet-cat[data-state="listening"] .cat-ear-l,
+.pet-cat[data-state="listening"] .cat-ear-r {
+  transform: rotate(-5deg);
+}
+
+.pet-bunny[data-state="listening"] .bunny-ear-l,
+.pet-bunny[data-state="listening"] .bunny-ear-r {
+  transform: rotate(6deg);
+}
+
+/* ========================================================
+   15. DOWNLOADING (Carrying package box + speed hover)
+   ======================================================== */
+.pet-root[data-state="downloading"] .acc-group[id$="acc-box"] {
+  opacity: 1 !important;
+  animation: boxBob 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes boxBob {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-3px); }
+}
+
+.pet-root[data-state="downloading"] .ghost-hem {
+  animation: hemWave 0.5s ease-in-out infinite;
+}
+
+.pet-root[data-state="downloading"] .pet-body-group {
+  animation: downloadingHover 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes downloadingHover {
+  0% { transform: translateY(0) skewX(-2deg); }
+  100% { transform: translateY(-4px) skewX(2deg); }
+}
+
+/* ========================================================
+   16. ERROR (Non-security error - SAD & SHEDDING TEARS!)
+   ======================================================== */
+.pet-root[data-state="error"] .mouth-smile {
+  display: none !important;
+}
+
+.pet-root[data-state="error"] .mouth-sad {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="error"] .eyes-normal {
+  display: none !important;
+}
+
+.pet-root[data-state="error"] .eyes-sad {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="error"] .brows-sad {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="error"] .fx-tears {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="error"] .fx-item[id$="fx-bandage"] {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="error"] .pet-body-group {
+  transform: translateY(6px);
+  animation: errorDroop 1.6s ease-in-out infinite alternate;
+}
+
+@keyframes errorDroop {
+  0% { transform: translateY(5px); }
+  100% { transform: translateY(8px); }
+}
+
+/* Tears Streaming Animations */
+@keyframes tearStreamFlow {
+  0% {
+    transform: translateY(0);
+    opacity: 0.9;
+  }
+  50% {
+    transform: translateY(4px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(8px);
+    opacity: 0.3;
+  }
+}
+
+.tear-stream-l, .tear-stream-r {
+  animation: tearStreamFlow 0.8s linear infinite;
+}
+
+.tear-drop-l, .tear-drop-r {
+  animation: tearDropDrip 0.8s ease-in infinite;
+}
+
+@keyframes tearDropDrip {
+  0% { transform: translateY(0) scale(1); opacity: 0.9; }
+  80% { transform: translateY(12px) scale(1.1); opacity: 1; }
+  100% { transform: translateY(16px) scale(0.6); opacity: 0; }
+}
+
+/* ========================================================
+   17. HELD-SIGN (Caution HELD Sign)
+   ======================================================== */
+.pet-root[data-state="held-sign"] .acc-group[id$="acc-sign"] {
+  opacity: 1 !important;
+  animation: signBob 1.6s ease-in-out infinite;
+}
+
+@keyframes signBob {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-3px) rotate(2deg); }
+}
+
+/* ========================================================
+   18. REWIND (Spinning back in time)
+   ======================================================== */
+.pet-root[data-state="rewind"] .pet-body-group {
+  animation: rewindSpin 1.2s linear infinite;
+}
+
+@keyframes rewindSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(-360deg); }
+}
+
+.pet-root[data-state="rewind"] .fx-item[id$="fx-clock"] {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="rewind"] .clock-minute {
+  animation: clockHands 0.8s linear infinite;
+  transform-origin: 12px 12px;
+}
+
+@keyframes clockHands {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(-360deg); }
+}
+
+/* ========================================================
+   19. SLEEPY (2 min idle)
+   ======================================================== */
+.pet-root[data-state="sleepy"] .ghost-eye {
+  transform: scaleY(0.4);
+}
+
+.pet-root[data-state="sleepy"] .pet-body-group {
+  animation: ghostFloat 3.8s ease-in-out infinite;
+}
+
+.pet-root[data-state="sleepy"] .fx-item[id$="fx-zzz"] {
+  opacity: 1 !important;
+}
+
+.pet-root[data-state="sleepy"] .zzz-1 {
+  animation: zzzFloat 2.4s 0.0s ease-in infinite;
+}
+.pet-root[data-state="sleepy"] .zzz-2 {
+  animation: zzzFloat 2.4s 0.6s ease-in infinite;
+}
+.pet-root[data-state="sleepy"] .zzz-3 {
+  animation: zzzFloat 2.4s 1.2s ease-in infinite;
+}
+
+@keyframes zzzFloat {
+  0% { transform: translate(0, 0) scale(0.6); opacity: 0; }
+  50% { opacity: 0.9; }
+  100% { transform: translate(8px, -18px) scale(1.1); opacity: 0; }
+}
+
+/* ========================================================
+   20. PEEK-A-BOO (Empty states / playful entrance)
+   ======================================================== */
+.pet-root[data-state="peek-a-boo"] {
+  animation: peekSlide 1.2s cubic-bezier(0.175, 0.885, 0.32, 1.275) 1;
+}
+
+@keyframes peekSlide {
+  0% {
+    transform: translateX(-40px) translateY(20px) rotate(-15deg);
+    opacity: 0;
+  }
+  40% {
+    transform: translateX(-15px) translateY(5px) rotate(-8deg);
+    opacity: 1;
+  }
+  75% {
+    transform: translateX(4px) translateY(-2px) rotate(2deg);
+  }
+  100% {
+    transform: translateX(0) translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+/* ========================================================
+   PREFERS REDUCED MOTION
+   ======================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .pet-root * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

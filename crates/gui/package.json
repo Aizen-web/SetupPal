@@ -4,7 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "app": "powershell -ExecutionPolicy Bypass -File ./launch-app.ps1",
+    "start": "powershell -ExecutionPolicy Bypass -File ./launch-app.ps1",
     "dev": "vite",
     "build": "vite build"
+  },
+  "devDependencies": {
+    "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "canvas-confetti": "^1.9.4",
+    "lucide": "^1.61.0"
   }
 }

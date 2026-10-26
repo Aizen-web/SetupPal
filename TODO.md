@@ -26,7 +26,7 @@ SetupPal is an AI-powered installer and environment setup agent with determinist
 - [ ] **Milestone 4:** Real ecosystem adapters (`PyPI`, `npm`, `Modrinth`, `GitHubReleases`).
 - [ ] **Milestone 5:** `recipes` YAML engine + 2 flagship recipes (Python AI/Data Science venv & Minecraft Fabric 1.21 performance mods).
 - [ ] **Milestone 6:** `healer` self-healing loop (capture failure diagnostic, NIM remediation plan, route through `safety`, verify recovery).
-- [ ] **Milestone 7:** Tauri v2 + Svelte desktop GUI wired to `installer_core` and live `AgentEvent` stream.
+- [x] **Milestone 7:** Desktop GUI (`crates/gui`) featuring Dual Modes (Warm Chill & Neon Hacker), 3 Kawaii Pets (Pixel the Ghost, Byte the Cat, Mochi the Bunny) with 20 animations, Web Audio synthesizer, live terminal logs, plan approval, downloads, history rewind, and native Windows desktop packaging.
 - [ ] **Milestone 8:** Full `undo` rollback engine, polish, and scripted `demo-attack` showcase.
 
 ---
@@ -99,26 +99,25 @@ SetupPal is an AI-powered installer and environment setup agent with determinist
 
 ---
 
-### Milestone 7: Tauri v2 Desktop GUI (`crates/gui`)
-**Goal:** Sleek, dark-mode desktop security dashboard powered by Tauri v2, Svelte, and TypeScript.
+### Milestone 7: Desktop Native GUI (`crates/gui`) [COMPLETED]
+**Goal:** Sleek, dual-mode (Cozy Kawaii Chill & Neon Hacker) desktop security dashboard with custom SVG mascot animations.
 
-#### Tasks:
-1. **Tauri IPC Commands (`crates/gui/src-tauri/src/main.rs`):**
-   - `scan_system()` -> returns `SystemProfile`.
-   - `generate_plan(goal: String)` -> returns `Plan` and `PlanSafetyReport`.
-   - `execute_plan(options)` -> invokes `Executor`.
-   - `get_transaction_log()` -> returns transaction history from `StateLogger`.
-   - `undo_transaction(tx_id: Option<String>)` -> executes rollback.
-2. **Real-time Event Bridge:**
-   - Subscribe Tauri app to `installer_core::EventBus`.
-   - Forward all `AgentEvent` variants to the frontend via `app_handle.emit("agent-event", event)`.
-3. **Svelte UI Panels (`crates/gui/src/`):**
-   - **System Scan Panel:** CPU, GPU, OS version, disk free, detected toolchain chips.
-   - **Goal Input & Recipe Quick-Picks:** One-click shortcuts for "C++20 Dev", "Python AI Venv", "Minecraft Fabric".
-   - **Plan & Safety Table:** Traffic-light badges (Green/Yellow/Red), risk scores, and expandable drawers showing OSV CVE details, Levenshtein edit distance, and hash verification.
-   - **Interactive Step Toggles:** Approve / Deny switches per step; "1-Click Swap to Safe Alternative" button for typosquats (e.g. `reqwests` -> `requests`).
-   - **Live Event Terminal:** Streaming execution logs, receipts, and verification badges.
-   - **1-Click Undo Button:** Instant rollback of any recorded transaction.
+#### Accomplishments:
+1. **Dual Mode Architecture (ui.md Spec):**
+   - **Chill Mode (Warm Cream / Beige / Caramel):** For conversations, plan review, and audit browsing.
+   - **Hacker Mode (Electric Neon Green / Dark Green):** Auto-enters during downloads, executions, and security scans with CRT scanline flicker.
+2. **3 Kawaii Mascot Pets with Unified 20 SVG Animation Catalogue:**
+   - **Pixel the Ghost:** Ethereal guardian that sheds streaming animated tears on errors and blocks attacks with a security shield.
+   - **Byte the Cat:** Cyber hacker feline that types furiously on an imaginary keyboard and swishes its tail.
+   - **Mochi the Bunny:** Marshmallow rabbit that does high binky twist-jumps on green verdicts and flops its ears.
+3. **Interactive Plan Approval & Execution Engine:**
+   - Real-time plan approval flow for "Minecraft with performance mods", "C++ toolchain", and "Python data science".
+   - Live streaming hacker terminal with auto-scroll and command prompt.
+   - Right-side progress bar tracking approved steps and held items.
+4. **Retro 8-Bit Web Audio Synthesizer:**
+   - Synthesizes clicks, sweeps, chirps, dings, and victory fanfare via Web Audio API.
+5. **Native Desktop Window Integration:**
+   - Launchable via `start-app.bat` or `npm run app` in an isolated 1100x720 native OS window.
 
 ---
 

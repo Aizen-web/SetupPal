@@ -1,0 +1,102 @@
+/**
+ * SetupPal: Design Tokens (Chill & Hacker Modes)
+ * Derived from ui.md Section 3 & Section 18.1
+ */
+
+:root {
+  /* Chill Mode Palette (Warm Cream, Beige, Caramel) */
+  --bg-canvas: #F5EEDF;
+  --bg-surface: #FBF6EA;
+  --bg-sidebar: #EFE6D3;
+  --bg-code: #2E2622;
+  --text-code: #F5EEDF;
+  --border: #DCCDB0;
+  --border-subtle: rgba(220, 205, 176, 0.6);
+  --ink: #3B2F2A;
+  --ink-soft: #6F5F53;
+  --accent: #B5763F;
+  --accent-strong: #94592B;
+  --accent-soft: #F0DDC2;
+  --btn-primary: #3B2F2A;
+  --btn-primary-text: #FBF6EA;
+  --honey: #E9B949;
+  --peach: #F4C2B0;
+
+  /* Verdict Colors (Chill) */
+  --v-green: #5E8C4A;
+  --v-green-text: #3F6B2F;
+  --v-green-bg: rgba(94, 140, 74, 0.16);
+  --v-yellow: #D49A1A;
+  --v-yellow-text: #8A5A00;
+  --v-yellow-bg: rgba(212, 154, 26, 0.16);
+  --v-red: #C4493A;
+  --v-red-text: #A8372A;
+  --v-red-bg: rgba(196, 73, 58, 0.16);
+
+  /* Typography */
+  --font-display: "Pixelify Sans", "Silkscreen", monospace;
+  --font-ui: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+
+  /* Font Sizes */
+  --fs-h1: 28px;
+  --fs-h2: 20px;
+  --fs-body: 14px;
+  --fs-small: 12px;
+  --fs-mono: 13px;
+  --fs-label: 11px;
+
+  /* Dimensions & Spacing */
+  --sidebar-w: 240px;
+  --taskbar-w: 300px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-bubble: 18px;
+  --radius-pill: 999px;
+
+  /* Shadows */
+  --shadow-card: 0 4px 16px -8px rgba(59, 47, 42, 0.12);
+  --shadow-floating: 0 8px 24px -12px rgba(59, 47, 42, 0.22);
+  --glow: none;
+
+  /* Transitions */
+  --trans-mode: 0.3s ease;
+}
+
+/* ========================================================
+   HACKER MODE (Neon Terminal)
+   Triggered on execution / downloading / manual /hack
+   ======================================================== */
+[data-mode="hacker"] {
+  --bg-canvas: #06130A;
+  --bg-surface: #0B2A12;
+  --bg-sidebar: #07170C;
+  --bg-code: #07170C;
+  --text-code: #5CFF3A;
+  --border: #1E6B12;
+  --border-subtle: rgba(30, 107, 18, 0.5);
+  --ink: #5CFF3A;
+  --ink-soft: #2FB81B;
+  --accent: #39FF14;
+  --accent-strong: #39FF14;
+  --accent-soft: #0E3418;
+  --btn-primary: #39FF14;
+  --btn-primary-text: #06130A;
+
+  /* Verdict Colors (Hacker) */
+  --v-green: #39FF14;
+  --v-green-text: #39FF14;
+  --v-green-bg: rgba(57, 255, 20, 0.15);
+  --v-yellow: #FFD166;
+  --v-yellow-text: #FFD166;
+  --v-yellow-bg: rgba(255, 209, 102, 0.15);
+  --v-red: #FF6B6B;
+  --v-red-text: #FF6B6B;
+  --v-red-bg: rgba(255, 107, 107, 0.15);
+
+  --shadow-card: 0 0 16px rgba(57, 255, 20, 0.08);
+  --shadow-floating: 0 0 24px rgba(57, 255, 20, 0.2);
+  --glow: 0 0 12px rgba(57, 255, 20, 0.45);
+  --glow-sm: 0 0 6px rgba(57, 255, 20, 0.35);
+}
