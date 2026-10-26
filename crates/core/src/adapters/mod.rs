@@ -1,4 +1,8 @@
+pub mod mock;
+
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -116,4 +120,42 @@ pub trait SourceAdapter: Send + Sync {
         metadata: &PackageMetadata,
         ctx: &ExecutionContext,
     ) -> Result<VerificationResult, AdapterError>;
+}
+
+/// Registry holding active `SourceAdapter` implementations keyed by `AdapterKind`.
+#[derive(Clone, Default)]
+pub struct AdapterRegistry {
+    adapters: HashMap<AdapterKind, Arc<dyn SourceAdapter>>,
+}
+
+impl AdapterRegistry {
+    pub fn new() -> Self {
+        Self {
+            adapters: HashMap::new(),
+        }
+    }
+
+    /// Creates a registry pre-populated with safe deterministic mock adapters for all `AdapterKind`s.
+    pub fn with_default_mocks() -> Self {
+        let mut reg = Self::new();
+        for kind in [
+            AdapterKind::Winget,
+            AdapterKind::PyPI,
+            AdapterKind::Npm,
+            AdapterKind::Modrinth,
+            AdapterKind::GitHubReleases,
+            AdapterKind::OfficialVendorUrl,
+        ] {
+            reg.register(Arc::new(mock::MockAdapter::with_defaults_for(kind)));
+        }
+        reg
+    }
+
+    pub fn register(&mut self, adapter: Arc<dyn SourceAdapter>) {
+        self.adapters.insert(adapter.kind(), adapter);
+    }
+
+    pub fn get(&self, kind: AdapterKind) -> Option<Arc<dyn SourceAdapter>> {
+        self.adapters.get(&kind).cloned()
+    }
 }

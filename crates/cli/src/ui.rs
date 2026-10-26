@@ -1,5 +1,5 @@
-use colored::Colorize;
-use installer_core::{Plan, PlanSource, Step, SystemProfile};
+use colored::{ColoredString, Colorize};
+use installer_core::{Plan, PlanSafetyReport, PlanSource, RiskRating, SafetyReport, Step, SystemProfile};
 
 pub fn render_system_profile(profile: &SystemProfile) {
     println!(
@@ -46,19 +46,51 @@ pub fn render_system_profile(profile: &SystemProfile) {
     println!();
 }
 
-pub fn render_plan(plan: &Plan, dry_run: bool, nim_mock: bool) {
+pub fn render_demo_attack_banner(poisoned_readme: &str) {
     println!(
         "{}",
-        "=== ZERO-TRUST EXECUTION PLAN ===".bold().bright_green()
+        "=== ZERO-TRUST ADVERSARIAL ATTACK SIMULATION (DEMO-ATTACK) ==="
+            .bold()
+            .bright_red()
     );
-    println!("  {} {}", "Plan ID:".bold(), plan.plan_id);
-    println!("  {} {}", "Goal:   ".bold(), plan.goal.bright_white());
-    println!("  {} {}", "Summary:".bold(), plan.summary);
+    println!(
+        "  {}",
+        "Untrusted Repository README Input (wrapped in <untrusted_external_data>):".bold()
+    );
+    for line in poisoned_readme.lines() {
+        println!("    {}", line.bright_yellow());
+    }
+    println!();
+}
+
+fn format_badge(rating: RiskRating, score: u8) -> ColoredString {
+    match rating {
+        RiskRating::Green => format!("[GREEN  score={score:02}/100]").bold().bright_green(),
+        RiskRating::Yellow => format!("[YELLOW score={score:02}/100]").bold().bright_yellow(),
+        RiskRating::Red => format!("[RED    score={score:02}/100]").bold().bright_red(),
+    }
+}
+
+pub fn render_plan_with_safety(
+    plan: &Plan,
+    safety: &PlanSafetyReport,
+    dry_run: bool,
+    nim_mock: bool,
+) {
+    println!(
+        "{}",
+        "=== ZERO-TRUST EXECUTION PLAN & SAFETY REPORT ==="
+            .bold()
+            .bright_green()
+    );
+    println!("  {} {}", "Plan ID:       ".bold(), plan.plan_id);
+    println!("  {} {}", "Goal:          ".bold(), plan.goal.bright_white());
+    println!("  {} {}", "Summary:       ".bold(), plan.summary);
 
     let source_label = match &plan.source {
-        PlanSource::Recipe { recipe_id } => {
-            format!("Deterministic Recipe (`{recipe_id}`)").bright_green().to_string()
-        }
+        PlanSource::Recipe { recipe_id } => format!("Deterministic Recipe (`{recipe_id}`)")
+            .bright_green()
+            .to_string(),
         PlanSource::Llm { model } => {
             let mode = if nim_mock { "offline mock" } else { "live NIM" };
             format!("NVIDIA NIM (`{model}` - {mode})")
@@ -72,25 +104,47 @@ pub fn render_plan(plan: &Plan, dry_run: bool, nim_mock: bool) {
             .bright_magenta()
             .to_string(),
     };
-    println!("  {} {}", "Source: ".bold(), source_label);
+    println!("  {} {}", "Source:        ".bold(), source_label);
     println!(
         "  {} {}",
-        "Mode:   ".bold(),
-        if dry_run {
-            "DRY-RUN (no system changes)".bright_blue()
+        "Overall Safety:".bold(),
+        format_badge(safety.overall_rating, safety.overall_score)
+    );
+    println!(
+        "  {} {}",
+        "Execution Gate:".bold(),
+        if safety.can_execute {
+            if dry_run {
+                "ALLOWED (DRY-RUN mode)".bright_blue()
+            } else {
+                "ALLOWED (LIVE mode)".bright_green()
+            }
         } else {
-            "LIVE EXECUTION".bright_red()
+            "HARD BLOCKED BY DETERMINISTIC SAFETY ENGINE (Red steps can NEVER run)"
+                .bold()
+                .bright_red()
         }
     );
     println!();
 
     for (idx, item) in plan.steps.iter().enumerate() {
+        let step_rep: Option<&SafetyReport> = safety
+            .step_reports
+            .iter()
+            .find(|r| r.step_id == item.id);
+
+        let badge = step_rep
+            .map(|r| format_badge(r.rating, r.risk_score))
+            .unwrap_or_else(|| "[UNCHECKED]".dimmed());
+
         println!(
-            "  {} [{}] {}",
+            "  {} {} [{}] {}",
             format!("{}.", idx + 1).bold(),
+            badge,
             item.id.bright_cyan(),
             item.description.bold()
         );
+
         match &item.step {
             Step::InstallPackage {
                 ecosystem,
@@ -114,7 +168,7 @@ pub fn render_plan(plan: &Plan, dry_run: bool, nim_mock: bool) {
                 expected_sha256,
             } => {
                 println!(
-                    "     Action: DownloadArtifact | adapter={:?} | id={}@{} -> {} (sha256={:.12}...)",
+                    "     Action: DownloadArtifact | adapter={:?} | id={}@{} -> {} (sha256={:.16}...)",
                     adapter,
                     id,
                     version,
@@ -153,5 +207,24 @@ pub fn render_plan(plan: &Plan, dry_run: bool, nim_mock: bool) {
                 );
             }
         }
+
+        if let Some(rep) = step_rep {
+            for reason in &rep.reasons {
+                let bullet = match rep.rating {
+                    RiskRating::Green => "✓".bright_green(),
+                    RiskRating::Yellow => "⚠".bright_yellow(),
+                    RiskRating::Red => "✗".bright_red(),
+                };
+                println!("     {} {}", bullet, reason);
+            }
+            if let Some(alt) = &rep.suggested_alternative {
+                println!(
+                    "     {} Safe alternative available: `{}`",
+                    "→".bright_cyan().bold(),
+                    alt.bright_green().bold()
+                );
+            }
+        }
+        println!();
     }
 }

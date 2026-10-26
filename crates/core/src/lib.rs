@@ -14,8 +14,8 @@ pub mod scan;
 pub mod types;
 
 pub use adapters::{
-    AdapterError, ExecutionContext, ExecutionReceipt, FetchedArtifact, PackageMetadata,
-    SourceAdapter, VerificationResult,
+    AdapterError, AdapterRegistry, ExecutionContext, ExecutionReceipt, FetchedArtifact,
+    PackageMetadata, SourceAdapter, VerificationResult,
 };
 pub use config::{CoreConfig, CoreError};
 pub use events::{AgentEvent, EventBus};
@@ -24,7 +24,7 @@ pub use os::{CommandOutput, OsProvider, PlatformOsProvider};
 pub use planner::Planner;
 pub use recipes::{Recipe, RecipeStore};
 pub use safety::{
-    PlanSafetyReport, RiskRating, SafetyReport, SafetySignals, TyposquatMatch,
+    PlanSafetyReport, RiskRating, SafetyEngine, SafetyReport, SafetySignals, TyposquatMatch,
     VulnerabilitySummary,
 };
 pub use scan::SystemScanner;
