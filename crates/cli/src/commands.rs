@@ -3,8 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use installer_core::{
-    AdapterKind, AllowedBinary, CoreConfig, EventBus, NimClient, PlanSafetyReport, PlannedStep,
-    Planner, PlatformOsProvider, RecipeStore, SafetyEngine, Step, SystemScanner,
+    AdapterKind, AdapterRegistry, AllowedBinary, CoreConfig, EventBus, ExecutionOptions, Executor,
+    NimClient, PlanSafetyReport, PlannedStep, Planner, PlatformOsProvider, RecipeStore,
+    SafetyEngine, StateLogger, Step, SystemScanner, Verifier, OsProvider,
 };
 
 use crate::{ui, Cli, Commands};
@@ -12,8 +13,8 @@ use crate::{ui, Cli, Commands};
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let config = CoreConfig::from_env();
     let events = EventBus::default();
-    let os_provider = Arc::new(PlatformOsProvider::new());
-    let scanner = SystemScanner::new(os_provider, events.clone());
+    let os_provider: Arc<dyn OsProvider> = Arc::new(PlatformOsProvider::new());
+    let scanner = SystemScanner::new(os_provider.clone(), events.clone());
     let safety_engine = SafetyEngine::new_offline(events.clone());
 
     match cli.command {
@@ -68,41 +69,101 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let profile = scanner.scan().await?;
             let recipes = RecipeStore::load_from_dir_or_embedded(&config.recipes_dir)?;
             let llm = Arc::new(NimClient::new(config.clone())?);
-            let planner = Planner::new(recipes, llm, events);
+            let planner = Planner::new(recipes, llm, events.clone());
 
             let plan = planner.create_plan(&goal, &profile, None).await?;
             let safety_report = safety_engine.evaluate_plan(&plan).await?;
+
+            if !cli.json {
+                ui::render_system_profile(&profile);
+                ui::render_plan_with_safety(
+                    &plan,
+                    &safety_report,
+                    effective_dry_run,
+                    config.nim_mock,
+                );
+            }
+
+            let state_logger = StateLogger::new(config.state_log_path.clone(), events.clone());
+            let verifier = Verifier::new(os_provider.clone(), events.clone());
+            let adapters = AdapterRegistry::with_system_defaults(os_provider.clone());
+            let executor = Executor::new(
+                adapters,
+                os_provider.clone(),
+                state_logger,
+                verifier,
+                events.clone(),
+            );
+
+            let options = ExecutionOptions {
+                dry_run: effective_dry_run,
+                auto_approve_green: yes,
+                allow_yellow,
+                working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            };
+
+            let execution_summary = executor
+                .execute_plan(&plan, &safety_report, &options)
+                .await?;
 
             if cli.json {
                 let combined = serde_json::json!({
                     "plan": plan,
                     "safety": safety_report,
+                    "execution": execution_summary,
                 });
                 println!("{}", serde_json::to_string_pretty(&combined)?);
             } else {
-                ui::render_system_profile(&profile);
-                ui::render_plan_with_safety(&plan, &safety_report, effective_dry_run, config.nim_mock);
-                println!(
-                    "\n[Milestone 2 Ready] Safety Engine evaluated {} steps (overall: {:?}, can_execute={}). Executor arrives in Milestone 3 (flags: dry_run={effective_dry_run}, yes={yes}, allow_yellow={allow_yellow}).",
-                    plan.steps.len(),
-                    safety_report.overall_rating,
-                    safety_report.can_execute
-                );
+                ui::render_execution_summary(&execution_summary);
             }
             Ok(())
         }
         Commands::Undo { tx_id } => {
-            println!(
-                "Undo requested for transaction: {:?} (implemented in Milestone 3/8).",
-                tx_id.as_deref().unwrap_or("latest")
-            );
+            let state_logger = StateLogger::new(config.state_log_path.clone(), events.clone());
+            let tx = match tx_id.as_deref() {
+                Some(id) => state_logger.get_transaction_by_id(id)?,
+                None => state_logger.get_latest_transaction()?,
+            };
+
+            match tx {
+                Some(t) => {
+                    let outcome = state_logger.rollback_transaction(&t, &os_provider).await?;
+                    if cli.json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "tx_id": t.tx_id,
+                                "status": "rolled_back",
+                                "outcome": outcome,
+                            }))?
+                        );
+                    } else {
+                        ui::render_rollback_result(&t.tx_id, &outcome);
+                    }
+                }
+                None => {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "error": "No matching transaction found in state log."
+                            }))?
+                        );
+                    } else {
+                        println!("No matching transaction found in state log to rollback.");
+                    }
+                }
+            }
             Ok(())
         }
         Commands::Log => {
-            println!(
-                "State log path: {} (implemented in Milestone 3).",
-                config.state_log_path.display()
-            );
+            let state_logger = StateLogger::new(config.state_log_path.clone(), events.clone());
+            let transactions = state_logger.read_all_transactions()?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&transactions)?);
+            } else {
+                ui::render_transaction_log(&transactions);
+            }
             Ok(())
         }
         Commands::DemoAttack => {

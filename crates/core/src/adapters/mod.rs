@@ -1,4 +1,8 @@
 pub mod mock;
+pub mod winget;
+
+pub use mock::MockAdapter;
+pub use winget::WingetAdapter;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -148,6 +152,14 @@ impl AdapterRegistry {
         ] {
             reg.register(Arc::new(mock::MockAdapter::with_defaults_for(kind)));
         }
+        reg
+    }
+
+    /// Creates a registry using real system adapters (e.g. `WingetAdapter` backed by `OsProvider`),
+    /// falling back to mock adapters for ecosystems not yet wired up.
+    pub fn with_system_defaults(os_provider: Arc<dyn crate::os::OsProvider>) -> Self {
+        let mut reg = Self::with_default_mocks();
+        reg.register(Arc::new(winget::WingetAdapter::new(os_provider)));
         reg
     }
 

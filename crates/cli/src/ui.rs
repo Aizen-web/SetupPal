@@ -228,3 +228,145 @@ pub fn render_plan_with_safety(
         println!();
     }
 }
+
+pub fn render_execution_summary(summary: &installer_core::PlanExecutionSummary) {
+    let mode_str = if summary.dry_run {
+        "[DRY RUN SIMULATION - NO SYSTEM CHANGES MADE]".bright_yellow().bold()
+    } else {
+        "[LIVE EXECUTION - SYSTEM CHANGES COMMITTED]".bright_green().bold()
+    };
+
+    println!("\n{}", "=== EXECUTION & VERIFICATION RESULTS ===".bold().bright_cyan());
+    println!("  Mode: {}", mode_str);
+    println!("  Goal: {}\n", summary.goal.bold());
+
+    for step in &summary.step_results {
+        if step.executed {
+            println!(
+                "  {} {} — {}",
+                "✔".bright_green().bold(),
+                step.step_id.bold(),
+                step.description
+            );
+            if let Some(receipt) = &step.receipt {
+                for change in &receipt.changes_made {
+                    println!("    {} {}", "•".bright_cyan(), change.dimmed());
+                }
+            }
+            if let Some(ver) = &step.verification {
+                let badge = if ver.passed {
+                    "PASS".bright_green().bold()
+                } else {
+                    "FAIL".bright_red().bold()
+                };
+                println!("    Verification [{}]: {}", badge, ver.command_run.dimmed());
+                if !ver.stdout.is_empty() {
+                    println!("      stdout: {}", ver.stdout.trim().dimmed());
+                }
+                if !ver.stderr.is_empty() {
+                    println!("      stderr: {}", ver.stderr.trim().bright_red());
+                }
+            }
+        } else {
+            println!(
+                "  {} {} — {}",
+                "✖".bright_red().bold(),
+                step.step_id.bold(),
+                step.description
+            );
+            if let Some(reason) = &step.blocked_reason {
+                println!("    {} {}", "BLOCKED:".bright_red().bold(), reason);
+            }
+        }
+        println!();
+    }
+
+    if let Some(cpp_ver) = &summary.toolchain_verification {
+        println!("{}", "--- AUTOMATED END-TO-END C++20 VERIFICATION ---".bold().bright_magenta());
+        if cpp_ver.passed {
+            println!(
+                "  {} Modern C++20 toolchain compiled and executed temporary hello.cpp successfully!",
+                "✔ [VERIFIED]".bright_green().bold()
+            );
+            println!("  Command: {}", cpp_ver.command_run.dimmed());
+            println!("  Output:  {}", cpp_ver.stdout.trim().bright_green());
+        } else {
+            println!(
+                "  {} C++20 toolchain compilation or execution check failed.",
+                "✖ [FAILED]".bright_red().bold()
+            );
+            println!("  Command: {}", cpp_ver.command_run.dimmed());
+            if !cpp_ver.stderr.is_empty() {
+                println!("  Error:   {}", cpp_ver.stderr.trim().bright_red());
+            }
+        }
+        println!();
+    }
+
+    if summary.overall_passed {
+        println!(
+            "{}",
+            "🎉 ALL APPROVED STEPS COMPLETED AND VERIFIED SUCCESSFULLY!"
+                .bold()
+                .bright_green()
+        );
+    } else {
+        println!(
+            "{}",
+            "⚠ PLAN EXECUTION STOPPED OR ONE OR MORE CHECKS FAILED."
+                .bold()
+                .bright_yellow()
+        );
+    }
+    println!();
+}
+
+pub fn render_transaction_log(records: &[installer_core::TransactionRecord]) {
+    println!(
+        "{}",
+        "=== APPEND-ONLY AUDIT & STATE TRANSACTION LOG ===".bold().bright_cyan()
+    );
+    if records.is_empty() {
+        println!("  No transactions recorded yet. Run `installer install <goal>` to record changes.\n");
+        return;
+    }
+
+    println!("  Total recorded transactions: {}\n", records.len().to_string().bold());
+
+    for (i, tx) in records.iter().enumerate() {
+        let dry_badge = if tx.dry_run {
+            "[DRY-RUN]".bright_yellow()
+        } else {
+            "[LIVE]".bright_green()
+        };
+
+        println!(
+            "  {}. {} {} ({})",
+            (i + 1).to_string().bold(),
+            dry_badge,
+            tx.action_summary.bold(),
+            tx.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string().dimmed()
+        );
+        println!("     TX ID:   {}", tx.tx_id.dimmed());
+        println!("     Plan ID: {} (Goal: {})", tx.plan_id.dimmed(), tx.goal);
+        println!("     Step:    {}", tx.step_id);
+
+        for change in &tx.changes_made {
+            println!("     • {}", change.dimmed());
+        }
+        if let Some(hint) = &tx.rollback_hint {
+            println!("     {} Rollback hint: {}", "↺".bright_yellow(), hint.dimmed());
+        }
+        println!();
+    }
+}
+
+pub fn render_rollback_result(tx_id: &str, outcome: &str) {
+    println!(
+        "{}",
+        "=== TRANSACTION ROLLBACK RESULT ===".bold().bright_cyan()
+    );
+    println!("  TX ID:   {}", tx_id.bold());
+    println!("  Status:  {}", "SUCCESS".bright_green().bold());
+    println!("  Outcome: {}\n", outcome);
+}

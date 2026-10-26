@@ -54,3 +54,24 @@ pub async fn query_unix_free_disk(target_dir: &Path) -> u64 {
     }
     0
 }
+
+pub async fn add_to_unix_user_path(directory: &Path) -> Result<String, crate::config::CoreError> {
+    let current_raw = std::env::var("PATH").unwrap_or_default();
+    let dir_str = directory.to_string_lossy();
+    let current_paths = read_unix_env_path();
+    let already = current_paths.iter().any(|p| p == directory);
+    if !already {
+        let new_path = if current_raw.is_empty() {
+            dir_str.to_string()
+        } else {
+            format!("{}:{}", current_raw, dir_str)
+        };
+        std::env::set_var("PATH", &new_path);
+    }
+    Ok(current_raw)
+}
+
+pub async fn restore_unix_user_path(previous_raw: &str) -> Result<(), crate::config::CoreError> {
+    std::env::set_var("PATH", previous_raw);
+    Ok(())
+}

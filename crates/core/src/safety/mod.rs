@@ -370,7 +370,7 @@ mod tests {
     use crate::planner::Planner;
     use crate::recipes::RecipeStore;
     use crate::types::{
-        AdapterKind, AllowedBinary, Ecosystem, PlanSource, PlannedStep, Step, SystemProfile,
+        AdapterKind, AllowedBinary, Ecosystem, PlannedStep, Step, SystemProfile,
     };
     use chrono::Utc;
     use std::path::{Path, PathBuf};

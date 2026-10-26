@@ -1,5 +1,8 @@
+pub mod mock;
 pub mod unix;
 pub mod windows;
+
+pub use mock::MockOsProvider;
 
 use std::path::{Path, PathBuf};
 use async_trait::async_trait;
@@ -31,6 +34,12 @@ pub trait OsProvider: Send + Sync {
 
     /// Resolves an executable name against the provided `search_paths`.
     fn which_in_paths(&self, binary_name: &str, search_paths: &[PathBuf]) -> Option<PathBuf>;
+
+    /// Adds a directory to User PATH and refreshes process PATH. Returns previous raw PATH.
+    async fn add_to_user_path(&self, directory: &Path) -> Result<String, CoreError>;
+
+    /// Restores User PATH to a previous raw value.
+    async fn restore_user_path(&self, previous_raw: &str) -> Result<(), CoreError>;
 
     /// Runs a binary directly (never via a shell interpreter) with explicit arguments.
     async fn run_command(
@@ -114,6 +123,22 @@ impl OsProvider for PlatformOsProvider {
             }
         }
         None
+    }
+
+    async fn add_to_user_path(&self, directory: &Path) -> Result<String, CoreError> {
+        if cfg!(target_os = "windows") {
+            windows::add_to_windows_user_path(directory).await
+        } else {
+            unix::add_to_unix_user_path(directory).await
+        }
+    }
+
+    async fn restore_user_path(&self, previous_raw: &str) -> Result<(), CoreError> {
+        if cfg!(target_os = "windows") {
+            windows::restore_windows_user_path(previous_raw).await
+        } else {
+            unix::restore_unix_user_path(previous_raw).await
+        }
     }
 
     async fn run_command(

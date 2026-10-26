@@ -4,9 +4,9 @@ use tokio::process::Command;
 
 use crate::config::CoreError;
 
-pub const HKCU_ENV_KEY: &str = r"HKCU\\Environment";
+pub const HKCU_ENV_KEY: &str = r"HKCU\Environment";
 pub const HKLM_ENV_KEY: &str =
-    r"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
+    r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
 
 /// Queries `reg.exe query` for both `HKLM` (System) and `HKCU` (User) `Path` values,
 /// merges them with the current process `PATH`, expands `%USERPROFILE%` / `%SystemRoot%`
@@ -168,6 +168,61 @@ pub async fn query_windows_free_disk(_target_dir: &Path) -> u64 {
         }
     }
     0
+}
+
+/// Adds a directory to the User PATH in `HKCU\Environment`, ensures no duplicate entries,
+/// updates the Windows registry, and refreshes the current process PATH.
+/// Returns the previous raw User PATH string for transaction rollback purposes.
+pub async fn add_to_windows_user_path(directory: &Path) -> Result<String, CoreError> {
+    let dir_str = directory.to_string_lossy().to_string();
+    let current_raw = query_reg_path_value(HKCU_ENV_KEY).await.unwrap_or_default();
+
+    let mut entries = parse_windows_path_string(&current_raw);
+    let already_present = entries.iter().any(|p| {
+        p.to_string_lossy().eq_ignore_ascii_case(&dir_str)
+    });
+
+    if !already_present {
+        entries.push(directory.to_path_buf());
+        let new_path_val = entries
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(";");
+
+        let out = Command::new("reg")
+            .args(["add", HKCU_ENV_KEY, "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", &new_path_val, "/f"])
+            .output()
+            .await?;
+
+        if !out.status.success() {
+            return Err(CoreError::Os(format!(
+                "Failed to update User PATH in registry: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+    }
+
+    read_windows_registry_path().await?;
+    Ok(current_raw)
+}
+
+/// Restores the User PATH in `HKCU\Environment` to a previous value (used by rollback).
+pub async fn restore_windows_user_path(previous_raw: &str) -> Result<(), CoreError> {
+    let out = Command::new("reg")
+        .args(["add", HKCU_ENV_KEY, "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", previous_raw, "/f"])
+        .output()
+        .await?;
+
+    if !out.status.success() {
+        return Err(CoreError::Os(format!(
+            "Failed to restore User PATH in registry: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+
+    read_windows_registry_path().await?;
+    Ok(())
 }
 
 #[cfg(test)]

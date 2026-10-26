@@ -113,6 +113,12 @@ mod tests {
                 None
             }
         }
+        async fn add_to_user_path(&self, _directory: &Path) -> Result<String, CoreError> {
+            Ok("C:\\old_path".to_string())
+        }
+        async fn restore_user_path(&self, _previous_raw: &str) -> Result<(), CoreError> {
+            Ok(())
+        }
         async fn run_command(
             &self,
             binary: &Path,
