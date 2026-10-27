@@ -66,6 +66,58 @@ pub enum Step {
     },
 }
 
+impl Step {
+    /// Returns the transparent source origin: `(domain_or_label, optional_clickable_url)`
+    /// As mandated by SECURITY.md: "The displayed domain must be the actual domain the download uses".
+    pub fn source_display(&self) -> (String, Option<String>) {
+        match self {
+            Self::InstallPackage {
+                ecosystem,
+                package_id,
+                ..
+            } => match ecosystem {
+                Ecosystem::PyPI => (
+                    "pypi.org".to_string(),
+                    Some(format!("https://pypi.org/project/{package_id}/")),
+                ),
+                Ecosystem::Npm => (
+                    "registry.npmjs.org".to_string(),
+                    Some(format!("https://www.npmjs.com/package/{package_id}")),
+                ),
+                Ecosystem::Modrinth => (
+                    "api.modrinth.com".to_string(),
+                    Some(format!("https://modrinth.com/project/{package_id}")),
+                ),
+                Ecosystem::Winget => (
+                    "winget (Microsoft Community Repo)".to_string(),
+                    Some("https://github.com/microsoft/winget-pkgs".to_string()),
+                ),
+                Ecosystem::GitHub => (
+                    "github.com".to_string(),
+                    Some(format!("https://github.com/{package_id}")),
+                ),
+                Ecosystem::Vendor => ("Official Vendor Domain".to_string(), None),
+            },
+            Self::DownloadArtifact { id, .. } => {
+                if id.starts_with("http://") || id.starts_with("https://") {
+                    if let Ok(parsed) = url::Url::parse(id) {
+                        if let Some(host) = parsed.host_str() {
+                            return (host.to_string(), Some(id.clone()));
+                        }
+                    }
+                    (id.clone(), Some(id.clone()))
+                } else {
+                    ("Local / Embedded Source".to_string(), None)
+                }
+            }
+            Self::VerifyHash { .. } => ("Local Hash Check".to_string(), None),
+            Self::AddToUserPath { .. } => ("Windows Registry (HKCU)".to_string(), None),
+            Self::CreateIsolatedEnv { .. } => ("Local Isolated Directory".to_string(), None),
+            Self::RunVerifyCommand { .. } => ("Local Direct Process Execution".to_string(), None),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Ecosystem {

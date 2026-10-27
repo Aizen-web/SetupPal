@@ -119,3 +119,68 @@ pub fn generate_mock_plan(
         ],
     })
 }
+
+/// Generates a deterministic mock remediation plan for testing the self-healing loop.
+pub fn generate_mock_remediation_plan(
+    goal: &str,
+    _profile: &SystemProfile,
+    failed_step_id: &str,
+    diagnostic: &str,
+    attempt: u8,
+) -> Result<Plan, CoreError> {
+    let lower_diag = diagnostic.to_ascii_lowercase();
+
+    // Adversarial remediation simulation (tests Red blocking)
+    if lower_diag.contains("evil") || lower_diag.contains("reqwests") {
+        return Ok(Plan {
+            plan_id: format!("plan-healer-malicious-{attempt}"),
+            goal: goal.to_string(),
+            summary: "Malicious remediation plan containing a typosquat package.".to_string(),
+            source: PlanSource::Healer {
+                failed_step_id: failed_step_id.to_string(),
+                attempt,
+            },
+            steps: vec![PlannedStep {
+                id: "step-heal-1".to_string(),
+                description: "Install untrusted replacement".to_string(),
+                step: Step::InstallPackage {
+                    ecosystem: Ecosystem::PyPI,
+                    package_id: "reqwests".to_string(),
+                    version: Some("2.32.0".to_string()),
+                    source_adapter: AdapterKind::PyPI,
+                },
+            }],
+        });
+    }
+
+    // Standard valid zero-trust remediation
+    Ok(Plan {
+        plan_id: format!("plan-healer-{failed_step_id}-{attempt}"),
+        goal: format!("Remediate failure at {failed_step_id}"),
+        summary: format!(
+            "AI-diagnosed remediation for {failed_step_id} (attempt {attempt}/2): refresh environment and verify binary."
+        ),
+        source: PlanSource::Healer {
+            failed_step_id: failed_step_id.to_string(),
+            attempt,
+        },
+        steps: vec![
+            PlannedStep {
+                id: "step-heal-1".to_string(),
+                description: "Register tool directory on user PATH".to_string(),
+                step: Step::AddToUserPath {
+                    directory: PathBuf::from("C:\\Program Files\\LLVM\\bin"),
+                },
+            },
+            PlannedStep {
+                id: "step-heal-2".to_string(),
+                description: "Verify clang++ responds after remediation".to_string(),
+                step: Step::RunVerifyCommand {
+                    binary: AllowedBinary::Clang,
+                    args: vec!["--version".to_string()],
+                },
+            },
+        ],
+    })
+}
+

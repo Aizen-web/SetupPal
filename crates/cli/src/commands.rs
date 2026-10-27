@@ -100,6 +100,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 auto_approve_green: yes,
                 allow_yellow,
                 working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                trusted_categories: std::collections::HashSet::new(),
             };
 
             let execution_summary = executor
@@ -156,8 +157,23 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Commands::Log => {
+        Commands::Log { export_md, export_html } => {
             let state_logger = StateLogger::new(config.state_log_path.clone(), events.clone());
+
+            if let Some(md_path) = export_md {
+                let report = state_logger.export_audit_report_markdown()?;
+                std::fs::write(&md_path, &report)?;
+                println!("Successfully exported audit report to: {}", md_path.display());
+                return Ok(());
+            }
+
+            if let Some(html_path) = export_html {
+                let report = state_logger.export_audit_report_html()?;
+                std::fs::write(&html_path, &report)?;
+                println!("Successfully exported styled HTML audit report to: {}", html_path.display());
+                return Ok(());
+            }
+
             let transactions = state_logger.read_all_transactions()?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&transactions)?);

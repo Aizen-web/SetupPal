@@ -19,6 +19,15 @@ pub trait LlmClient: Send + Sync {
         profile: &SystemProfile,
         untrusted_context: Option<&str>,
     ) -> Result<Plan, CoreError>;
+
+    async fn propose_remediation_plan(
+        &self,
+        goal: &str,
+        profile: &SystemProfile,
+        failed_step_id: &str,
+        diagnostic: &str,
+        attempt: u8,
+    ) -> Result<Plan, CoreError>;
 }
 
 /// NVIDIA NIM client speaking OpenAI-compatible `/v1/chat/completions`
@@ -34,6 +43,8 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     response_format: ResponseFormat,
 }
 
@@ -131,6 +142,7 @@ impl LlmClient for NimClient {
                 },
             ],
             temperature: 0.0,
+            max_tokens: Some(1500),
             response_format: ResponseFormat {
                 kind: "json_schema".to_string(),
                 json_schema: JsonSchemaPayload {
@@ -170,6 +182,108 @@ impl LlmClient for NimClient {
                 "LLM response did not conform to Plan JSON Schema: {e}. Raw: {cleaned}"
             ))
         })?;
+
+        Ok(plan)
+    }
+
+    async fn propose_remediation_plan(
+        &self,
+        goal: &str,
+        profile: &SystemProfile,
+        failed_step_id: &str,
+        diagnostic: &str,
+        attempt: u8,
+    ) -> Result<Plan, CoreError> {
+        if self.config.nim_mock {
+            return mock::generate_mock_remediation_plan(
+                goal,
+                profile,
+                failed_step_id,
+                diagnostic,
+                attempt,
+            );
+        }
+
+        let api_key = self.config.nim_api_key.as_deref().ok_or_else(|| {
+            CoreError::Config(
+                "NIM_API_KEY is not set and NIM_MOCK is disabled. Set NIM_API_KEY or NIM_MOCK=1."
+                    .to_string(),
+            )
+        })?;
+
+        let schema_value = Self::plan_json_schema()?;
+        let system_prompt = sanitizer::build_hardened_system_prompt(&schema_value)?;
+        let user_prompt = sanitizer::build_remediation_user_prompt(
+            goal,
+            profile,
+            failed_step_id,
+            diagnostic,
+            attempt,
+        )?;
+
+        let endpoint = format!(
+            "{}/chat/completions",
+            self.config.nim_base_url.trim_end_matches('/')
+        );
+
+        let request_body = ChatCompletionRequest {
+            model: self.config.nim_model.clone(),
+            messages: vec![
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: system_prompt,
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: user_prompt,
+                },
+            ],
+            temperature: 0.0,
+            max_tokens: Some(1500),
+            response_format: ResponseFormat {
+                kind: "json_schema".to_string(),
+                json_schema: JsonSchemaPayload {
+                    name: "zero_trust_execution_plan".to_string(),
+                    strict: true,
+                    schema: schema_value,
+                },
+            },
+        };
+
+        let response = self
+            .http
+            .post(&endpoint)
+            .bearer_auth(api_key)
+            .json(&request_body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let err_text = response.text().await.unwrap_or_default();
+            return Err(CoreError::Llm(format!(
+                "NVIDIA NIM HTTP {status}: {err_text}"
+            )));
+        }
+
+        let completion: ChatCompletionResponse = response.json().await?;
+        let raw_content = completion
+            .choices
+            .first()
+            .map(|c| c.message.content.trim())
+            .ok_or_else(|| CoreError::Llm("NVIDIA NIM returned empty choices".to_string()))?;
+
+        let cleaned = sanitizer::strip_markdown_code_fences(raw_content);
+        let mut plan: Plan = serde_json::from_str(cleaned).map_err(|e| {
+            CoreError::Llm(format!(
+                "LLM response did not conform to Plan JSON Schema: {e}. Raw: {cleaned}"
+            ))
+        })?;
+
+        plan.source = crate::types::PlanSource::Healer {
+            failed_step_id: failed_step_id.to_string(),
+            attempt,
+        };
 
         Ok(plan)
     }

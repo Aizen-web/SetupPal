@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use chrono::Utc;
@@ -15,12 +16,25 @@ use crate::state::{RollbackData, StateLogger, TransactionRecord};
 use crate::types::{Plan, PlannedStep, Step};
 use crate::verifier::Verifier;
 
+/// Categories of software installs that can be narrowly trusted per SECURITY.md.
+/// "An optional 'don't ask me about this kind of thing again' checkbox,
+/// scoped to a category like 'verified-publisher winget installs', never 'everything'."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustCategory {
+    VerifiedWinget,
+    IsolatedPythonVenv,
+    LocalNpmModules,
+    OfficialGitHubRelease,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExecutionOptions {
     pub dry_run: bool,
     pub auto_approve_green: bool,
     pub allow_yellow: bool,
     pub working_dir: PathBuf,
+    pub trusted_categories: HashSet<TrustCategory>,
 }
 
 impl Default for ExecutionOptions {
@@ -30,6 +44,33 @@ impl Default for ExecutionOptions {
             auto_approve_green: false,
             allow_yellow: false,
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            trusted_categories: HashSet::new(),
+        }
+    }
+}
+
+impl ExecutionOptions {
+    /// Checks whether a step belongs to a narrowly trusted category.
+    /// As mandated by SECURITY.md, later Yellow and Red steps still interrupt regardless.
+    pub fn is_step_trusted(&self, step: &Step) -> bool {
+        match step {
+            Step::InstallPackage {
+                ecosystem: crate::types::Ecosystem::Winget,
+                ..
+            } => self.trusted_categories.contains(&TrustCategory::VerifiedWinget),
+            Step::InstallPackage {
+                ecosystem: crate::types::Ecosystem::Npm,
+                ..
+            } => self.trusted_categories.contains(&TrustCategory::LocalNpmModules),
+            Step::CreateIsolatedEnv {
+                kind: crate::types::IsolationKind::PythonVenv,
+                ..
+            } => self.trusted_categories.contains(&TrustCategory::IsolatedPythonVenv),
+            Step::DownloadArtifact {
+                adapter: crate::types::AdapterKind::GitHubReleases,
+                ..
+            } => self.trusted_categories.contains(&TrustCategory::OfficialGitHubRelease),
+            _ => false,
         }
     }
 }
@@ -164,8 +205,9 @@ impl Executor {
                 break;
             }
 
-            // 3. Green Approval Gate (if live execution and not auto-approved)
-            if rating == RiskRating::Green && !options.dry_run && !options.auto_approve_green {
+            // 3. Green Approval Gate (if live execution and not auto-approved and not in a trusted category)
+            let is_trusted_green = options.is_step_trusted(&step.step);
+            if rating == RiskRating::Green && !options.dry_run && !options.auto_approve_green && !is_trusted_green {
                 self.events.emit(AgentEvent::StepApprovalRequired {
                     step_id: step.id.clone(),
                     rating: RiskRating::Green,
@@ -284,6 +326,7 @@ impl Executor {
                         package_id: package_id.clone(),
                         uninstall_command: receipt.rollback_hint.clone(),
                     }),
+                    rolled_back_tx_id: None,
                 };
                 self.state_logger.record_transaction(&tx)?;
 
@@ -347,6 +390,7 @@ impl Executor {
                     changes_made: receipt.changes_made.clone(),
                     rollback_hint: receipt.rollback_hint.clone(),
                     rollback_data,
+                    rolled_back_tx_id: None,
                 };
                 self.state_logger.record_transaction(&tx)?;
 
@@ -518,6 +562,7 @@ impl Executor {
                         rollback_data: Some(RollbackData::FileDownload {
                             destination: destination.clone(),
                         }),
+                        rolled_back_tx_id: None,
                     };
                     self.state_logger.record_transaction(&tx)?;
                 }
@@ -534,7 +579,7 @@ impl Executor {
                     blocked_reason: None,
                     receipt: Some(receipt),
                     verification: Some(VerificationResult {
-                        passed: artifact.local_path.exists(),
+                        passed: if options.dry_run { true } else { artifact.local_path.exists() },
                         command_run: format!("fetch {}", destination.display()),
                         exit_code: Some(0),
                         stdout: "Downloaded artifact OK".to_string(),
@@ -573,6 +618,7 @@ impl Executor {
                         changes_made: receipt.changes_made.clone(),
                         rollback_hint: receipt.rollback_hint.clone(),
                         rollback_data: Some(RollbackData::IsolatedEnv { path: path.clone() }),
+                        rolled_back_tx_id: None,
                     };
                     self.state_logger.record_transaction(&tx)?;
                 }
@@ -714,6 +760,7 @@ mod tests {
                     auto_approve_green: true,
                     allow_yellow: false,
                     working_dir: PathBuf::from("."),
+                    trusted_categories: HashSet::new(),
                 },
             )
             .await

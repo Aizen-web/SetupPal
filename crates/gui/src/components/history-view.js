@@ -4,6 +4,7 @@
 
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
+import { bridge } from '../api/bridge.js';
 import { createGhostSvg } from '../mascot/pixel-ghost.js';
 
 export function renderHistoryView(container) {
@@ -22,10 +23,14 @@ export function renderHistoryView(container) {
       <!-- Changes Timeline (Rewind Log) -->
       <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 24px; box-shadow: var(--shadow-card);">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
-          <h2 class="font-pixel" style="font-size: 18px; color: var(--ink);">System Mutation Log</h2>
-          <button id="btn-rewind" class="btn-review" style="border-color: var(--v-red); color: var(--v-red); font-size: 12.5px;">
-            ⏪ Rewind Last Change
-          </button>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <a id="btn-export-audit" href="/api/history/export?format=html" target="_blank" class="btn-review" style="font-size: 12.5px; text-decoration: none; display: flex; align-items: center; gap: 4px; padding: 5px 12px;">
+              📄 Export Audit Report (HTML)
+            </a>
+            <button id="btn-rewind" class="btn-review" style="border-color: var(--v-red); color: var(--v-red); font-size: 12.5px;">
+              ⏪ Rewind Last Change
+            </button>
+          </div>
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 10px;">
@@ -67,12 +72,6 @@ export function renderHistoryView(container) {
   `;
 
   container.querySelector('#btn-rewind').onclick = () => {
-    sounds.play('rewind');
-    store.setActivePage('chats');
-    store.setMascotState('rewind', "Rewinding... Reverting Adoptium JDK 21 installation cleanly!");
-    setTimeout(() => {
-      sounds.play('verdict.green');
-      store.setMascotState('green', "System rolled back to original clean snapshot!");
-    }, 2800);
+    bridge.rewindLastChange();
   };
 }

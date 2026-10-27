@@ -9,6 +9,7 @@ import './styles/components.css';
 
 import { store } from './state/store.js';
 import { simulation } from './state/simulation.js';
+import { bridge } from './api/bridge.js';
 import { renderSidebar } from './components/sidebar.js';
 import { renderChatView } from './components/chat-view.js';
 import { renderTaskPanel } from './components/task-panel.js';
@@ -90,7 +91,10 @@ function initApp() {
     }
   });
 
-  console.log("👻 SetupPal Zero-Trust GUI initialized. Ready in Cozy Kawaii Chill Mode.");
+  // Connect to Zero-Trust Backend
+  bridge.init();
+
+  console.log("👻 SetupPal Zero-Trust GUI initialized. Connected to installer_core backend.");
 }
 
 // Start app on DOM load

@@ -46,6 +46,16 @@ impl WingetAdapter {
                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                 "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip",
             ),
+            "python.python.3.12" => (
+                version.unwrap_or("3.12.5"),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "https://www.python.org/ftp/python/3.12.5/python-3.12.5-amd64.exe",
+            ),
+            "eclipseadoptium.temurin.21.jdk" => (
+                version.unwrap_or("21.0.4.7"),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4%2B7/OpenJDK21U-jdk_x64_windows_hotspot_21.0.4_7.msi",
+            ),
             _ => return None,
         };
 
@@ -168,7 +178,7 @@ impl SourceAdapter for WingetAdapter {
                 version: metadata.resolved_version.clone(),
                 dry_run: true,
                 changes_made: vec![format!(
-                    "[Dry Run] Would execute: winget install --id {} --exact --silent --accept-package-agreements --accept-source-agreements",
+                    "[Dry Run] Would execute: winget install --id {} --exact --scope user --silent --accept-package-agreements --accept-source-agreements",
                     metadata.package_id
                 )],
                 rollback_hint: Some(format!("winget uninstall --id {}", metadata.package_id)),
@@ -214,6 +224,8 @@ impl SourceAdapter for WingetAdapter {
             "--id".to_string(),
             metadata.package_id.clone(),
             "--exact".to_string(),
+            "--scope".to_string(),
+            "user".to_string(),
             "--silent".to_string(),
             "--accept-package-agreements".to_string(),
             "--accept-source-agreements".to_string(),

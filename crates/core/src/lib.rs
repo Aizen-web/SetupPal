@@ -6,6 +6,7 @@ pub mod adapters;
 pub mod config;
 pub mod events;
 pub mod executor;
+pub mod healer;
 pub mod llm;
 pub mod os;
 pub mod planner;
@@ -18,17 +19,20 @@ pub mod verifier;
 
 pub use adapters::{
     AdapterError, AdapterRegistry, ExecutionContext, ExecutionReceipt, FetchedArtifact,
-    PackageMetadata, SourceAdapter, VerificationResult, WingetAdapter,
+    GitHubReleasesAdapter, ModrinthAdapter, NpmAdapter, PackageMetadata, PyPIAdapter,
+    SourceAdapter, VerificationResult, WingetAdapter,
 };
 pub use config::{CoreConfig, CoreError};
 pub use events::{AgentEvent, EventBus};
-pub use executor::{ExecutionOptions, Executor, PlanExecutionSummary, StepExecutionResult};
+pub use executor::{ExecutionOptions, Executor, PlanExecutionSummary, StepExecutionResult, TrustCategory};
+pub use healer::{FailureContext, Healer};
 pub use llm::{LlmClient, NimClient};
 pub use os::{CommandOutput, MockOsProvider, OsProvider, PlatformOsProvider};
 pub use planner::Planner;
 pub use recipes::{Recipe, RecipeStore};
 pub use safety::{
-    PlanSafetyReport, RiskRating, SafetyEngine, SafetyReport, SafetySignals, TyposquatMatch,
+    HttpTavilyVerifier, MockTavilyVerifier, PlanSafetyReport, RiskRating, SafetyEngine,
+    SafetyReport, SafetySignals, TavilyVerificationResult, TavilyVerifier, TyposquatMatch,
     VulnerabilitySummary,
 };
 pub use scan::SystemScanner;

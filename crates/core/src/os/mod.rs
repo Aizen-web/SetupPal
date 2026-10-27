@@ -149,6 +149,7 @@ impl OsProvider for PlatformOsProvider {
     ) -> Result<CommandOutput, CoreError> {
         let mut cmd = tokio::process::Command::new(binary);
         cmd.args(args);
+        cmd.stdin(std::process::Stdio::null());
 
         if !extra_path.is_empty() {
             if let Ok(joined) = std::env::join_paths(extra_path) {
@@ -156,7 +157,19 @@ impl OsProvider for PlatformOsProvider {
             }
         }
 
-        let out = cmd.output().await?;
+        // Hard execution timeout (5 minutes) to prevent runaway or hanging processes
+        let timeout_duration = std::time::Duration::from_secs(300);
+        let out = match tokio::time::timeout(timeout_duration, cmd.output()).await {
+            Ok(output_res) => output_res?,
+            Err(_) => {
+                return Err(CoreError::Os(format!(
+                    "Command '{}' timed out after {} seconds",
+                    binary.display(),
+                    timeout_duration.as_secs()
+                )));
+            }
+        };
+
         Ok(CommandOutput {
             exit_code: out.status.code(),
             stdout: String::from_utf8_lossy(&out.stdout).trim().to_string(),

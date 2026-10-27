@@ -208,7 +208,23 @@ pub fn render_plan_with_safety(
             }
         }
 
+        // Source transparency per SECURITY.md
+        let (source_domain, source_url) = item.step.source_display();
+        let source_formatted = match source_url {
+            Some(u) => format!("{} ({})", source_domain.bright_white(), u.underline().bright_cyan()),
+            None => source_domain.bright_white().to_string(),
+        };
+        println!("     Source: {}", source_formatted);
+
         if let Some(rep) = step_rep {
+            let (verdict_title, verdict_desc) = rep.user_facing_translation();
+            let verdict_badge = match rep.rating {
+                RiskRating::Green => verdict_title.bright_green().bold(),
+                RiskRating::Yellow => verdict_title.bright_yellow().bold(),
+                RiskRating::Red => verdict_title.bright_red().bold(),
+            };
+            println!("     Verdict: {} — {}", verdict_badge, verdict_desc);
+
             for reason in &rep.reasons {
                 let bullet = match rep.rating {
                     RiskRating::Green => "✓".bright_green(),

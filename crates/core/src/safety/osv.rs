@@ -85,6 +85,7 @@ impl Default for HttpOsvClient {
 impl HttpOsvClient {
     pub fn new() -> Self {
         let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_default();

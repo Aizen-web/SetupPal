@@ -4,121 +4,105 @@
 
 import { sounds } from '../audio/sound-engine.js';
 
+const STORAGE_KEY = 'setuppal_local_conversations_v2';
+const ACTIVE_CONV_KEY = 'setuppal_active_conv_id_v2';
+
+function generateConvId() {
+  return 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+}
+
+function createNewConversation(title = 'New setup', icon = '✨') {
+  return {
+    id: generateConvId(),
+    title,
+    icon,
+    createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    chatMessages: [],
+    activePlan: null,
+    terminalLogs: [
+      { id: 1, text: '> Zero-Trust Orchestrator ready. Standing by for user request...', type: 'info' }
+    ]
+  };
+}
+
+function loadStoredConversations() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn("Could not parse local conversations:", e);
+  }
+  const defaultConv = createNewConversation('New setup', '✨');
+  saveStoredConversations([defaultConv], defaultConv.id);
+  return [defaultConv];
+}
+
+function saveStoredConversations(conversations, activeId) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+    if (activeId) {
+      localStorage.setItem(ACTIVE_CONV_KEY, activeId);
+    }
+  } catch (e) {
+    console.warn("Could not save local conversations:", e);
+  }
+}
+
 class Store {
   constructor() {
     this.subscribers = new Set();
     
+    const conversations = loadStoredConversations();
+    let activeId = localStorage.getItem(ACTIVE_CONV_KEY);
+    let activeConv = conversations.find(c => c.id === activeId);
+    if (!activeConv) {
+      activeConv = conversations[0];
+      activeId = activeConv.id;
+    }
+
     this.state = {
       mode: 'chill', // 'chill' | 'hacker'
       modePreference: 'auto', // 'auto' | 'always-chill' | 'always-hacker'
       activePage: 'chats', // 'chats' | 'history' | 'downloads' | 'accounts' | 'settings'
       
+      // Conversations & Tabs (Persisted locally)
+      conversations: conversations,
+      activeConversationId: activeId,
+
       // Mascot & Pets
       activePet: 'ghost', // 'ghost' | 'cat' | 'bunny'
       mascotState: 'idle',
-      mascotSpeech: "Here's my plan. Take a look before I touch anything.",
+      mascotSpeech: "Boo! I'm Pixel, your zero-trust guardian ghost. Ask me anything in the chat window, and I'll help you set it up safely!",
       mascotSpeechSpeed: 25, // ms per char
       isSpeaking: false,
       
       // Right Task Panel
       tasksOpen: true,
       
-      // Active Plan & Tasks
-      activePlan: {
-        id: 'minecraft_01',
-        title: 'Minecraft with performance mods',
-        subtitle: '5 steps · 4 look safe · 1 needs your call',
-        safety: 'strict',
-        status: 'awaiting_approval', // 'planning' | 'awaiting_approval' | 'running' | 'completed' | 'paused'
-        tasks: [
-          {
-            id: 1,
-            num: 1,
-            title: 'Install Java 21',
-            desc: 'adoptium.net · hash matches publisher',
-            source: 'adoptium.net',
-            verdict: 'GREEN',
-            status: 'done',
-            reversible: true
-          },
-          {
-            id: 2,
-            num: 2,
-            title: 'Install the Minecraft launcher',
-            desc: 'minecraft.net · signature valid',
-            source: 'minecraft.net',
-            verdict: 'GREEN',
-            status: 'done',
-            reversible: true
-          },
-          {
-            id: 3,
-            num: 3,
-            title: 'Install Fabric loader',
-            desc: 'fabricmc.net · official installer',
-            source: 'fabricmc.net',
-            verdict: 'GREEN',
-            status: 'running',
-            reversible: true
-          },
-          {
-            id: 4,
-            num: 4,
-            title: 'Add Sodium',
-            desc: 'modrinth.com · established, hash matches',
-            source: 'modrinth.com',
-            verdict: 'GREEN',
-            status: 'waiting',
-            reversible: true
-          },
-          {
-            id: 5,
-            num: 5,
-            title: 'Add FastLight Pro',
-            desc: 'modrinth.com · brand new, few downloads',
-            source: 'modrinth.com',
-            verdict: 'YELLOW',
-            status: 'held',
-            reversible: false
-          }
-        ]
-      },
+      // Active Plan & Tasks (restored from active conversation)
+      activePlan: activeConv.activePlan || null,
 
-      // Terminal Logs
+      // Terminal Logs (restored from active conversation)
       terminalTab: 'terminal', // 'terminal' | 'chat'
-      terminalLogs: [
-        { id: 1, text: '> plan approved: 4 steps, 1 held for you', type: 'info' },
-        { id: 2, text: '✓ java 21 · adoptium.net · sha256 matches publisher', type: 'green' },
-        { id: 3, text: '✓ launcher · minecraft.net · signature valid', type: 'green' },
-        { id: 4, text: '~ fabric loader · downloading (14.2 MB / 18.0 MB)', type: 'running' },
-        { id: 5, text: '> next: sodium · modrinth · hash check', type: 'info' },
-        { id: 6, text: '? FastLight Pro is held (yellow). Ask me later.', type: 'yellow' }
+      terminalLogs: activeConv.terminalLogs || [
+        { id: 1, text: '> Zero-Trust Orchestrator ready. Standing by for user request...', type: 'info' }
       ],
 
-      // Chat Messages
-      chatMessages: [
-        {
-          id: 'm1',
-          sender: 'user',
-          text: 'Set up Minecraft with performance mods for 1.21 please',
-          time: '14:20'
-        },
-        {
-          id: 'm2',
-          sender: 'assistant',
-          text: "I analyzed the dependencies and security risks for **Minecraft 1.21 + Fabric**. Adoptium Temurin 21 and the official launcher have verified cryptographic signatures.\n\nSodium has over 30M verified downloads. Note that I flagged **FastLight Pro** as yellow because it was uploaded recently and lacks historical trust metrics.",
-          time: '14:21',
-          planAttached: true
-        }
-      ],
+      // Chat Messages (restored from active conversation)
+      chatMessages: activeConv.chatMessages || [],
 
-      // RECENT list in sidebar
-      recentChats: [
-        { id: 'c1', title: 'Minecraft + mods', active: true, status: 'running', icon: '~' },
-        { id: 'c2', title: 'C++ toolchain', active: false, status: 'done', icon: '✓' },
-        { id: 'c3', title: 'Python data science', active: false, status: 'done', icon: '✓' },
-        { id: 'c4', title: 'Node project', active: false, status: 'done', icon: '✓' }
-      ],
+      // RECENT list in sidebar (synced with conversations)
+      recentChats: conversations.map(c => ({
+        id: c.id,
+        title: c.title,
+        icon: c.icon,
+        active: c.id === activeId
+      })),
 
       // Downloads Data
       downloads: [
@@ -242,7 +226,199 @@ class Store {
     } else {
       this.state = { ...this.state, ...updater };
     }
+
+    // Auto-persist active conversation if messages, plan, or logs changed
+    if (this.state.activeConversationId && Array.isArray(this.state.conversations)) {
+      let changed = false;
+      const convs = this.state.conversations.map(c => {
+        if (c.id === this.state.activeConversationId) {
+          if (c.chatMessages !== this.state.chatMessages || c.activePlan !== this.state.activePlan || c.terminalLogs !== this.state.terminalLogs) {
+            changed = true;
+            return {
+              ...c,
+              chatMessages: this.state.chatMessages,
+              activePlan: this.state.activePlan,
+              terminalLogs: this.state.terminalLogs,
+              updatedAt: Date.now()
+            };
+          }
+        }
+        return c;
+      });
+      if (changed) {
+        this.state.conversations = convs;
+        saveStoredConversations(convs, this.state.activeConversationId);
+      }
+    }
+
     this.notify();
+  }
+
+  createConversation() {
+    // 1. Save currently active conversation first
+    const s = this.state;
+    const updatedConvs = (s.conversations || []).map(c => {
+      if (c.id === s.activeConversationId) {
+        return {
+          ...c,
+          chatMessages: s.chatMessages,
+          activePlan: s.activePlan,
+          terminalLogs: s.terminalLogs,
+          updatedAt: Date.now()
+        };
+      }
+      return c;
+    });
+
+    // 2. Create fresh new conversation
+    const newConv = createNewConversation('New setup', '✨');
+    const allConvs = [newConv, ...updatedConvs];
+
+    saveStoredConversations(allConvs, newConv.id);
+
+    this.setState({
+      conversations: allConvs,
+      activeConversationId: newConv.id,
+      chatMessages: [],
+      activePlan: null,
+      terminalLogs: newConv.terminalLogs,
+      activePage: 'chats',
+      recentChats: allConvs.map(c => ({
+        id: c.id,
+        title: c.title,
+        icon: c.icon,
+        active: c.id === newConv.id
+      }))
+    });
+
+    sounds.play('ui.click');
+    this.setMascotState('idle', "Started a fresh new setup! Ask me anything in the chat window, and I'll help you set it up safely!");
+  }
+
+  switchConversation(id) {
+    if (this.state.activeConversationId === id) return;
+
+    // 1. Save currently active conversation
+    const s = this.state;
+    const updatedConvs = (s.conversations || []).map(c => {
+      if (c.id === s.activeConversationId) {
+        return {
+          ...c,
+          chatMessages: s.chatMessages,
+          activePlan: s.activePlan,
+          terminalLogs: s.terminalLogs,
+          updatedAt: Date.now()
+        };
+      }
+      return c;
+    });
+
+    const targetConv = updatedConvs.find(c => c.id === id);
+    if (!targetConv) return;
+
+    saveStoredConversations(updatedConvs, targetConv.id);
+
+    this.setState({
+      conversations: updatedConvs,
+      activeConversationId: targetConv.id,
+      chatMessages: targetConv.chatMessages || [],
+      activePlan: targetConv.activePlan || null,
+      terminalLogs: targetConv.terminalLogs || [
+        { id: 1, text: '> Zero-Trust Orchestrator ready. Standing by for user request...', type: 'info' }
+      ],
+      activePage: 'chats',
+      recentChats: updatedConvs.map(c => ({
+        id: c.id,
+        title: c.title,
+        icon: c.icon,
+        active: c.id === targetConv.id
+      }))
+    });
+
+    sounds.play('ui.click');
+    this.setMascotState('idle', `Switched back to "${targetConv.title}"! Standing by with zero-trust protection.`);
+  }
+
+  closeConversation(id) {
+    const s = this.state;
+    const remaining = (s.conversations || []).filter(c => c.id !== id);
+
+    if (remaining.length === 0) {
+      this.createConversation();
+      return;
+    }
+
+    let nextActiveId = s.activeConversationId;
+    let nextConv = remaining.find(c => c.id === nextActiveId);
+
+    if (s.activeConversationId === id || !nextConv) {
+      nextConv = remaining[0];
+      nextActiveId = nextConv.id;
+    }
+
+    saveStoredConversations(remaining, nextActiveId);
+
+    this.setState({
+      conversations: remaining,
+      activeConversationId: nextActiveId,
+      chatMessages: nextConv.chatMessages || [],
+      activePlan: nextConv.activePlan || null,
+      terminalLogs: nextConv.terminalLogs || [],
+      recentChats: remaining.map(c => ({
+        id: c.id,
+        title: c.title,
+        icon: c.icon,
+        active: c.id === nextActiveId
+      }))
+    });
+
+    sounds.play('ui.click');
+  }
+
+  updateConversationTitleFromMessage(userText) {
+    const s = this.state;
+    const active = (s.conversations || []).find(c => c.id === s.activeConversationId);
+    if (!active) return;
+
+    // Only update if current title is default
+    if (active.title === 'New setup' || active.title.startsWith('New setup')) {
+      const lower = userText.toLowerCase();
+      let newTitle = userText.slice(0, 24);
+      let newIcon = '💬';
+
+      if (lower.includes('minecraft') || lower.includes('optifine')) {
+        newTitle = 'Minecraft mods';
+        newIcon = '🎮';
+      } else if (lower.includes('python') || lower.includes('venv') || lower.includes('data science')) {
+        newTitle = 'Python AI dev';
+        newIcon = '🐍';
+      } else if (lower.includes('c++') || lower.includes('cpp') || lower.includes('compiler')) {
+        newTitle = 'C++ toolchain';
+        newIcon = '⚡';
+      } else if (lower.includes('attack') || lower.includes('radar')) {
+        newTitle = 'Security Radar';
+        newIcon = '🛡️';
+      }
+
+      const updatedConvs = s.conversations.map(c => {
+        if (c.id === s.activeConversationId) {
+          return { ...c, title: newTitle, icon: newIcon };
+        }
+        return c;
+      });
+
+      saveStoredConversations(updatedConvs, s.activeConversationId);
+
+      this.setState({
+        conversations: updatedConvs,
+        recentChats: updatedConvs.map(c => ({
+          id: c.id,
+          title: c.title,
+          icon: c.icon,
+          active: c.id === s.activeConversationId
+        }))
+      });
+    }
   }
 
   setMode(mode) {
@@ -260,16 +436,19 @@ class Store {
   }
 
   setMascotState(state, speech = null) {
-    const updates = { mascotState: state };
+    this.state.mascotState = state;
     if (speech !== null) {
-      updates.mascotSpeech = speech;
+      this.state.mascotSpeech = speech;
     }
-    this.setState(updates);
     
-    // Update DOM data-state attribute
-    const mascotRoot = document.getElementById('ghost-root');
-    if (mascotRoot) {
-      mascotRoot.dataset.state = state;
+    // Update DOM speech bubble and mascot element directly without destroying user input / DOM
+    const speechEl = document.getElementById('speech-bubble-text');
+    if (speechEl && speech !== null) {
+      speechEl.textContent = speech;
+    }
+    const mascotSvg = document.getElementById('hero-ghost-root') || document.getElementById('ghost-root');
+    if (mascotSvg) {
+      mascotSvg.dataset.state = state;
     }
   }
 
@@ -280,11 +459,11 @@ class Store {
     
     // Greet with pet's personality
     if (pet === 'cat') {
-      this.setMascotState('wave-hello', "Meow! Byte the cyber-cat is online and monitoring processes! :3");
+      this.setMascotState('wave-hello', "Purrr! I'm Byte the Cyber Cat. Ask me anything in the chat window, and I'll keep your machine safe!");
     } else if (pet === 'bunny') {
-      this.setMascotState('wave-hello', "Hop-hop! Mochi the bunny is here to keep your setup safe and cozy! 🥕");
+      this.setMascotState('wave-hello', "Binky! I'm Mochi the Bunny. Ask me anything in the chat window and we'll set it up safely!");
     } else {
-      this.setMascotState('wave-hello', "Boo... I mean, hi! Pixel the ghost is ready to protect your machine!");
+      this.setMascotState('wave-hello', "Boo! I'm Pixel, your zero-trust guardian ghost. Ask me anything in the chat window, and I'll help you set it up safely!");
     }
   }
 

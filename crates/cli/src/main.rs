@@ -62,8 +62,16 @@ pub enum Commands {
         /// Optional transaction ID (defaults to most recent transaction)
         tx_id: Option<String>,
     },
-    /// View the append-only JSONL transaction history
-    Log,
+    /// View the append-only JSONL transaction history or export audit report
+    Log {
+        /// Export audit log as a formatted Markdown report (.md)
+        #[arg(long)]
+        export_md: Option<std::path::PathBuf>,
+
+        /// Export audit log as a styled HTML report (.html)
+        #[arg(long)]
+        export_html: Option<std::path::PathBuf>,
+    },
     /// Run the scripted prompt-injection + typosquatting interception showcase
     DemoAttack,
 }

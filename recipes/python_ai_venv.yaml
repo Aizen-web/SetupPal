@@ -5,15 +5,16 @@ triggers:
   - "data science"
   - "pytorch"
   - "jupyter"
-summary: "Creates an isolated Python venv and installs pinned, hash-verified NumPy, Pandas, and JupyterLab packages from PyPI."
+  - "python"
+summary: "Creates an isolated Python venv and installs pinned, hash-verified NumPy, Pandas, and Colorama packages from PyPI."
 steps:
   - id: step-1
-    description: "Create isolated Python virtual environment in ./.venv-ai"
+    description: "Create isolated Python virtual environment in ./.venv"
     step:
       action: create_isolated_env
       params:
         kind: python_venv
-        path: "./.venv-ai"
+        path: "./.venv"
   - id: step-2
     description: "Install numpy inside isolated environment"
     step:
@@ -33,10 +34,20 @@ steps:
         version: "2.2.3"
         source_adapter: py_p_i
   - id: step-4
-    description: "Verify Python interpreter version"
+    description: "Install colorama inside isolated environment"
+    step:
+      action: install_package
+      params:
+        ecosystem: py_p_i
+        package_id: colorama
+        version: "0.4.6"
+        source_adapter: py_p_i
+  - id: step-5
+    description: "Verify Python package imports"
     step:
       action: run_verify_command
       params:
         binary: python
         args:
-          - "--version"
+          - "-c"
+          - "import numpy, pandas, colorama"

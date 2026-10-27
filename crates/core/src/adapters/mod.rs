@@ -1,7 +1,15 @@
+pub mod github;
 pub mod mock;
+pub mod modrinth;
+pub mod npm;
+pub mod pypi;
 pub mod winget;
 
+pub use github::GitHubReleasesAdapter;
 pub use mock::MockAdapter;
+pub use modrinth::ModrinthAdapter;
+pub use npm::NpmAdapter;
+pub use pypi::PyPIAdapter;
 pub use winget::WingetAdapter;
 
 use std::collections::HashMap;
@@ -155,11 +163,15 @@ impl AdapterRegistry {
         reg
     }
 
-    /// Creates a registry using real system adapters (e.g. `WingetAdapter` backed by `OsProvider`),
-    /// falling back to mock adapters for ecosystems not yet wired up.
+    /// Creates a registry using real system adapters (e.g. `WingetAdapter`, `PyPIAdapter`,
+    /// `NpmAdapter`, `ModrinthAdapter`, `GitHubReleasesAdapter`), backed by `OsProvider`.
     pub fn with_system_defaults(os_provider: Arc<dyn crate::os::OsProvider>) -> Self {
         let mut reg = Self::with_default_mocks();
-        reg.register(Arc::new(winget::WingetAdapter::new(os_provider)));
+        reg.register(Arc::new(winget::WingetAdapter::new(os_provider.clone())));
+        reg.register(Arc::new(pypi::PyPIAdapter::new(os_provider.clone())));
+        reg.register(Arc::new(npm::NpmAdapter::new(os_provider.clone())));
+        reg.register(Arc::new(modrinth::ModrinthAdapter::new(os_provider.clone())));
+        reg.register(Arc::new(github::GitHubReleasesAdapter::new(os_provider)));
         reg
     }
 

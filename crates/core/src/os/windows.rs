@@ -209,8 +209,15 @@ pub async fn add_to_windows_user_path(directory: &Path) -> Result<String, CoreEr
 
 /// Restores the User PATH in `HKCU\Environment` to a previous value (used by rollback).
 pub async fn restore_windows_user_path(previous_raw: &str) -> Result<(), CoreError> {
+    let cleaned = previous_raw
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(";");
+
     let out = Command::new("reg")
-        .args(["add", HKCU_ENV_KEY, "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", previous_raw, "/f"])
+        .args(["add", HKCU_ENV_KEY, "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", &cleaned, "/f"])
         .output()
         .await?;
 

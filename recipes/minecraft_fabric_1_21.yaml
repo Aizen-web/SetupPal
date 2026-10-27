@@ -1,11 +1,12 @@
 id: minecraft_fabric_1_21
 name: Minecraft 1.21 with Fabric Performance Mods (Sodium, Lithium, FerriteCore)
 triggers:
-  - "minecraft 1.21"
+  - "minecraft 1.21 fabric"
   - "fabric performance"
   - "sodium"
-  - "modrinth"
-summary: "Sets up Eclipse Temurin Java 21 runtime and downloads hash-verified Sodium, Lithium, and FerriteCore mods for Minecraft 1.21 from Modrinth."
+  - "modrinth fabric"
+  - "minecraf fabric"
+summary: "Sets up Eclipse Temurin Java 21 runtime, Fabric installer, and downloads hash-verified Sodium, Lithium, and FerriteCore mods for Minecraft 1.21 from Modrinth."
 steps:
   - id: step-1
     description: "Install Eclipse Temurin JDK 21 via Winget"
@@ -17,6 +18,16 @@ steps:
         version: "21.0.4+7"
         source_adapter: winget
   - id: step-2
+    description: "Download Fabric installer JAR with SHA-256 verification"
+    step:
+      action: download_artifact
+      params:
+        adapter: official_vendor_url
+        id: fabric-installer
+        version: "1.0.1"
+        destination: "./fabric-installer.jar"
+        expected_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  - id: step-3
     description: "Download Sodium 0.6.0+mc1.21 from Modrinth"
     step:
       action: download_artifact
@@ -26,7 +37,7 @@ steps:
         version: "mc1.21-0.6.0"
         destination: "./mods/sodium-fabric-0.6.0+mc1.21.jar"
         expected_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  - id: step-3
+  - id: step-4
     description: "Download Lithium 0.13.0+mc1.21 from Modrinth"
     step:
       action: download_artifact
@@ -36,7 +47,7 @@ steps:
         version: "mc1.21-0.13.0"
         destination: "./mods/lithium-fabric-0.13.0+mc1.21.jar"
         expected_sha256: "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
-  - id: step-4
+  - id: step-5
     description: "Download FerriteCore 7.0.0-fabric from Modrinth"
     step:
       action: download_artifact
@@ -46,7 +57,7 @@ steps:
         version: "7.0.0-fabric"
         destination: "./mods/ferritecore-7.0.0-fabric.jar"
         expected_sha256: "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
-  - id: step-5
+  - id: step-6
     description: "Verify Java 21 runtime responds cleanly"
     step:
       action: run_verify_command
