@@ -1,6 +1,7 @@
 /**
  * SetupPal: Mascot Animations for Pixel (Ghost), Byte (Cat), and Mochi (Bunny)
- * Covers all 20 catalogue animations + pet-specific personality behaviors
+ * Covers all 20 catalogue animations + pet-specific personality behaviors.
+ * All animations are designed to loop smoothly and keep pets lively and charming!
  */
 
 :root {
@@ -13,6 +14,11 @@
 .pet-root * {
   transform-box: fill-box;
   transform-origin: center;
+}
+
+.pet-body-group {
+  will-change: transform;
+  transform-origin: center center;
 }
 
 /* ========================================================
@@ -128,6 +134,36 @@
   animation: ghostBlink var(--t-blink) ease-in-out infinite;
 }
 
+/* Active rapid blink state */
+@keyframes rapidBlink {
+  0%, 15%, 85%, 100% {
+    transform: scaleY(1);
+  }
+  25%, 35% {
+    transform: scaleY(0.1);
+  }
+  30% {
+    transform: scaleY(1);
+  }
+  40% {
+    transform: scaleY(1);
+  }
+  50%, 60% {
+    transform: scaleY(0.1);
+  }
+  55% {
+    transform: scaleY(1);
+  }
+}
+
+.pet-root[data-state="blink"] .ghost-eye {
+  animation: rapidBlink 2.2s ease-in-out infinite;
+}
+
+.pet-root[data-state="blink"] .pet-body-group {
+  animation: ghostFloat var(--t-float) ease-in-out infinite;
+}
+
 /* ========================================================
    3. SPEAKING (Mouth squashes with typing text)
    ======================================================== */
@@ -137,28 +173,58 @@
 
 .pet-root[data-state="speaking"] .mouth-open {
   opacity: 1 !important;
-  animation: mouthSpeak 0.18s ease-in-out infinite alternate;
+  animation: mouthSpeak 0.2s ease-in-out infinite alternate;
 }
 
 @keyframes mouthSpeak {
   0% {
-    transform: scaleY(0.6) scaleX(0.8);
+    transform: scaleY(0.6) scaleX(0.85);
   }
   100% {
-    transform: scaleY(1.4) scaleX(1.1);
+    transform: scaleY(1.4) scaleX(1.15);
   }
+}
+
+@keyframes speakingBob {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.pet-root[data-state="speaking"] .pet-body-group {
+  animation: speakingBob 0.65s ease-in-out infinite;
 }
 
 /* ========================================================
    4. THINKING (AI drafting plan)
    ======================================================== */
+@keyframes thinkingTiltFloat {
+  0%, 100% {
+    transform: translateY(0) rotate(5deg);
+  }
+  50% {
+    transform: translateY(-6px) rotate(2deg);
+  }
+}
+
 .pet-root[data-state="thinking"] .pet-body-group {
-  transform: rotate(4deg);
-  transition: transform 0.4s ease;
+  animation: thinkingTiltFloat 2.2s ease-in-out infinite;
+}
+
+@keyframes thinkingEyes {
+  0%, 100% {
+    transform: translate(2px, -2px);
+  }
+  50% {
+    transform: translate(3.5px, -3.5px);
+  }
 }
 
 .pet-root[data-state="thinking"] .ghost-eye {
-  transform: translate(2.5px, -2.5px);
+  animation: thinkingEyes 2.2s ease-in-out infinite alternate;
 }
 
 .pet-root[data-state="thinking"] .fx-item[id$="fx-dots"] {
@@ -167,23 +233,23 @@
 
 @keyframes pulseDot {
   0%, 100% {
-    transform: translateY(0) scale(1);
-    opacity: 0.4;
+    transform: translateY(0) scale(0.9);
+    opacity: 0.35;
   }
   50% {
-    transform: translateY(-5px) scale(1.2);
+    transform: translateY(-6px) scale(1.25);
     opacity: 1;
   }
 }
 
 .pet-root[data-state="thinking"] .dot-1 {
-  animation: pulseDot 1.2s 0.0s ease-in-out infinite;
+  animation: pulseDot 1.4s 0.0s ease-in-out infinite;
 }
 .pet-root[data-state="thinking"] .dot-2 {
-  animation: pulseDot 1.2s 0.2s ease-in-out infinite;
+  animation: pulseDot 1.4s 0.25s ease-in-out infinite;
 }
 .pet-root[data-state="thinking"] .dot-3 {
-  animation: pulseDot 1.2s 0.4s ease-in-out infinite;
+  animation: pulseDot 1.4s 0.5s ease-in-out infinite;
 }
 
 /* ========================================================
@@ -204,7 +270,8 @@
 }
 
 .pet-root[data-state="scanning"] .pet-body-group {
-  opacity: 0.85;
+  animation: ghostFloat 1.8s ease-in-out infinite;
+  opacity: 0.95;
 }
 
 .pet-root[data-state="scanning"] .ghost-eye {
@@ -219,13 +286,22 @@
 /* ========================================================
    6. WORKING (Task execution)
    ======================================================== */
+@keyframes workingFloat {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
 .pet-root[data-state="working"] .pet-body-group {
-  animation: ghostFloat 1.05s ease-in-out infinite;
+  animation: workingFloat 0.9s ease-in-out infinite;
 }
 
 .pet-root[data-state="working"] .acc-group[id$="acc-hardhat"] {
   opacity: 1 !important;
-  animation: hardhatBounce 1.05s ease-in-out infinite;
+  animation: hardhatBounce 0.9s ease-in-out infinite;
 }
 
 @keyframes hardhatBounce {
@@ -233,12 +309,13 @@
     transform: translateY(0) rotate(0deg);
   }
   50% {
-    transform: translateY(-2px) rotate(1.5deg);
+    transform: translateY(-3px) rotate(2deg);
   }
 }
 
 .pet-root[data-state="working"] .fx-item[id$="fx-sparkles"] {
-  opacity: 0.8 !important;
+  opacity: 0.9 !important;
+  animation: sparkleBurst 1.2s ease-out infinite;
 }
 
 /* Cat tippy-tappy typing on keyboard */
@@ -247,7 +324,7 @@
     transform: translateY(0);
   }
   50% {
-    transform: translateY(-4px);
+    transform: translateY(-5px);
   }
 }
 
@@ -262,24 +339,22 @@
    7 & 8. GLASSES-ON / GLASSES-OFF
    ======================================================== */
 .pet-root[data-mode="hacker"] .acc-glasses,
-.pet-root[data-glasses="true"] .acc-glasses {
+.pet-root[data-glasses="true"] .acc-glasses,
+.pet-root[data-state="glasses-on"] .acc-glasses {
   opacity: 1 !important;
-  animation: glassesSlideDown 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
 }
 
-@keyframes glassesSlideDown {
-  0% {
-    opacity: 0;
-    transform: translateY(-24px) scale(0.9);
-  }
-  70% {
-    opacity: 1;
-    transform: translateY(2px) scale(1.04);
-  }
-  100% {
-    opacity: 1;
+@keyframes cyberBob {
+  0%, 100% {
     transform: translateY(0) scale(1);
   }
+  50% {
+    transform: translateY(-6px) scale(1.02);
+  }
+}
+
+.pet-root[data-state="glasses-on"] .pet-body-group {
+  animation: cyberBob 1.6s ease-in-out infinite;
 }
 
 @keyframes glintSweep {
@@ -292,13 +367,22 @@
   }
   100% {
     transform: translateX(12px);
-    opacity: 0.8;
+    opacity: 0.85;
   }
 }
 
 .pet-root[data-mode="hacker"] .glasses-glint,
-.pet-root[data-glasses="true"] .glasses-glint {
+.pet-root[data-glasses="true"] .glasses-glint,
+.pet-root[data-state="glasses-on"] .glasses-glint {
   animation: glintSweep 1.5s ease-in-out infinite alternate;
+}
+
+.pet-root[data-state="glasses-off"] .acc-glasses {
+  opacity: 0 !important;
+}
+
+.pet-root[data-state="glasses-off"] .pet-body-group {
+  animation: ghostFloat var(--t-float) ease-in-out infinite;
 }
 
 /* ========================================================
@@ -312,43 +396,52 @@
   opacity: 1 !important;
 }
 
-.pet-root[data-state="green"] .pet-body-group {
-  animation: greenHop 0.9s cubic-bezier(0.175, 0.885, 0.32, 1.275) 1;
+@keyframes greenHopLoop {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+  }
+  38% {
+    transform: translateY(-16px) scale(1.06);
+  }
+  72% {
+    transform: translateY(2px) scale(0.97);
+  }
 }
 
-@keyframes greenHop {
-  0% { transform: translateY(0); }
-  40% { transform: translateY(-16px) scale(1.05); }
-  75% { transform: translateY(2px) scale(0.97); }
-  100% { transform: translateY(0) scale(1); }
+.pet-root[data-state="green"] .pet-body-group {
+  animation: greenHopLoop 1.1s cubic-bezier(0.175, 0.885, 0.32, 1.275) infinite;
 }
 
 .pet-root[data-state="green"] .fx-item[id$="fx-sparkles"] {
   opacity: 1 !important;
-  animation: sparkleBurst 0.9s ease-out 1 forwards;
+  animation: sparkleBurst 1.1s ease-out infinite;
 }
 
 @keyframes sparkleBurst {
-  0% {
-    transform: scale(0.4) rotate(0deg);
-    opacity: 0;
+  0%, 100% {
+    transform: scale(0.6) rotate(0deg);
+    opacity: 0.2;
   }
   50% {
-    opacity: 1;
     transform: scale(1.2) rotate(45deg);
-  }
-  100% {
-    transform: scale(1) rotate(90deg);
-    opacity: 0.8;
+    opacity: 1;
   }
 }
 
 /* ========================================================
    10. YELLOW (Held / Review Needed)
    ======================================================== */
+@keyframes yellowWorriedFloat {
+  0%, 100% {
+    transform: translateY(0) rotate(7deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(4deg);
+  }
+}
+
 .pet-root[data-state="yellow"] .pet-body-group {
-  transform: rotate(8deg);
-  transition: transform 0.4s ease;
+  animation: yellowWorriedFloat 1.8s ease-in-out infinite;
 }
 
 .pet-root[data-state="yellow"] .ghost-brows {
@@ -415,16 +508,16 @@
 
 .pet-root[data-state="red"] .fx-item[id$="fx-shield"] {
   opacity: 1 !important;
-  animation: shieldPop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  animation: shieldPulse 1.2s ease-in-out infinite alternate;
 }
 
-@keyframes shieldPop {
-  0% { transform: scale(0.3); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
+@keyframes shieldPulse {
+  0% { transform: scale(0.95); opacity: 0.85; }
+  100% { transform: scale(1.05); opacity: 1; }
 }
 
 /* ========================================================
-   12. CELEBRATE (All Tasks Done - Victory Spin)
+   12. CELEBRATE (All Tasks Done - Victory Spin Loop)
    ======================================================== */
 .pet-root[data-state="celebrate"] .eyes-normal {
   display: none !important;
@@ -434,15 +527,16 @@
   opacity: 1 !important;
 }
 
-.pet-root[data-state="celebrate"] .pet-body-group {
-  animation: celebrateSpin 1.4s cubic-bezier(0.34, 1.56, 0.64, 1) 1 forwards;
+@keyframes celebrateSpinLoop {
+  0% { transform: translateY(0) rotate(0deg) scale(1); }
+  30% { transform: translateY(-22px) rotate(180deg) scale(1.1); }
+  65% { transform: translateY(-6px) rotate(360deg) scale(1.05); }
+  85% { transform: translateY(2px) rotate(360deg) scale(0.98); }
+  100% { transform: translateY(0) rotate(360deg) scale(1); }
 }
 
-@keyframes celebrateSpin {
-  0% { transform: translateY(0) rotate(0deg) scale(1); }
-  30% { transform: translateY(-20px) rotate(180deg) scale(1.1); }
-  70% { transform: translateY(-8px) rotate(360deg) scale(1.05); }
-  100% { transform: translateY(0) rotate(360deg) scale(1); }
+.pet-root[data-state="celebrate"] .pet-body-group {
+  animation: celebrateSpinLoop 1.6s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
 }
 
 .pet-root[data-state="celebrate"] .fx-item[id$="fx-sparkles"] {
@@ -453,37 +547,47 @@
 /* ========================================================
    13. WAVE-HELLO (App Startup / New Chat)
    ======================================================== */
-.pet-root[data-state="wave-hello"] .pet-body-group {
-  animation: waveTilt 1.2s ease-in-out 1;
+@keyframes waveTiltLoop {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-4px) rotate(-8deg); }
+  75% { transform: translateY(-4px) rotate(8deg); }
 }
 
-@keyframes waveTilt {
+.pet-root[data-state="wave-hello"] .pet-body-group {
+  animation: waveTiltLoop 1.4s ease-in-out infinite;
+}
+
+@keyframes pawWaveLoop {
   0%, 100% { transform: rotate(0deg); }
-  25% { transform: rotate(-10deg); }
-  75% { transform: rotate(10deg); }
+  30% { transform: rotate(-28deg); }
+  60% { transform: rotate(18deg); }
+  80% { transform: rotate(-20deg); }
 }
 
 .pet-root[data-state="wave-hello"] .pet-arm-r {
-  animation: pawWave 1.2s ease-in-out 1;
+  animation: pawWaveLoop 1.0s ease-in-out infinite;
   transform-origin: 139px 116px;
-}
-
-@keyframes pawWave {
-  0%, 100% { transform: rotate(0deg); }
-  30%, 70% { transform: rotate(-25deg); }
-  50% { transform: rotate(15deg); }
 }
 
 /* ========================================================
    14. LISTENING (User typing in composer)
    ======================================================== */
+@keyframes listeningHover {
+  0%, 100% {
+    transform: translateY(4px) rotate(3deg) scale(1.02);
+  }
+  50% {
+    transform: translateY(0px) rotate(1.5deg) scale(1.04);
+  }
+}
+
 .pet-root[data-state="listening"] .pet-body-group {
-  transform: translateY(5px) rotate(3deg) scale(1.02);
-  transition: transform 0.25s ease;
+  animation: listeningHover 1.8s ease-in-out infinite;
 }
 
 .pet-root[data-state="listening"] .ghost-eye {
   transform: scale(1.15) translate(1px, 2px);
+  animation: none;
 }
 
 .pet-cat[data-state="listening"] .cat-ear-l,
@@ -519,7 +623,7 @@
 
 @keyframes downloadingHover {
   0% { transform: translateY(0) skewX(-2deg); }
-  100% { transform: translateY(-4px) skewX(2deg); }
+  100% { transform: translateY(-5px) skewX(2deg); }
 }
 
 /* ========================================================
@@ -554,12 +658,11 @@
 }
 
 .pet-root[data-state="error"] .pet-body-group {
-  transform: translateY(6px);
   animation: errorDroop 1.6s ease-in-out infinite alternate;
 }
 
 @keyframes errorDroop {
-  0% { transform: translateY(5px); }
+  0% { transform: translateY(4px); }
   100% { transform: translateY(8px); }
 }
 
@@ -603,14 +706,18 @@
 
 @keyframes signBob {
   0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-3px) rotate(2deg); }
+  50% { transform: translateY(-4px) rotate(2.5deg); }
+}
+
+.pet-root[data-state="held-sign"] .pet-body-group {
+  animation: ghostFloat 1.8s ease-in-out infinite;
 }
 
 /* ========================================================
    18. REWIND (Spinning back in time)
    ======================================================== */
 .pet-root[data-state="rewind"] .pet-body-group {
-  animation: rewindSpin 1.2s linear infinite;
+  animation: rewindSpin 1.4s linear infinite;
 }
 
 @keyframes rewindSpin {
@@ -664,36 +771,44 @@
 }
 
 /* ========================================================
-   20. PEEK-A-BOO (Empty states / playful entrance)
+   20. PEEK-A-BOO (Playful hide-and-seek loop)
    ======================================================== */
-.pet-root[data-state="peek-a-boo"] {
-  animation: peekSlide 1.2s cubic-bezier(0.175, 0.885, 0.32, 1.275) 1;
-}
-
-@keyframes peekSlide {
-  0% {
-    transform: translateX(-40px) translateY(20px) rotate(-15deg);
-    opacity: 0;
-  }
-  40% {
-    transform: translateX(-15px) translateY(5px) rotate(-8deg);
-    opacity: 1;
-  }
-  75% {
-    transform: translateX(4px) translateY(-2px) rotate(2deg);
-  }
-  100% {
+@keyframes peekLoop {
+  0%, 100% {
     transform: translateX(0) translateY(0) rotate(0deg);
     opacity: 1;
   }
+  35% {
+    transform: translateX(-35px) translateY(12px) rotate(-12deg);
+    opacity: 0.3;
+  }
+  45% {
+    transform: translateX(-40px) translateY(15px) rotate(-15deg);
+    opacity: 0;
+  }
+  55% {
+    transform: translateX(-20px) translateY(8px) rotate(-8deg);
+    opacity: 0.8;
+  }
+  75% {
+    transform: translateX(4px) translateY(-2px) rotate(2deg);
+    opacity: 1;
+  }
+}
+
+.pet-root[data-state="peek-a-boo"] .pet-body-group {
+  animation: peekLoop 2.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) infinite;
 }
 
 /* ========================================================
-   PREFERS REDUCED MOTION
+   ACCESSIBILITY: Gentle motion when reduced motion is preferred
+   (Preserves visual charm without jarring rapid movement)
    ======================================================== */
 @media (prefers-reduced-motion: reduce) {
-  .pet-root * {
-    animation: none !important;
-    transition: none !important;
+  :root {
+    --t-float: 4.8s;
+  }
+  .pet-body-group {
+    animation-duration: 4.8s !important;
   }
 }

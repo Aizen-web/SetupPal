@@ -764,8 +764,11 @@ async fn call_ai_chat(
         "content": STATIC_SYSTEM_PROMPT
     }));
 
-    // 2. Distilled, bounded conversation turns
-    for item in history {
+    // 2. Distilled, bounded conversation turns (preventing trailing duplicate user message)
+    for (idx, item) in history.iter().enumerate() {
+        if idx == history.len().saturating_sub(1) && item.role == "user" && item.content.trim() == user_prompt.trim() {
+            continue;
+        }
         messages.push(serde_json::json!({
             "role": item.role,
             "content": item.content
@@ -1090,7 +1093,11 @@ async fn chat_handler(
             }))
         }
         Some(ai_config) => {
-            let cache_key = format!("{}:{}:{}", ai_config.model, ai_config.endpoint, raw_msg.to_ascii_lowercase());
+            // Include lightweight history signature so multi-turn short answers (e.g. "1.21.1", "yes") don't collide
+            let hist_sig = req.history.as_deref().map(|h| {
+                h.iter().map(|i| format!("{}:{}", i.role, i.content.chars().take(20).collect::<String>())).collect::<Vec<_>>().join(";")
+            }).unwrap_or_default();
+            let cache_key = format!("{}:{}:{}:{}", ai_config.model, ai_config.endpoint, hist_sig, raw_msg.to_ascii_lowercase());
 
             // Check in-memory session deduplication cache (saves 100% tokens on repeat queries)
             {
@@ -1140,9 +1147,17 @@ async fn chat_handler(
 
             match call_ai_chat(&ai_config, raw_msg, &distilled_history, &compact_host_xml).await {
                 Ok(ai_reply) => {
-                    // Cache the successful response for repeat query deduplication
+                    // Cache the successful response with bounded capacity & TTL sweep (prevents memory leak)
                     {
                         let mut cache = state.ai_cache.write().await;
+                        // Prune entries older than 10 minutes
+                        cache.retain(|_, (_, time)| time.elapsed() < std::time::Duration::from_secs(600));
+                        // Enforce max capacity of 100 entries
+                        if cache.len() >= 100 {
+                            if let Some(oldest) = cache.iter().min_by_key(|(_, (_, t))| *t).map(|(k, _)| k.clone()) {
+                                cache.remove(&oldest);
+                            }
+                        }
                         cache.insert(cache_key, (ai_reply.clone(), std::time::Instant::now()));
                     }
 

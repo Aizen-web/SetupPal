@@ -25,7 +25,6 @@ function initApp() {
 
   // Create layout DOM structure
   appContainer.innerHTML = `
-    <div class="hacker-scanlines"></div>
     <div id="sidebar-container"></div>
     <div id="main-view-container" style="flex: 1; display: flex; height: 100vh; overflow: hidden;"></div>
     <div id="task-panel-container"></div>

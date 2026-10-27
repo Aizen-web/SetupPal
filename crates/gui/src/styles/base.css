@@ -57,29 +57,7 @@ html, body {
   font-family: var(--font-mono);
 }
 
-/* Scanline Overlay for Hacker Mode */
+/* Scanline Overlay disabled to eliminate lines across GUI elements */
 .hacker-scanlines {
-  display: none;
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 999;
-  background: linear-gradient(
-    rgba(18, 16, 16, 0) 50%, 
-    rgba(0, 0, 0, 0.25) 50%
-  ), linear-gradient(
-    90deg,
-    rgba(255, 0, 0, 0.03),
-    rgba(0, 255, 0, 0.01),
-    rgba(0, 0, 255, 0.03)
-  );
-  background-size: 100% 3px, 6px 100%;
-  opacity: 0.6;
-}
-
-[data-mode="hacker"] .hacker-scanlines {
-  display: block;
+  display: none !important;
 }

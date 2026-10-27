@@ -4,21 +4,22 @@
  */
 
 :root {
-  /* Chill Mode Palette (Warm Cream, Beige, Caramel) */
-  --bg-canvas: #F5EEDF;
-  --bg-surface: #FBF6EA;
-  --bg-sidebar: #EFE6D3;
-  --bg-code: #2E2622;
-  --text-code: #F5EEDF;
-  --border: #DCCDB0;
-  --border-subtle: rgba(220, 205, 176, 0.6);
-  --ink: #3B2F2A;
-  --ink-soft: #6F5F53;
-  --accent: #B5763F;
-  --accent-strong: #94592B;
-  --accent-soft: #F0DDC2;
-  --btn-primary: #3B2F2A;
-  --btn-primary-text: #FBF6EA;
+  /* Chill Mode Palette (Warm Cream, Beige, Soft Brown matching screenshot) */
+  --bg-canvas: #F7F2EB;
+  --bg-surface: #FAF5EE;
+  --bg-sidebar: #F7F1E8;
+  --bg-taskbar: #F7F1E8;
+  --bg-code: #3D332D;
+  --text-code: #FAF5EE;
+  --border: #E5D9C8;
+  --border-subtle: #EDE3D4;
+  --ink: #382C26;
+  --ink-soft: #75665B;
+  --accent: #8C7764;
+  --accent-strong: #443933;
+  --accent-soft: #EAE0D1;
+  --btn-primary: #443933;
+  --btn-primary-text: #FAF5EE;
   --honey: #E9B949;
   --peach: #F4C2B0;
 
@@ -72,6 +73,7 @@
   --bg-canvas: #06130A;
   --bg-surface: #0B2A12;
   --bg-sidebar: #07170C;
+  --bg-taskbar: #07170C;
   --bg-code: #07170C;
   --text-code: #5CFF3A;
   --border: #1E6B12;

@@ -77,7 +77,7 @@ class Store {
       // Mascot & Pets
       activePet: 'ghost', // 'ghost' | 'cat' | 'bunny'
       mascotState: 'idle',
-      mascotSpeech: "Boo! I'm Pixel, your zero-trust guardian ghost. Ask me anything in the chat window, and I'll help you set it up safely!",
+      mascotSpeech: "Hey there! I'm Setup Pal.\nI'll help you set up your development\ntools and environments safely!",
       mascotSpeechSpeed: 25, // ms per char
       isSpeaking: false,
       
@@ -227,6 +227,11 @@ class Store {
       this.state = { ...this.state, ...updater };
     }
 
+    // Memory and storage guard: cap terminal logs to sliding window of 100 items
+    if (this.state.terminalLogs && this.state.terminalLogs.length > 100) {
+      this.state.terminalLogs = this.state.terminalLogs.slice(-100);
+    }
+
     // Auto-persist active conversation if messages, plan, or logs changed
     if (this.state.activeConversationId && Array.isArray(this.state.conversations)) {
       let changed = false;
@@ -238,7 +243,7 @@ class Store {
               ...c,
               chatMessages: this.state.chatMessages,
               activePlan: this.state.activePlan,
-              terminalLogs: this.state.terminalLogs,
+              terminalLogs: (this.state.terminalLogs || []).slice(-100),
               updatedAt: Date.now()
             };
           }
@@ -448,6 +453,10 @@ class Store {
     }
     const mascotSvg = document.getElementById('hero-ghost-root') || document.getElementById('ghost-root');
     if (mascotSvg) {
+      if (mascotSvg.dataset.state === state) {
+        mascotSvg.dataset.state = '';
+        void mascotSvg.offsetWidth;
+      }
       mascotSvg.dataset.state = state;
     }
   }

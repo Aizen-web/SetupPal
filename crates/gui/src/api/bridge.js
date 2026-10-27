@@ -290,14 +290,17 @@ export class BackendBridge {
       ...s,
       chatMessages: [...s.chatMessages, userMsg],
       terminalLogs: [
-        ...s.terminalLogs,
+        ...(s.terminalLogs || []).slice(-100),
         { id: Date.now() + Math.random(), text: `> user inquiry: "${goal}"`, type: 'info' }
       ]
     }));
 
     try {
       // Build token-efficient history for conversational AI (windowed & distilled)
-      const history = (store.getState().chatMessages || []).slice(-3).map(m => {
+      // Exclude the current message just pushed to store so it is not duplicated in prompt
+      const allMsgs = store.getState().chatMessages || [];
+      const previousTurns = allMsgs.length > 1 ? allMsgs.slice(0, -1) : [];
+      const history = previousTurns.slice(-3).map(m => {
         let text = (m.text || '').trim();
         const cutIdx = text.indexOf('\n\n❓ **Questions');
         if (cutIdx > 0) text = text.slice(0, cutIdx).trim();

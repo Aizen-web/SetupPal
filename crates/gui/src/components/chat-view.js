@@ -1,13 +1,16 @@
 /**
  * SetupPal: Chat & Execution Workspace View
+ * Matching the exact artwork, layout, and copy of the screenshot,
+ * with previous animated pets (Pixel the Ghost, Byte the Cat, Mochi the Bunny) restored!
  */
 
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { simulation } from '../state/simulation.js';
 import { bridge } from '../api/bridge.js';
-import { createMascotSvg } from '../mascot/pets.js';
 import { petVoiceEngine } from '../mascot/voicelines.js';
+import { createMascotSvg } from '../mascot/pets.js';
+import { formatChatMessage } from './chat-formatter.js';
 
 export function renderChatView(container) {
   const state = store.getState();
@@ -22,54 +25,73 @@ export function renderChatView(container) {
   const selStart = prevInput ? prevInput.selectionStart : 0;
   const selEnd = prevInput ? prevInput.selectionEnd : 0;
 
+  // Python Logo SVG
+  const pythonLogoSvg = `
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M11.9 2C8.6 2 8.7 3.4 8.7 3.4L8.7 4.9L12.1 4.9L12.1 5.4L5.4 5.4C5.4 5.4 2 5 2 9.5C2 14 5 13.8 5 13.8L6.5 13.8L6.5 11.8C6.5 9.4 8.6 9.5 8.6 9.5L12 9.5C14.4 9.5 14.4 7.6 14.4 7.6L14.4 3.9C14.4 3.9 14.8 2 11.9 2ZM10.2 3.3C10.6 3.3 11 3.6 11 4.1C11 4.5 10.6 4.9 10.2 4.9C9.7 4.9 9.3 4.5 9.3 4.1C9.3 3.6 9.7 3.3 10.2 3.3Z" fill="#387EB8"/>
+      <path d="M12.1 22C15.4 22 15.3 20.6 15.3 20.6L15.3 19.1L11.9 19.1L11.9 18.6L18.6 18.6C18.6 18.6 22 19 22 14.5C22 10 19 10.2 19 10.2L17.5 10.2L17.5 12.2C17.5 14.6 15.4 14.5 15.4 14.5L12 14.5C9.6 14.5 9.6 16.4 9.6 16.4L9.6 20.1C9.6 20.1 9.2 22 12.1 22ZM13.8 20.7C13.4 20.7 13 20.4 13 19.9C13 19.5 13.4 19.1 13.8 19.1C14.3 19.1 14.7 19.5 14.7 19.9C14.7 20.4 14.3 20.7 13.8 20.7Z" fill="#FFE052"/>
+    </svg>
+  `;
+
+  // Leaf SVG
+  const leafSvg = `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"></path>
+      <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"></path>
+    </svg>
+  `;
+
+  // Terminal >_ SVG
+  const termPromptSvg = `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="4 17 10 11 4 5"></polyline>
+      <line x1="12" y1="19" x2="20" y2="19"></line>
+    </svg>
+  `;
+
   container.innerHTML = `
     <div class="main-content">
-      <!-- Top Navigation Bar -->
+      <!-- Top Navigation Bar matching screenshot -->
       <div class="top-nav-bar">
-        <div class="hacker-tab-strip">
-          <button class="hacker-tab-btn ${state.terminalTab === 'terminal' ? 'active' : ''}" id="tab-terminal">Terminal</button>
-          <button class="hacker-tab-btn ${state.terminalTab === 'chat' ? 'active' : ''}" id="tab-chat">Chat</button>
-        </div>
-
-        <!-- Pet Selector Pill -->
-        <div class="pet-selector-group" style="display: flex; align-items: center; gap: 4px; background-color: var(--bg-surface); padding: 3px; border-radius: var(--radius-pill); border: 1px solid var(--border);">
-          <button class="mode-btn ${activePet === 'ghost' ? 'active' : ''}" data-pet="ghost" title="Pixel the Ghost">👻 Pixel</button>
-          <button class="mode-btn ${activePet === 'cat' ? 'active' : ''}" data-pet="cat" title="Byte the Cyber Cat">🐱 Byte</button>
-          <button class="mode-btn ${activePet === 'bunny' ? 'active' : ''}" data-pet="bunny" title="Mochi the Fluffy Bunny">🐰 Mochi</button>
+        <!-- Mascot Selector Group: [Pixel] [Byte] [Mochi] -->
+        <div class="pet-selector-group">
+          <button class="pet-pill-btn ${activePet === 'ghost' ? 'active' : ''}" data-pet="ghost" title="Pixel the Ghost">
+            <span>👻</span>
+            <span>Pixel</span>
+          </button>
+          <button class="pet-pill-btn ${activePet === 'cat' ? 'active' : ''}" data-pet="cat" title="Byte the Cyber Cat">
+            <span>🐱</span>
+            <span>Byte</span>
+          </button>
+          <button class="pet-pill-btn ${activePet === 'bunny' ? 'active' : ''}" data-pet="bunny" title="Mochi the Fluffy Bunny">
+            <span>🐰</span>
+            <span>Mochi</span>
+          </button>
         </div>
 
         <div style="flex: 1;"></div>
 
-        <!-- Mode Toggle Pill -->
+        <!-- Mode Toggle Group: [Chill] [Hacker] -->
         <div class="mode-toggle-group">
-          <button id="toggle-chill" class="mode-btn ${!isHacker ? 'active' : ''}">Chill</button>
-          <button id="toggle-hacker" class="mode-btn ${isHacker ? 'active' : ''}">Hacker</button>
+          <button id="toggle-chill" class="mode-btn ${!isHacker ? 'active' : ''}">
+            ${leafSvg}
+            <span>Chill</span>
+          </button>
+          <button id="toggle-hacker" class="mode-btn ${isHacker ? 'active' : ''}">
+            ${termPromptSvg}
+            <span>Hacker</span>
+          </button>
         </div>
       </div>
 
-      <!-- Conversation Tab Strip -->
-      <div class="conv-tabs-strip" style="display: flex; align-items: center; gap: 6px; padding: 6px 18px; background: var(--bg-surface); border-bottom: 1px solid var(--border); overflow-x: auto;">
-        ${(state.conversations || []).map(c => `
-          <div class="conv-tab-pill ${c.id === state.activeConversationId ? 'active' : ''}" data-conv-id="${c.id}" style="display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: var(--radius-pill); font-size: 12px; font-weight: 500; cursor: pointer; background: ${c.id === state.activeConversationId ? 'var(--btn-primary)' : 'var(--bg-canvas)'}; color: ${c.id === state.activeConversationId ? 'var(--btn-primary-text)' : 'var(--ink-soft)'}; border: 1px solid ${c.id === state.activeConversationId ? 'transparent' : 'var(--border)'}; transition: all 0.18s ease; white-space: nowrap; box-shadow: ${c.id === state.activeConversationId ? '0 1px 4px rgba(0,0,0,0.08)' : 'none'};">
-            <span>${c.icon || '💬'}</span>
-            <span style="max-width: 130px; overflow: hidden; text-overflow: ellipsis;">${c.title}</span>
-            ${(state.conversations || []).length > 1 ? `
-              <span class="conv-tab-close" data-conv-id="${c.id}" title="Close setup" style="font-size: 13px; line-height: 1; padding: 1px 4px; border-radius: 4px; opacity: 0.65; cursor: pointer; transition: all 0.15s ease;" onmouseover="this.style.opacity='1'; this.style.backgroundColor='rgba(0,0,0,0.15)'" onmouseout="this.style.opacity='0.65'; this.style.backgroundColor='transparent'">×</span>
-            ` : ''}
-          </div>
-        `).join('')}
-        <button id="btn-tab-new-setup" title="New Setup Tab" style="display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: var(--radius-pill); background: var(--bg-canvas); border: 1px dashed var(--border); color: var(--ink); cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.15s ease;" onmouseover="this.style.borderColor='var(--accent)'; this.style.transform='scale(1.06)'" onmouseout="this.style.borderColor='var(--border)'; this.style.transform='scale(1)'">
-          +
-        </button>
-      </div>
-
-      <!-- Hero Mascot Section -->
+      <!-- Hero Mascot & Speech Bubble Section with previous animated pet restored -->
       <div class="mascot-hero-section">
-        <div id="hero-mascot" class="mascot-container" title="Click to interact!">
-          ${createMascotSvg(activePet, 130, 'hero')}
+        <div id="hero-mascot" class="mascot-container" title="Click to interact with ${activePet === 'ghost' ? 'Pixel' : activePet === 'cat' ? 'Byte' : 'Mochi'}!">
+          ${createMascotSvg(activePet, 135, 'hero')}
         </div>
         <div class="speech-bubble">
-          <span id="speech-bubble-text">${state.mascotSpeech}</span>
+          <div class="speech-bubble-tail"></div>
+          <div id="speech-bubble-text" class="speech-bubble-inner-text">${state.mascotSpeech || "Hey there! I'm Setup Pal.\nI'll help you set up your development\ntools and environments safely!"}</div>
         </div>
       </div>
 
@@ -99,83 +121,119 @@ export function renderChatView(container) {
         ` : `
           ${(state.chatMessages && state.chatMessages.length > 0) ? `
             <!-- Chat Thread Stream -->
-            <div class="chat-thread-stream" style="display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px;">
-              ${state.chatMessages.map(m => `
-                <div class="chat-bubble ${m.sender === 'user' ? 'user-bubble' : 'bot-bubble'}" style="align-self: ${m.sender === 'user' ? 'flex-end' : 'flex-start'}; max-width: 88%; padding: 13px 18px; border-radius: 12px; background: ${m.sender === 'user' ? 'var(--btn-primary)' : 'var(--bg-surface)'}; color: ${m.sender === 'user' ? 'var(--btn-primary-text)' : 'var(--ink)'}; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
-                  <div style="font-size: 13.5px; line-height: 1.6; white-space: pre-wrap;">${m.text}</div>
-                  ${m.options && m.options.length > 0 ? `
-                    <div class="chat-options-group" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border-subtle);">
-                      ${m.options.map(opt => `
-                        <button class="chat-option-pill" data-choice="${opt.value}" style="background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 12px; border-radius: var(--radius-pill); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 4px;" onmouseover="this.style.borderColor='var(--accent)'; this.style.transform='translateY(-1px)'" onmouseout="this.style.borderColor='var(--border)'; this.style.transform='none'">
-                          ${opt.label}
-                        </button>
-                      `).join('')}
+            <div class="chat-thread-stream" id="chat-thread-stream">
+              ${state.chatMessages.map(m => {
+                const isUser = m.sender === 'user';
+                const avatarEmoji = isUser ? '👤' : (activePet === 'bunny' ? '🐰' : activePet === 'cat' ? '🐱' : '👻');
+                const authorName = isUser ? 'You' : (activePet === 'bunny' ? 'Mochi' : activePet === 'cat' ? 'Byte' : 'Pixel');
+                const roleBadge = isUser ? 'Operator' : 'Zero-Trust Assistant';
+
+                return `
+                  <div class="chat-bubble ${isUser ? 'user-bubble' : 'bot-bubble'}" data-msg-id="${m.id}">
+                    <div class="chat-bubble-header">
+                      <div class="chat-avatar-wrap">
+                        <span class="chat-avatar-emoji">${avatarEmoji}</span>
+                      </div>
+                      <div class="chat-author-info">
+                        <span class="chat-author-name">${authorName}</span>
+                        <span class="chat-role-badge">${roleBadge}</span>
+                      </div>
+                      <div class="chat-timestamp">${m.time}</div>
                     </div>
-                  ` : ''}
-                  <div style="font-size: 10px; margin-top: 6px; text-align: right; opacity: 0.65;">${m.time}</div>
-                </div>
-              `).join('')}
+
+                    <div class="chat-bubble-body">
+                      ${isUser ? `<p class="user-text">${formatChatMessage(m.text)}</p>` : formatChatMessage(m.text)}
+                    </div>
+
+                    ${(!isUser && m.options && m.options.length > 0) ? `
+                      <div class="chat-options-container">
+                        <div class="chat-options-header">
+                          <span class="chat-options-icon">⚡</span>
+                          <span>Quick Actions & Verified Recipes</span>
+                        </div>
+                        <div class="chat-options-group">
+                          ${m.options.map(opt => {
+                            const isSettings = opt.value === 'open_settings';
+                            return `
+                              <button class="chat-option-pill ${isSettings ? 'pill-settings' : ''}" data-choice="${opt.value}">
+                                <span class="option-label">${opt.label}</span>
+                                <span class="option-arrow">&rarr;</span>
+                              </button>
+                            `;
+                          }).join('')}
+                        </div>
+                      </div>
+                    ` : ''}
+                  </div>
+                `;
+              }).join('')}
             </div>
           ` : `
-            <!-- Modern Empty State: Ask anything in the chat window -->
-            <div class="empty-chat-container" style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 40px 24px 32px; margin: 12px 0 24px; background: radial-gradient(circle at 50% 20%, rgba(139, 92, 246, 0.08) 0%, rgba(59, 130, 246, 0.03) 60%, transparent 100%); border: 1px dashed var(--border); border-radius: 20px; transition: all 0.3s ease;">
-              
-              <div style="display: inline-flex; align-items: center; gap: 8px; background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.25); color: var(--accent); padding: 5px 14px; border-radius: var(--radius-pill); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 16px;">
-                <span>✨ Zero-Trust Assistant Ready</span>
+            <!-- Main Ask Card matching screenshot -->
+            <div class="ask-card">
+              <div class="ask-card-header">
+                <div class="terminal-square-icon">>_</div>
+                <h2 class="ask-card-title">Ask anything in the chat window</h2>
               </div>
 
-              <h2 style="font-size: 28px; font-weight: 700; letter-spacing: -0.03em; color: var(--ink); margin: 0 0 10px 0;">
-                Ask anything in the chat window
-              </h2>
-
-              <p style="font-size: 14.5px; color: var(--ink-soft); max-width: 540px; line-height: 1.6; margin: 0 0 26px 0;">
-                Tell me what you'd like to set up. I'll inspect your PC, ask any clarifying questions, and formulate a verified zero-trust plan.
+              <p class="ask-card-desc">
+                Tell me what you'd like to set up. I'll inspect your system, ask clarifying questions, and formulate a verified setup plan.
               </p>
 
-              <!-- Quick Starter Cards -->
-              <div class="empty-prompt-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; width: 100%; max-width: 820px; margin-bottom: 24px;">
-                <div class="empty-prompt-card" data-prompt="I want to download minecraft mods like optifine." style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; text-align: left; cursor: pointer; transition: all 0.22s ease; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
-                  <div style="font-weight: 600; font-size: 14px; color: var(--ink); margin-bottom: 5px; display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 16px;">🎮</span>
-                    <span>Minecraft & OptiFine</span>
+              <!-- 3 Starter Cards in 3-column row -->
+              <div class="starter-cards-grid">
+                <!-- Card 1: Minecraft & OptiFine -->
+                <div class="starter-card" data-prompt="I want to download minecraft mods like optifine.">
+                  <div class="starter-card-top">
+                    <div class="terminal-square-icon-sm">>_</div>
+                    <div class="starter-card-title">Minecraft & OptiFine</div>
+                    <div class="starter-card-arrow">&rarr;</div>
                   </div>
-                  <div style="font-size: 12px; color: var(--ink-soft); line-height: 1.45;">
-                    Inspects Java runtime, checks launcher folders, and crafts safe mod steps.
-                  </div>
-                </div>
-
-                <div class="empty-prompt-card" data-prompt="setup Python AI data science venv" style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; text-align: left; cursor: pointer; transition: all 0.22s ease; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
-                  <div style="font-weight: 600; font-size: 14px; color: var(--ink); margin-bottom: 5px; display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 16px;">🐍</span>
-                    <span>Python AI & Data Science</span>
-                  </div>
-                  <div style="font-size: 12px; color: var(--ink-soft); line-height: 1.45;">
-                    Isolated virtualenv, PyTorch/CUDA checks, and clean pinned hashes.
+                  <div class="starter-card-body">
+                    Install and configure Minecraft with OptiFine, mods, and performance tweaks.
                   </div>
                 </div>
 
-                <div class="empty-prompt-card" data-prompt="set me up for C++20 dev" style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; text-align: left; cursor: pointer; transition: all 0.22s ease; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
-                  <div style="font-weight: 600; font-size: 14px; color: var(--ink); margin-bottom: 5px; display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 16px;">⚡</span>
-                    <span>C++20 Dev Toolchain</span>
+                <!-- Card 2: Python AI & Data Science -->
+                <div class="starter-card" data-prompt="setup Python AI data science venv">
+                  <div class="starter-card-top">
+                    <div class="starter-card-icon-wrap">${pythonLogoSvg}</div>
+                    <div class="starter-card-title">Python AI &<br/>Data Science</div>
+                    <div class="starter-card-arrow">&rarr;</div>
                   </div>
-                  <div style="font-size: 12px; color: var(--ink-soft); line-height: 1.45;">
-                    Compiler, CMake, and reproducible HKCU user environment paths.
+                  <div class="starter-card-body">
+                    Set up Python, virtualenvs, PyTorch, Jupyter, and common data science tools.
+                  </div>
+                </div>
+
+                <!-- Card 3: C++20 Dev Toolchain -->
+                <div class="starter-card" data-prompt="set me up for C++20 dev">
+                  <div class="starter-card-top">
+                    <div class="terminal-square-icon-sm">>_</div>
+                    <div class="starter-card-title">C++20 Dev Toolchain</div>
+                    <div class="starter-card-arrow">&rarr;</div>
+                  </div>
+                  <div class="starter-card-body">
+                    Install compilers, CMake, and a modern C++ development environment.
                   </div>
                 </div>
               </div>
 
-              <!-- Security Indicator -->
-              <div style="display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-soft); background: var(--bg-canvas); padding: 7px 16px; border-radius: var(--radius-pill); border: 1px solid var(--border);">
-                <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #10B981; box-shadow: 0 0 8px #10B981;"></span>
-                <span>Dry-Run Simulation Active · No random downloads will ever alter your machine</span>
+              <!-- Bottom Indicator: Dry-Run Simulation Active -->
+              <div class="dry-run-pill-row">
+                <div class="dry-run-pill">
+                  <span class="dry-run-green-dot"></span>
+                  <span>Dry-Run Simulation Active</span>
+                  <span class="dry-run-dot-sep">•</span>
+                  <span>No random downloads will ever alter your machine</span>
+                </div>
               </div>
             </div>
           `}
 
-          <!-- Chill Plan Card -->
+          <!-- Chill Plan Card (when plan exists) -->
           ${(plan && plan.tasks && plan.tasks.length > 0) ? `
-          <div class="plan-card" style="margin-top: 8px;">
+          <div class="plan-card" style="margin-top: 16px;">
             <div class="plan-title">${plan.title}</div>
             <div class="plan-subtitle">${plan.subtitle}</div>
 
@@ -220,31 +278,27 @@ export function renderChatView(container) {
         `}
       </div>
 
-      <!-- Bottom Bar -->
+      <!-- Bottom Chat Composer Area matching screenshot -->
       <div class="bottom-bar">
-        <!-- Chill Composer -->
         <div class="composer-box">
-          <span style="color: var(--ink-soft); font-size: 15px; cursor: pointer;" title="Attach file">📎</span>
-          <span style="color: var(--ink-soft); font-size: 13px; font-family: var(--font-mono);">/</span>
+          <span class="composer-paperclip" title="Attach file">📎</span>
+          <span class="composer-slash">/</span>
           <input id="chat-input" class="composer-input" type="text" placeholder="Tell me what to set up..." />
-          <button id="btn-chat-send" class="btn-send">Send</button>
+          <button id="btn-chat-send" class="btn-send">
+            <span>Send</span>
+            <span>&rarr;</span>
+          </button>
         </div>
 
-        <!-- Hacker Status Bar -->
-        <div class="hacker-status-bar">
-          <div style="display: flex; align-items: center; gap: 10px;">
-            <span class="dot dot-green" style="animation: pulseDot 1s infinite alternate;"></span>
-            <span>Working... press Esc to stop</span>
-          </div>
-          <button id="btn-hacker-stop" class="btn-stop">Stop</button>
-        </div>
-
-        <!-- Suggestion Chips -->
+        <!-- Suggestion Chips matching screenshot -->
         <div class="chips-row">
-          <div class="suggestion-chip" data-chip="minecraft">Minecraft + mods</div>
-          <div class="suggestion-chip" data-chip="cpp">C++ toolchain</div>
-          <div class="suggestion-chip" data-chip="python">Python data science</div>
-          <div class="suggestion-chip" data-chip="attack" style="border-color: var(--v-red); color: var(--v-red);">⚠️ Simulate Attack Radar</div>
+          <button class="suggestion-chip" data-chip="minecraft">Minecraft + mods</button>
+          <button class="suggestion-chip" data-chip="cpp">C++ toolchain</button>
+          <button class="suggestion-chip" data-chip="python">Python data science</button>
+          <button class="suggestion-chip chip-attack" data-chip="attack">
+            <span class="chip-warn-icon">⚠️</span>
+            <span>Simulate Attack Radar</span>
+          </button>
         </div>
       </div>
     </div>
@@ -255,32 +309,6 @@ export function renderChatView(container) {
   if (mascotSvg) {
     mascotSvg.dataset.state = state.mascotState;
     mascotSvg.dataset.mode = state.mode;
-  }
-
-  // Conversation Tab Pills
-  container.querySelectorAll('.conv-tab-pill').forEach(pill => {
-    pill.onclick = (e) => {
-      if (e.target.classList.contains('conv-tab-close')) return;
-      const convId = pill.getAttribute('data-conv-id');
-      store.switchConversation(convId);
-    };
-  });
-
-  // Conversation Tab Close Buttons
-  container.querySelectorAll('.conv-tab-close').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const convId = btn.getAttribute('data-conv-id');
-      store.closeConversation(convId);
-    };
-  });
-
-  // New Tab Button
-  const btnTabNewSetup = container.querySelector('#btn-tab-new-setup');
-  if (btnTabNewSetup) {
-    btnTabNewSetup.onclick = () => {
-      store.createConversation();
-    };
   }
 
   // Pet Selector Buttons
@@ -302,33 +330,20 @@ export function renderChatView(container) {
     petVoiceEngine.trigger('mode_toggle', { mode: 'hacker' });
   };
 
-  const tabTerminal = container.querySelector('#tab-terminal');
-  if (tabTerminal) {
-    tabTerminal.onclick = () => {
-      sounds.play('ui.click');
-      store.setState({ terminalTab: 'terminal' });
+  // Mascot Click -> Poke event triggers pet voiceline and poke animation
+  const heroMascot = container.querySelector('#hero-mascot');
+  if (heroMascot) {
+    heroMascot.onclick = () => {
+      petVoiceEngine.trigger('poke');
+      setTimeout(() => {
+        if (store.getState().mascotState === 'celebrate') {
+          store.setMascotState('idle');
+        }
+      }, 2400);
     };
   }
 
-  const tabChat = container.querySelector('#tab-chat');
-  if (tabChat) {
-    tabChat.onclick = () => {
-      sounds.play('ui.click');
-      store.setState({ terminalTab: 'chat' });
-    };
-  }
-
-  // Mascot Click -> Poke event triggers pet voiceline
-  container.querySelector('#hero-mascot').onclick = () => {
-    petVoiceEngine.trigger('poke');
-    setTimeout(() => {
-      if (store.getState().mascotState === 'celebrate') {
-        store.setMascotState('idle');
-      }
-    }, 2400);
-  };
-
-  // Plan Approval -> triggers Hacker Mode & real backend execution!
+  // Plan Approval -> triggers execution
   const btnApprove = container.querySelector('#btn-approve-plan');
   if (btnApprove) {
     btnApprove.onclick = () => {
@@ -357,15 +372,7 @@ export function renderChatView(container) {
     };
   }
 
-  // Stop button
-  const btnStop = container.querySelector('#btn-hacker-stop');
-  if (btnStop) {
-    btnStop.onclick = () => {
-      simulation.stopRun();
-    };
-  }
-
-  // Composer Send & Typing Animation (#14 LISTENING)
+  // Composer Send & Input handling with listening animation
   const chatInput = container.querySelector('#chat-input');
   const btnSend = container.querySelector('#btn-chat-send');
 
@@ -383,7 +390,6 @@ export function renderChatView(container) {
 
     let typingTimer = null;
     chatInput.oninput = () => {
-      // Directly animate mascot to listening state without tearing down DOM or losing focus
       const mascotSvg = container.querySelector('#hero-ghost-root');
       if (mascotSvg) {
         mascotSvg.dataset.state = 'listening';
@@ -423,18 +429,8 @@ export function renderChatView(container) {
     };
   }
 
-  // Empty Prompt Cards (Interactive cards in the empty chat state)
-  container.querySelectorAll('.empty-prompt-card').forEach(card => {
-    card.onmouseover = () => {
-      card.style.borderColor = 'var(--accent)';
-      card.style.transform = 'translateY(-2px)';
-      card.style.boxShadow = '0 6px 16px rgba(0,0,0,0.06)';
-    };
-    card.onmouseout = () => {
-      card.style.borderColor = 'var(--border)';
-      card.style.transform = 'none';
-      card.style.boxShadow = '0 2px 8px rgba(0,0,0,0.03)';
-    };
+  // Starter Cards (Interactive prompt cards)
+  container.querySelectorAll('.starter-card').forEach(card => {
     card.onclick = () => {
       const prompt = card.getAttribute('data-prompt');
       petVoiceEngine.trigger('prompt_selected', { prompt });
@@ -477,4 +473,13 @@ export function renderChatView(container) {
       }
     };
   });
+
+  // Auto-scroll chat area smoothly to latest message
+  const scrollArea = container.querySelector('.workspace-scroll-area');
+  const chatStream = container.querySelector('#chat-thread-stream');
+  if (scrollArea && chatStream) {
+    requestAnimationFrame(() => {
+      scrollArea.scrollTop = scrollArea.scrollHeight;
+    });
+  }
 }

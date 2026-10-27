@@ -95,7 +95,7 @@ export class GhostPersonality extends PetPersonality {
   }
 
   getWelcome() {
-    return "Boo! I'm Pixel, your zero-trust guardian ghost. Ask me anything in the chat window, and I'll help you set it up safely!";
+    return "Hey there! I'm Setup Pal. I'll help you set up your development tools and environments safely!";
   }
 
   getTyping() {
