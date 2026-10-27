@@ -6,6 +6,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/ghost.css';
 import './styles/components.css';
+import './styles/chat.css';
 
 import { store } from './state/store.js';
 import { simulation } from './state/simulation.js';

@@ -10,13 +10,56 @@ import { simulation } from '../state/simulation.js';
 import { bridge } from '../api/bridge.js';
 import { petVoiceEngine } from '../mascot/voicelines.js';
 import { createMascotSvg } from '../mascot/pets.js';
-import { formatChatMessage } from './chat-formatter.js';
+import { renderMessage } from './chat-message.js';
+
+/**
+ * UI state that must survive full re-renders (the view rebuilds its DOM on every store update):
+ * radio selections, collapsed sections, and which messages have already animated in.
+ */
+const chatUi = {
+  selections: {},
+  collapsed: new Set(),
+  seen: new Set(),
+};
+
+function updateChoiceSummary(container, formId) {
+  const form = container.querySelector(`.chat-choice-form[data-form="${formId}"]`);
+  const summary = container.querySelector(`[data-summary="${formId}"]`);
+  if (!form || !summary) return;
+  const values = [...form.querySelectorAll('.choice-input:checked')].map(i => i.value);
+  summary.textContent = values.join(' · ');
+}
+
+function flashCopied(btn) {
+  btn.classList.add('copied');
+  const label = btn.querySelector('span');
+  const original = label ? label.textContent : '';
+  if (label) label.textContent = 'Copied';
+  setTimeout(() => {
+    btn.classList.remove('copied');
+    if (label) label.textContent = original;
+  }, 1500);
+}
 
 export function renderChatView(container) {
   const state = store.getState();
   const plan = state.activePlan;
   const isHacker = state.mode === 'hacker';
   const activePet = state.activePet || 'ghost';
+
+  // Preserve scroll position (the DOM is rebuilt below)
+  const prevScrollEl = container.querySelector('.workspace-scroll-area');
+  const prevScrollTop = prevScrollEl ? prevScrollEl.scrollTop : 0;
+  const wasAtBottom = prevScrollEl
+    ? prevScrollEl.scrollHeight - prevScrollEl.scrollTop - prevScrollEl.clientHeight < 80
+    : true;
+
+  // Which messages are new this render (only those animate in / drive scrolling)
+  const messages = state.chatMessages || [];
+  const lastMsg = messages[messages.length - 1];
+  const firstRender = chatUi.seen.size === 0;
+  const newMsgIds = messages.filter(m => !chatUi.seen.has(m.id)).map(m => m.id);
+  messages.forEach(m => chatUi.seen.add(m.id));
 
   // Preserve chat input state if user was typing
   const prevInput = container.querySelector('#chat-input');
@@ -122,51 +165,12 @@ export function renderChatView(container) {
           ${(state.chatMessages && state.chatMessages.length > 0) ? `
             <!-- Chat Thread Stream -->
             <div class="chat-thread-stream" id="chat-thread-stream">
-              ${state.chatMessages.map(m => {
-                const isUser = m.sender === 'user';
-                const avatarEmoji = isUser ? '👤' : (activePet === 'bunny' ? '🐰' : activePet === 'cat' ? '🐱' : '👻');
-                const authorName = isUser ? 'You' : (activePet === 'bunny' ? 'Mochi' : activePet === 'cat' ? 'Byte' : 'Pixel');
-                const roleBadge = isUser ? 'Operator' : 'Zero-Trust Assistant';
-
-                return `
-                  <div class="chat-bubble ${isUser ? 'user-bubble' : 'bot-bubble'}" data-msg-id="${m.id}">
-                    <div class="chat-bubble-header">
-                      <div class="chat-avatar-wrap">
-                        <span class="chat-avatar-emoji">${avatarEmoji}</span>
-                      </div>
-                      <div class="chat-author-info">
-                        <span class="chat-author-name">${authorName}</span>
-                        <span class="chat-role-badge">${roleBadge}</span>
-                      </div>
-                      <div class="chat-timestamp">${m.time}</div>
-                    </div>
-
-                    <div class="chat-bubble-body">
-                      ${isUser ? `<p class="user-text">${formatChatMessage(m.text)}</p>` : formatChatMessage(m.text)}
-                    </div>
-
-                    ${(!isUser && m.options && m.options.length > 0) ? `
-                      <div class="chat-options-container">
-                        <div class="chat-options-header">
-                          <span class="chat-options-icon">⚡</span>
-                          <span>Quick Actions & Verified Recipes</span>
-                        </div>
-                        <div class="chat-options-group">
-                          ${m.options.map(opt => {
-                            const isSettings = opt.value === 'open_settings';
-                            return `
-                              <button class="chat-option-pill ${isSettings ? 'pill-settings' : ''}" data-choice="${opt.value}">
-                                <span class="option-label">${opt.label}</span>
-                                <span class="option-arrow">&rarr;</span>
-                              </button>
-                            `;
-                          }).join('')}
-                        </div>
-                      </div>
-                    ` : ''}
-                  </div>
-                `;
-              }).join('')}
+              ${messages.map(m => renderMessage(m, {
+                isLast: m === lastMsg,
+                isNew: !firstRender && newMsgIds.includes(m.id),
+                activePet,
+                ui: chatUi,
+              })).join('')}
             </div>
           ` : `
             <!-- Main Ask Card matching screenshot -->
@@ -451,6 +455,75 @@ export function renderChatView(container) {
     };
   });
 
+  // Choice groups: remember the selection across re-renders and keep the summary in sync
+  container.querySelectorAll('.choice-input').forEach(input => {
+    input.onchange = () => {
+      chatUi.selections[`${input.dataset.form}:${input.dataset.gi}`] = Number(input.dataset.oi);
+      sounds.play('ui.click');
+      updateChoiceSummary(container, input.dataset.form);
+    };
+  });
+
+  // Continue: send every answer in one message
+  container.querySelectorAll('.chat-continue-btn').forEach(btn => {
+    btn.onclick = () => {
+      const formId = btn.getAttribute('data-continue');
+      const form = container.querySelector(`.chat-choice-form[data-form="${formId}"]`);
+      if (!form) return;
+      const parts = [];
+      form.querySelectorAll('.choice-group[data-name]').forEach(group => {
+        const checked = group.querySelector('.choice-input:checked');
+        if (checked) parts.push(`${group.getAttribute('data-name')}: ${checked.value}`);
+      });
+      if (parts.length === 0) return;
+      btn.disabled = true;
+      sounds.play('ui.click');
+      bridge.submitGoal(parts.join(' · '));
+    };
+  });
+
+  // Collapsible system check: remember which ones the user closed
+  container.querySelectorAll('details.chat-sys').forEach(details => {
+    details.addEventListener('toggle', () => {
+      const key = details.getAttribute('data-key');
+      if (details.open) chatUi.collapsed.delete(key);
+      else chatUi.collapsed.add(key);
+    });
+  });
+
+  // Copy path
+  container.querySelectorAll('.sys-copy').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const value = btn.getAttribute('data-copy');
+      if (!value) return;
+      try {
+        await navigator.clipboard.writeText(value);
+        btn.classList.add('copied');
+        sounds.play('ui.click');
+        setTimeout(() => btn.classList.remove('copied'), 1500);
+      } catch (err) {
+        console.warn('Could not copy path to clipboard:', err);
+      }
+    };
+  });
+
+  // Code Block Copy to Clipboard
+  container.querySelectorAll('.chat-code-copy-btn').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const code = btn.getAttribute('data-code');
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        flashCopied(btn);
+        sounds.play('ui.click');
+      } catch (err) {
+        console.warn('Could not copy code to clipboard:', err);
+      }
+    };
+  });
+
   // Suggestion Chips
   container.querySelectorAll('.suggestion-chip').forEach(chip => {
     chip.onclick = () => {
@@ -474,12 +547,30 @@ export function renderChatView(container) {
     };
   });
 
-  // Auto-scroll chat area smoothly to latest message
+  // Scrolling: keep the reader's place, and land on the START of a new long reply
+  // (jumping to the bottom would hide the beginning of what the assistant just said).
   const scrollArea = container.querySelector('.workspace-scroll-area');
   const chatStream = container.querySelector('#chat-thread-stream');
   if (scrollArea && chatStream) {
     requestAnimationFrame(() => {
-      scrollArea.scrollTop = scrollArea.scrollHeight;
+      const newEls = newMsgIds
+        .map(id => [...chatStream.querySelectorAll('[data-msg-id]')].find(el => el.getAttribute('data-msg-id') === String(id)))
+        .filter(Boolean);
+      const newest = newEls[newEls.length - 1];
+
+      if (firstRender) {
+        scrollArea.scrollTop = scrollArea.scrollHeight;
+      } else if (newest && newest.classList.contains('bot-bubble')) {
+        const offset = newest.getBoundingClientRect().top - scrollArea.getBoundingClientRect().top;
+        const isTall = newest.offsetHeight > scrollArea.clientHeight - 24;
+        scrollArea.scrollTop = isTall
+          ? scrollArea.scrollTop + offset - 12
+          : scrollArea.scrollHeight;
+      } else if (newest) {
+        scrollArea.scrollTop = scrollArea.scrollHeight;
+      } else {
+        scrollArea.scrollTop = wasAtBottom ? scrollArea.scrollHeight : prevScrollTop;
+      }
     });
   }
 }

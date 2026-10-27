@@ -661,14 +661,28 @@ fn resolve_ai_config(req: &ChatRequest, state_config: &installer_core::CoreConfi
 }
 
 const STATIC_SYSTEM_PROMPT: &str = "\
-You are SetupPal, a kawaii yet fiercely rigorous Zero-Trust PC Setup & Modding Assistant.\n\
-Your mission is to help users set up development tools, modpacks, and software while upholding strict zero-trust security.\n\
-CRITICAL ZERO-TRUST MANDATES:\n\
-1. Never invent raw unverified download URLs or shell execution scripts.\n\
-2. Accurately identify the exact software, game mod, or toolpack requested (e.g. for 'Elden Ring in Minecraft', identify modpacks like 'The Shattered Ring' or specific Forge/Fabric mods).\n\
-3. Ask 2-3 focused clarifying questions to determine target version, loader (CurseForge/Prism/Fabric/Forge), and shader preferences.\n\
-4. Assure the user that all proposed actions will be verified with SHA-256 digests and isolated in sandboxes before touching host files.\n\
-5. Be concise, friendly, and structure replies with clear emoji markdown headers.";
+You are SetupPal, a careful setup assistant. Your replies render in a compact chat UI, so follow this format exactly.\n\
+\n\
+Rules:\n\
+- Open with ONE bold sentence stating what you understood, then one short sentence saying nothing has been changed yet.\n\
+- No emoji. No headings named \"Section\". One fact per list item; never chain facts with bullets inside a paragraph.\n\
+- State only facts found in <host_context>. Never invent versions, sizes, speeds, or \"Nx faster\" claims.\n\
+\n\
+Use only the blocks that apply:\n\
+\n\
+### System check\n\
+- **Label**: `value` (Status: Verified | Attention | Missing | Skipped) — short note\n\
+Include only items relevant to the task; mark irrelevant ones Skipped.\n\
+\n\
+### Your choices\n\
+1. **Question name**: `Option A` (Recommended) — one-line trade-off | `Option B` — one-line trade-off\n\
+Ask at most 3 questions with 2-3 options each, separated by |. Put the safest default first and mark it Recommended.\n\
+\n\
+Sources I'll check: domain.com · other.com\n\
+\n\
+Next: one short sentence saying what happens after the user chooses.\n\
+\n\
+For a plain question or explanation, answer in short paragraphs and lists with no blocks.";
 
 fn format_compact_host_context(
     mc_info: &MinecraftInspection,
@@ -705,7 +719,10 @@ fn distill_history(raw_history: &[ChatMessageItem]) -> (Vec<ChatMessageItem>, us
         let trimmed = item.content.trim();
         if item.role == "assistant" {
             // Cut off trailing question lists or option dumps from previous turns
-            let cut = if let Some(idx) = trimmed.find("\n\n❓ **Questions") {
+            let cut = if let Some(idx) = trimmed.find("\n### Your choices") {
+                compacted_count += 1;
+                &trimmed[..idx]
+            } else if let Some(idx) = trimmed.find("\n\n❓ **Questions") {
                 compacted_count += 1;
                 &trimmed[..idx]
             } else if let Some(idx) = trimmed.find("\n\nReview the") {
@@ -824,6 +841,58 @@ async fn call_ai_chat(
     Ok(reply.to_string())
 }
 
+/// Major version of a `java -version` string ("25.0.1" -> 25, "1.8.0_292" -> 8).
+fn java_major(ver: &str) -> Option<u32> {
+    let mut parts = ver.trim().split(|c: char| !c.is_ascii_digit());
+    let first: u32 = parts.next()?.parse().ok()?;
+    if first == 1 {
+        parts.next()?.parse().ok()
+    } else {
+        Some(first)
+    }
+}
+
+/// Java runtime row for the "System check" block, judged against the Java a Minecraft release needs.
+fn java_check_row(mc_info: &MinecraftInspection, min_java: u32) -> String {
+    match mc_info.java_runtime_version.as_deref() {
+        Some(ver) => match java_major(ver) {
+            Some(major) if major >= min_java => format!(
+                "- **Java runtime**: `{ver}` (Status: Verified) — meets the Java {min_java}+ this version needs\n"
+            ),
+            Some(_) => format!(
+                "- **Java runtime**: `{ver}` (Status: Attention) — this version needs Java {min_java}+\n"
+            ),
+            None => format!("- **Java runtime**: `{ver}` (Status: Verified)\n"),
+        },
+        None => format!(
+            "- **Java runtime**: `Not found on PATH` (Status: Missing) — this version needs Java {min_java}+\n"
+        ),
+    }
+}
+
+/// Only rows that change the user's decision; Bedrock is always muted because these mods target Java.
+fn minecraft_system_check(mc_info: &MinecraftInspection, gpu_status: &str) -> String {
+    let mut out = String::from("### System check\n");
+    match (&mc_info.java_edition_installed, mc_info.java_edition_path.as_deref()) {
+        (true, Some(path)) => out.push_str(&format!("- **Minecraft Java**: `{path}` (Status: Verified)\n")),
+        (true, None) => out.push_str("- **Minecraft Java**: `Installed` (Status: Verified)\n"),
+        _ => out.push_str(
+            "- **Minecraft Java**: `Not found` (Status: Missing) — mods can still be staged in a sandbox profile\n",
+        ),
+    }
+    out.push_str(&java_check_row(mc_info, 21));
+    if mc_info.gpu_detected.is_some() {
+        out.push_str(&format!("- **Graphics**: `{gpu_status}` (Status: Detected)\n"));
+    } else {
+        out.push_str(&format!("- **Graphics**: `{gpu_status}`\n"));
+    }
+    let bedrock = if mc_info.bedrock_edition_installed { "Installed" } else { "Not installed" };
+    out.push_str(&format!(
+        "- **Minecraft Bedrock**: {bedrock} (Status: Skipped) — these mods are for Java Edition\n"
+    ));
+    out
+}
+
 async fn chat_handler(
     State(state): State<AppState>,
     Json(req): Json<ChatRequest>,
@@ -840,24 +909,6 @@ async fn chat_handler(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mc_info = inspect_minecraft_system(&profile);
-
-    // Format host pre-flight status strings
-    let mc_java_status = if mc_info.java_edition_installed {
-        format!("✅ Detected at `{}`", mc_info.java_edition_path.as_deref().unwrap_or("%APPDATA%\\.minecraft"))
-    } else {
-        "❌ Not detected (default launcher path absent)".to_string()
-    };
-
-    let mc_bedrock_status = if mc_info.bedrock_edition_installed {
-        format!("✅ Detected (Windows Store UWP package installed at `{}`)", mc_info.bedrock_edition_path.as_deref().unwrap_or("UWP"))
-    } else {
-        "❌ Not detected (Windows UWP package absent)".to_string()
-    };
-
-    let java_runtime_status = match &mc_info.java_runtime_version {
-        Some(ver) => format!("✅ Installed (`{}`)", ver),
-        None => "⚠️ Not found on active PATH".to_string(),
-    };
 
     let gpu_status = mc_info.gpu_detected.as_deref().unwrap_or("Standard GPU detected");
 
@@ -887,52 +938,20 @@ async fn chat_handler(
             goal: raw_msg.to_string(),
         });
 
-        let both_note = if mc_info.java_edition_installed && mc_info.bedrock_edition_installed {
-            "\n> 💡 **Both Minecraft Java Edition and Bedrock Edition are installed on this computer!** Please let me know whether you want to configure mods for Java, Bedrock, or both.\n"
-        } else if mc_info.java_edition_installed {
-            "\n> 💡 **Minecraft Java Edition detected.** OptiFine and shader mods run natively on Java Edition.\n"
-        } else if mc_info.bedrock_edition_installed {
-            "\n> 💡 **Minecraft Bedrock Edition detected.** Bedrock uses RTX resource packs and `.mcpack` addons instead of traditional Java JAR mods.\n"
-        } else {
-            "\n> 💡 Neither Minecraft edition was detected in standard directories. SetupPal can stage the files in a clean sandbox folder for you.\n"
-        };
-
+        // One place for the decision: the choices form in the message. No duplicate quick-action pills.
         let reply = format!(
-            "🎯 **Problem Definition & Scope**:\n\
-            You want to download and configure Minecraft performance optimization and visual shader mods (such as **OptiFine** or high-performance modern alternatives).\n\n\
-            🔍 **Host System Pre-Flight Diagnosis**:\n\
-            • **Minecraft Java Edition**: {mc_java_status}\n\
-            • **Minecraft Bedrock Edition**: {mc_bedrock_status}\n\
-            {both_note}\
-            • **Java Runtime**: {java_runtime_status}\n\
-            • **Graphics Hardware**: `{gpu_status}` (High-performance hardware capable of real-time shaders)\n\
-            • **Zero-Trust Safety Policy**: **Strict Planning Active** (No random downloads or modifications will touch your system).\n\n\
-            ❓ **Questions to formulate your verified Zero-Trust Plan**:\n\
-            1. **Target Minecraft Version**: Which version are you planning to play? (e.g. `1.21.1`, `1.20.4`, `1.19.4`)\n\
-            2. **Mod & Shader Engine Preference**:\n\
-               • **OptiFine (Classic)**: Traditional standalone installer from official `optifine.net` with zoom and shader support.\n\
-               • **Iris Shaders + Sodium (Fabric)** *(Recommended for RTX 4060)*: Provides up to 3x higher FPS and modern shaderpack compatibility.\n\
-            3. **Installation Target**: Configure directly into `.minecraft\\mods`, or stage in an isolated sandbox folder first?"
+            "**Setting up shaders and performance mods for Minecraft Java Edition.** Nothing has been changed yet.\n\n\
+            {}\n\
+            ### Your choices\n\
+            1. **Minecraft version**: `1.21.1` (Latest) | `1.20.4` | `1.19.4`\n\
+            2. **Mod engine**: `Iris Shaders + Sodium (Fabric)` (Recommended) — Usually the biggest FPS gain, modern shader packs, needs Fabric | `OptiFine (Classic)` — One-file install, simpler, but slower and fewer mod integrations\n\
+            3. **Install into**: `Isolated sandbox` (Recommended) — Staged in a separate profile, your .minecraft stays untouched | `Direct to .minecraft\\mods` — Writes straight into your live game folder\n\n\
+            Sources I'll check: modrinth.com · fabricmc.net · optifine.net\n\n\
+            Next: Pick your options and continue. I'll build a plan for you to approve.",
+            minecraft_system_check(&mc_info, gpu_status)
         );
 
-        let options = vec![
-            ChatOption {
-                label: "🎮 1.21.1 + OptiFine".to_string(),
-                value: "Install OptiFine for Minecraft Java 1.21.1 in safe sandbox".to_string(),
-            },
-            ChatOption {
-                label: "⚡ 1.21.1 + Iris/Sodium (Recommended)".to_string(),
-                value: "Install Iris Shaders and Sodium for Minecraft 1.21.1 on Fabric".to_string(),
-            },
-            ChatOption {
-                label: "📦 1.20.4 + OptiFine".to_string(),
-                value: "Install OptiFine for Minecraft Java 1.20.4 in safe sandbox".to_string(),
-            },
-            ChatOption {
-                label: "🛡️ Isolated Sandbox Profile".to_string(),
-                value: "Configure in isolated sandbox directory first".to_string(),
-            },
-        ];
+        let options: Vec<ChatOption> = vec![];
 
         return Ok(Json(ChatResponse {
             reply,
@@ -983,15 +1002,30 @@ async fn chat_handler(
             plan: Box::new(plan.clone()),
         });
 
+        let active_path = if sandbox {
+            ".\\.orchestrator-env\\minecraft-profile"
+        } else {
+            "%APPDATA%\\.minecraft\\mods"
+        };
+
+        let step_count = plan.steps.len();
+        let install_mode = if sandbox { "Isolated sandbox" } else { "Direct to .minecraft\\mods" };
+        let sources = if mod_type.contains("Iris") {
+            "modrinth.com · fabricmc.net"
+        } else {
+            "optifine.net"
+        };
+
         let reply = format!(
-            "✅ **Zero-Trust Plan Synthesized**: Configured **Minecraft {target_version}** with **{mod_type}**.\n\n\
-            📋 **Execution Summary**:\n\
-            • **Official Publisher Check**: Download URL verified against official vendor domain (`optifine.net` / `modrinth.com`).\n\
-            • **Cryptographic Integrity**: SHA-256 checksums verified before any file placement.\n\
-            • **Isolation Boundary**: Staging into zero-trust sandbox (`./.orchestrator-env/minecraft-profile`) to protect your host files.\n\
-            • **Zero Random Downloads**: Execution runs in strictly verified dry-run simulation mode.\n\n\
-            Review the {} verified steps below. Click **'Approve safe steps'** when you are ready to simulate execution.",
-            plan.steps.len()
+            "**Plan ready: {mod_type} for Minecraft {target_version}.** {step_count} steps are listed below. Nothing has been changed yet.\n\n\
+            ### Your setup\n\
+            - **Minecraft version**: `{target_version}`\n\
+            - **Mod engine**: `{mod_type}`\n\
+            - **Install into**: `{install_mode}` — `{active_path}`\n\
+            {}\n\
+            Sources I'll check: {sources}\n\n\
+            Next: Review the steps, then choose **Approve safe steps**.",
+            java_check_row(&mc_info, 21)
         );
 
         return Ok(Json(ChatResponse {
@@ -1019,9 +1053,21 @@ async fn chat_handler(
         let (plan, safety_report, step_metadata) = create_deterministic_demo_plan(raw_msg);
         *state.current_plan.write().await = Some((plan.clone(), safety_report.clone()));
 
+        let task_desc = if is_cpp_demo {
+            "C++20 development toolchain and compiler suite"
+        } else if is_python_demo {
+            "Python data science, PyTorch, and Jupyter virtualenv"
+        } else {
+            "Adversarial attack radar simulation against untrusted repository"
+        };
+
         let reply = format!(
-            "I analyzed your request **\"{}\"** against Zero-Trust safety policies.\n\n{}\n\nAll {} steps verified safe (GREEN) and held for review if untrusted.",
-            raw_msg, plan.summary, plan.steps.len()
+            "**Plan ready: {} on {}.** The steps are listed below. Nothing has been changed yet.\n\n\
+            ### Your setup\n\
+            - **Graphics**: `{gpu_status}`\n\
+            - **Install into**: `Isolated sandbox` — `.\\.orchestrator-env\\sandbox`\n\n\
+            Next: Review the steps, then choose **Approve safe steps**.",
+            task_desc, profile.os_name
         );
 
         return Ok(Json(ChatResponse {
@@ -1047,38 +1093,27 @@ async fn chat_handler(
         None => {
             // No AI API key found! Explicitly notify the user.
             let reply = format!(
-                "⚠️ **No AI API Key Found**\n\n\
-                You asked: *\"{}\"*\n\n\
-                To dynamically research custom mods (such as Elden Ring modpacks for Minecraft), query package repositories, and synthesize verified zero-trust plans for unindexed software, SetupPal needs an AI model connection.\n\n\
-                🔍 **Host System Pre-Flight Diagnosis**:\n\
-                • **Minecraft Java Edition**: {}\n\
-                • **Minecraft Bedrock Edition**: {}\n\
-                • **Java Runtime**: {}\n\
-                • **Graphics Hardware**: `{}`\n\n\
-                💡 **How to activate AI Planning**:\n\
-                1. Click **\"⚙️ Open Settings to Add Key\"** below (or in the sidebar).\n\
-                2. Enter your **OpenAI API Key** (`sk-...`) or **NVIDIA NIM Key** (`nvapi-...`).\n\
-                3. Alternatively, export `OPENAI_API_KEY` or `NIM_API_KEY` in your `.env` file.\n\n\
-                *In the meantime, you can test one of our verified offline recipes without an API key below!*",
-                raw_msg, mc_java_status, mc_bedrock_status, java_runtime_status, gpu_status
+                "⚠️ **No AI key set up yet**\n\n\
+                I can't write a custom plan for \"{}\" without an AI model. Add a key in **Settings**, or start from one of the offline recipes below.",
+                raw_msg
             );
 
             let options = vec![
                 ChatOption {
-                    label: "⚙️ Open Settings to Add Key".to_string(),
+                    label: "Open Settings".to_string(),
                     value: "open_settings".to_string(),
                 },
                 ChatOption {
-                    label: "🎮 1.21.1 + OptiFine (Offline Recipe)".to_string(),
-                    value: "Install OptiFine for Minecraft Java 1.21.1 in safe sandbox".to_string(),
+                    label: "Minecraft shaders and mods".to_string(),
+                    value: "I want to download minecraft mods like optifine.".to_string(),
                 },
                 ChatOption {
-                    label: "⚡ 1.21.1 + Iris/Sodium (Offline Recipe)".to_string(),
-                    value: "Install Iris Shaders and Sodium for Minecraft 1.21.1 on Fabric".to_string(),
-                },
-                ChatOption {
-                    label: "🐍 Python Data Science (Offline)".to_string(),
+                    label: "Python data science".to_string(),
                     value: "Python PyTorch & Jupyter environment".to_string(),
+                },
+                ChatOption {
+                    label: "C++ toolchain".to_string(),
+                    value: "C++ toolchain".to_string(),
                 },
             ];
 
@@ -1105,19 +1140,9 @@ async fn chat_handler(
                 if let Some((cached_reply, timestamp)) = cache.get(&cache_key) {
                     if timestamp.elapsed() < std::time::Duration::from_secs(600) {
                         info!("⚡ Serving AI response from session cache (100% tokens saved)");
-                        let options = vec![
-                            ChatOption {
-                                label: "🛡️ Configure in Safe Sandbox".to_string(),
-                                value: format!("Configure verified sandbox profile for {}", raw_msg),
-                            },
-                            ChatOption {
-                                label: "⚙️ AI Settings".to_string(),
-                                value: "open_settings".to_string(),
-                            },
-                        ];
                         return Ok(Json(ChatResponse {
-                            reply: format!("⚡ *(Served from session token cache — 0 API tokens consumed)*\n\n{}", cached_reply),
-                            options,
+                            reply: cached_reply.clone(),
+                            options: vec![],
                             plan: None,
                             safety: None,
                             step_metadata: None,
@@ -1161,22 +1186,11 @@ async fn chat_handler(
                         cache.insert(cache_key, (ai_reply.clone(), std::time::Instant::now()));
                     }
 
-                    let options = vec![
-                        ChatOption {
-                            label: "🛡️ Configure in Safe Sandbox".to_string(),
-                            value: format!("Configure verified sandbox profile for {}", raw_msg),
-                        },
-                        ChatOption {
-                            label: "⚙️ AI Settings".to_string(),
-                            value: "open_settings".to_string(),
-                        },
-                    ];
-
                     let tokens_saved = 380 + (compacted_count * 120);
 
                     Ok(Json(ChatResponse {
                         reply: ai_reply,
-                        options,
+                        options: vec![],
                         plan: None,
                         safety: None,
                         step_metadata: None,
@@ -1190,22 +1204,29 @@ async fn chat_handler(
                     }))
                 }
                 Err(err) => {
+                    // Keep the error readable: collapse whitespace and cap its length.
+                    let err_flat = err.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let err_short = if err_flat.len() > 240 {
+                        format!("{}...", &err_flat[..err_flat.floor_char_boundary(240)])
+                    } else {
+                        err_flat
+                    };
                     let reply = format!(
-                        "⚠️ **AI Connection Error**\n\n\
-                        SetupPal attempted to query the AI model (`{}` at `{}`), but encountered an error:\n\n\
+                        "⚠️ **Couldn't reach the AI model**\n\n\
+                        I tried `{}` and got this error. Nothing has been changed.\n\n\
                         > `{}`\n\n\
-                        Please check your API key, network, or endpoint configuration in **Settings**.",
-                        ai_config.model, ai_config.endpoint, err
+                        Check your API key and connection in **Settings**, or use an offline recipe.",
+                        ai_config.model, err_short
                     );
 
                     let options = vec![
                         ChatOption {
-                            label: "⚙️ Open Settings".to_string(),
+                            label: "Open Settings".to_string(),
                             value: "open_settings".to_string(),
                         },
                         ChatOption {
-                            label: "🎮 1.21.1 + OptiFine (Offline Recipe)".to_string(),
-                            value: "Install OptiFine for Minecraft Java 1.21.1 in safe sandbox".to_string(),
+                            label: "Minecraft shaders and mods".to_string(),
+                            value: "I want to download minecraft mods like optifine.".to_string(),
                         },
                     ];
 
