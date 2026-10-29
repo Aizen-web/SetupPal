@@ -184,19 +184,19 @@ class Store {
         modelVerification: 'Local Deterministic Safety Engine'
       },
 
-      // Accounts
+      // Accounts (Local credentials & state)
       accounts: {
-        displayName: 'Ghost Pilot',
+        displayName: localStorage.getItem('setuppal_display_name') || 'Local User',
         avatarColor: 'lavender',
-        githubConnected: true,
-        githubUsername: 'Aizen-web',
-        nebiusConnected: true,
-        tavilyConnected: true,
+        githubConnected: !!localStorage.getItem('setuppal_github_user'),
+        githubUsername: localStorage.getItem('setuppal_github_user') || '',
+        nebiusConnected: false,
+        tavilyConnected: !!localStorage.getItem('setuppal_tavily_key'),
         stats: {
-          messages: 48,
-          toolsExecuted: 31,
-          hashesChecked: 19,
-          quarantined: 2
+          messages: 0,
+          toolsExecuted: 0,
+          hashesChecked: 0,
+          quarantined: 0
         }
       },
 

@@ -94,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/history/export", get(history_export_handler))
         .route("/api/undo", post(undo_handler))
         .route("/api/events", get(events_handler))
+        .route("/api/test-key", post(test_key_handler))
         .layer(cors)
         .with_state(app_state);
 
@@ -625,8 +626,8 @@ fn resolve_ai_config(req: &ChatRequest, state_config: &installer_core::CoreConfi
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         // 2. Check process environment variables
-        .or_else(|| std::env::var("OPENAI_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
         .or_else(|| std::env::var("NIM_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+        .or_else(|| std::env::var("OPENAI_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
         .or_else(|| std::env::var("AI_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
         // 3. Check state_config.nim_api_key (from .env)
         .or_else(|| state_config.nim_api_key.clone().filter(|s| !s.trim().is_empty()));
@@ -638,26 +639,154 @@ fn resolve_ai_config(req: &ChatRequest, state_config: &installer_core::CoreConfi
         || req.endpoint.as_deref().map(|e| e.contains("nvidia.com")).unwrap_or(false);
 
     let (default_endpoint, default_model) = if is_nim {
-        ("https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.1-70b-instruct")
+        ("https://integrate.api.nvidia.com/v1/chat/completions", "nvidia/llama-3.1-nemotron-70b-instruct")
     } else {
         ("https://api.openai.com/v1/chat/completions", "gpt-4o-mini")
     };
 
-    let endpoint = req.endpoint.as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| default_endpoint.to_string());
+    // Auto-correct: If it's an nvapi / nim key, never send to OpenAI endpoint
+    let endpoint = if is_nim && req.endpoint.as_deref().map(|e| e.contains("openai.com")).unwrap_or(false) {
+        default_endpoint.to_string()
+    } else {
+        req.endpoint.as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| default_endpoint.to_string())
+    };
 
-    let model = req.model.as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| default_model.to_string());
+    // Auto-correct: If it's an nvapi / nim key, never use gpt-* models
+    let model = if is_nim && req.model.as_deref().map(|m| m.contains("gpt-")).unwrap_or(false) {
+        default_model.to_string()
+    } else {
+        req.model.as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| default_model.to_string())
+    };
 
     Some(ResolvedAiConfig {
         api_key,
         endpoint,
         model,
     })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TestKeyRequest {
+    pub api_key: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TestKeyResponse {
+    pub valid: bool,
+    pub message: String,
+    pub model_tested: String,
+    pub provider: String,
+}
+
+async fn test_key_handler(
+    Json(req): Json<TestKeyRequest>,
+) -> Json<TestKeyResponse> {
+    let key = req.api_key.trim();
+    if key.is_empty() {
+        return Json(TestKeyResponse {
+            valid: false,
+            message: "API key is empty.".to_string(),
+            model_tested: String::new(),
+            provider: String::new(),
+        });
+    }
+
+    let is_nim = key.starts_with("nvapi-")
+        || req.provider.as_deref() == Some("nim")
+        || req.endpoint.as_deref().map(|e| e.contains("nvidia.com")).unwrap_or(false);
+
+    let (default_endpoint, default_model, provider_name) = if is_nim {
+        ("https://integrate.api.nvidia.com/v1/chat/completions", "nvidia/llama-3.1-nemotron-70b-instruct", "NVIDIA NIM")
+    } else {
+        ("https://api.openai.com/v1/chat/completions", "gpt-4o-mini", "OpenAI")
+    };
+
+    let endpoint = if is_nim && req.endpoint.as_deref().map(|e| e.contains("openai.com")).unwrap_or(false) {
+        default_endpoint.to_string()
+    } else {
+        req.endpoint.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| default_endpoint.to_string())
+    };
+
+    let model = if is_nim && req.model.as_deref().map(|m| m.contains("gpt-")).unwrap_or(false) {
+        default_model.to_string()
+    } else {
+        req.model.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| default_model.to_string())
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build() {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(TestKeyResponse {
+                valid: false,
+                message: format!("HTTP client initialization failed: {e}"),
+                model_tested: model,
+                provider: provider_name.to_string(),
+            });
+        }
+    };
+
+    let request_body = serde_json::json!({
+        "model": model,
+        "messages": [
+            { "role": "user", "content": "ping" }
+        ],
+        "max_tokens": 5,
+        "temperature": 0.0
+    });
+
+    let res = client
+        .post(&endpoint)
+        .header("Authorization", format!("Bearer {key}"))
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send()
+        .await;
+
+    match res {
+        Ok(response) => {
+            let status = response.status();
+            if status.is_success() {
+                Json(TestKeyResponse {
+                    valid: true,
+                    message: format!("Successfully verified with {provider_name}! Model '{model}' responded."),
+                    model_tested: model,
+                    provider: provider_name.to_string(),
+                })
+            } else {
+                let err_text = response.text().await.unwrap_or_default();
+                let err_short = if err_text.len() > 200 {
+                    format!("{}...", &err_text[..err_text.floor_char_boundary(200)])
+                } else {
+                    err_text
+                };
+                Json(TestKeyResponse {
+                    valid: false,
+                    message: format!("Provider error (HTTP {status}): {err_short}"),
+                    model_tested: model,
+                    provider: provider_name.to_string(),
+                })
+            }
+        }
+        Err(err) => {
+            Json(TestKeyResponse {
+                valid: false,
+                message: format!("Network request failed: {err}"),
+                model_tested: model,
+                provider: provider_name.to_string(),
+            })
+        }
+    }
 }
 
 const STATIC_SYSTEM_PROMPT: &str = "\
