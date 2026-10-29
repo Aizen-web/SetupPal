@@ -62,19 +62,39 @@ export class BackendBridge {
   constructor() {
     this.isBackendOnline = false;
     this.activeExecutionPlan = null;
+    this._connectionPromise = new Promise(resolve => {
+      this._resolveConnection = resolve;
+    });
   }
 
-  async init() {
-    console.log("Connecting UI to SetupPal Backend...");
-    const health = await apiClient.checkHealth();
+  async waitForConnection(timeoutMs = 4000) {
+    if (this.isBackendOnline) return true;
+    let timer;
+    const timeout = new Promise(resolve => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    const ok = await Promise.race([this._connectionPromise, timeout]);
+    clearTimeout(timer);
+    return !!ok;
+  }
+
+  async init(attempt = 0) {
+    const health = await apiClient.checkHealth(1200);
     if (health) {
       this.isBackendOnline = true;
+      if (this._resolveConnection) {
+        this._resolveConnection(true);
+      }
       console.log("Zero-Trust Backend Connected:", health);
       this.setupEventStream();
       this.refreshHistory();
     } else {
-      console.warn("Backend not yet running. Will retry connection in background.");
-      setTimeout(() => this.init(), 3000);
+      // Rapid retry with progressive backoff: 80ms, 150ms, 300ms, 600ms, max 1500ms
+      const delay = Math.min(80 * Math.pow(1.7, attempt), 1500);
+      if (attempt % 5 === 0) {
+        console.warn(`Backend initializing... Retrying in ${Math.round(delay)}ms (attempt ${attempt + 1})`);
+      }
+      setTimeout(() => this.init(attempt + 1), delay);
     }
   }
 
@@ -295,6 +315,15 @@ export class BackendBridge {
       ]
     }));
 
+    if (!this.isBackendOnline) {
+      store.setMascotState('scanning', 'Connecting to Zero-Trust Engine...');
+      const ready = await this.waitForConnection(3500);
+      if (!ready) {
+        const health = await apiClient.checkHealth(1000);
+        if (health) this.isBackendOnline = true;
+      }
+    }
+
     try {
       // Build token-efficient history for conversational AI (windowed & distilled)
       // Exclude the current message just pushed to store so it is not duplicated in prompt
@@ -313,7 +342,27 @@ export class BackendBridge {
         };
       });
 
-      const data = await apiClient.sendChat(goal, history);
+      let data;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          data = await apiClient.sendChat(goal, history);
+          break;
+        } catch (err) {
+          const isTransient = err?.message && (
+            err.message.includes('fetch') ||
+            err.message.includes('500') ||
+            err.message.includes('502') ||
+            err.message.includes('503') ||
+            err.message.includes('ECONNREFUSED')
+          );
+          if (isTransient && attempt < 2) {
+            console.warn(`sendChat transient error (attempt ${attempt + 1}), retrying in 500ms...`, err);
+            await new Promise(r => setTimeout(r, 500));
+          } else {
+            throw err;
+          }
+        }
+      }
 
       if (data.plan && data.safety) {
         const plan = data.plan;
@@ -418,6 +467,10 @@ export class BackendBridge {
     petVoiceEngine.trigger('plan_approve');
     store.setMode('hacker');
 
+    if (!this.isBackendOnline) {
+      await this.waitForConnection(3000);
+    }
+
     try {
       if (!this.activeExecutionPlan) {
         const initialGoal = store.getState().activePlan?.title || "Minecraft with performance mods";
@@ -478,6 +531,10 @@ export class BackendBridge {
     store.setMode('hacker');
     store.setMascotState('scanning', "Scanning incoming adversarial repository README against OSV.dev & typosquat radar...");
 
+    if (!this.isBackendOnline) {
+      await this.waitForConnection(3000);
+    }
+
     try {
       const data = await apiClient.simulateAttack();
       const plan = data.plan;
@@ -516,6 +573,9 @@ export class BackendBridge {
 
   async refreshHistory() {
     try {
+      if (!this.isBackendOnline) {
+        await this.waitForConnection(2000);
+      }
       const data = await apiClient.getHistory();
       if (data && data.transactions) {
         const changes = data.transactions.map((tx, idx) => ({
@@ -543,6 +603,10 @@ export class BackendBridge {
     sounds.play('rewind');
     store.setActivePage('chats');
     store.setMascotState('rewind', "Rewinding last change with deterministic state rollback...");
+
+    if (!this.isBackendOnline) {
+      await this.waitForConnection(3000);
+    }
 
     try {
       const res = await apiClient.undo();

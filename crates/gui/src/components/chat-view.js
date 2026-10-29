@@ -461,6 +461,10 @@ export function renderChatView(container) {
         store.setActivePage('settings');
         return;
       }
+      if (choice === 'open_accounts') {
+        store.setActivePage('accounts');
+        return;
+      }
       bridge.submitGoal(choice);
     };
   });

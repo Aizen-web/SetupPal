@@ -27,6 +27,7 @@ pub use events::{AgentEvent, EventBus};
 pub use executor::{ExecutionOptions, Executor, PlanExecutionSummary, StepExecutionResult, TrustCategory};
 pub use healer::{FailureContext, Healer};
 pub use llm::{LlmClient, NimClient};
+pub use llm::mock::generate_mock_plan;
 pub use os::{CommandOutput, MockOsProvider, OsProvider, PlatformOsProvider};
 pub use planner::Planner;
 pub use recipes::{Recipe, RecipeStore};

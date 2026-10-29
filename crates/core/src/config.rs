@@ -49,7 +49,7 @@ pub struct CoreConfig {
 
 impl CoreConfig {
     pub const DEFAULT_NIM_BASE_URL: &'static str = "https://integrate.api.nvidia.com/v1";
-    pub const DEFAULT_NIM_MODEL: &'static str = "meta/llama-3.1-70b-instruct";
+    pub const DEFAULT_NIM_MODEL: &'static str = "nvidia/llama-3.1-nemotron-70b-instruct";
 
     /// Loads configuration from process environment variables.
     /// Automatically loads a `.env` file if present in the current directory.

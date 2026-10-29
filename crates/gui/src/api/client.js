@@ -9,18 +9,23 @@ class ApiClient {
   constructor() {
     this.eventSource = null;
     this.isConnected = false;
+    this.lastHealth = null;
   }
 
-  async checkHealth() {
+  async checkHealth(timeoutMs = 1500) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(`${API_BASE}/health`);
+      const res = await fetch(`${API_BASE}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       this.isConnected = true;
+      this.lastHealth = data;
       return data;
     } catch (err) {
+      clearTimeout(timeout);
       this.isConnected = false;
-      console.warn("Backend not reachable yet:", err);
       return null;
     }
   }
@@ -37,11 +42,49 @@ class ApiClient {
     return await res.json();
   }
 
+  async validateKey({ apiKey = null, provider = 'nim', model = null, endpoint = null } = {}) {
+    const key = apiKey || localStorage.getItem('setuppal_ai_api_key');
+    if (!key || !key.trim()) {
+      return { valid: false, message: 'No API key provided.' };
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/test-key`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: key.trim(),
+          provider,
+          model,
+          endpoint,
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        return { valid: false, message: `Server error (${res.status}): ${text}` };
+      }
+      return await res.json();
+    } catch (err) {
+      return { valid: false, message: `Could not reach backend: ${err.message}` };
+    }
+  }
+
   async sendChat(message, history = []) {
     const apiKey = localStorage.getItem('setuppal_ai_api_key') || null;
-    const provider = localStorage.getItem('setuppal_ai_provider') || 'openai';
-    const model = localStorage.getItem('setuppal_ai_model') || null;
-    const endpoint = localStorage.getItem('setuppal_ai_endpoint') || null;
+    let provider = localStorage.getItem('setuppal_ai_provider') || (apiKey && apiKey.startsWith('nvapi-') ? 'nim' : 'nim');
+    if (apiKey && apiKey.startsWith('nvapi-')) {
+      provider = 'nim';
+    }
+    let model = localStorage.getItem('setuppal_ai_model') || (provider === 'nim' ? 'meta/llama-3.3-70b-instruct' : 'gpt-4o-mini');
+    let endpoint = localStorage.getItem('setuppal_ai_endpoint') || (provider === 'nim' ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions');
+
+    if ((provider === 'nim' || (apiKey && apiKey.startsWith('nvapi-'))) && endpoint.includes('openai.com')) {
+      endpoint = 'https://integrate.api.nvidia.com/v1/chat/completions';
+      if (!model || model.includes('gpt-')) {
+        model = 'meta/llama-3.3-70b-instruct';
+      }
+    }
 
     const res = await fetch(`${API_BASE}/chat`, {
       method: 'POST',
