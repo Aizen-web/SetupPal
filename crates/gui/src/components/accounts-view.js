@@ -17,7 +17,7 @@ export function renderAccountsView(container) {
 
   const savedKey = localStorage.getItem('setuppal_ai_api_key') || '';
   const savedProvider = localStorage.getItem('setuppal_ai_provider') || (savedKey.startsWith('sk-') ? 'openai' : 'nim');
-  const savedModel = localStorage.getItem('setuppal_ai_model') || (savedProvider === 'nim' ? 'nvidia/llama-3.1-nemotron-70b-instruct' : 'gpt-4o-mini');
+  const savedModel = localStorage.getItem('setuppal_ai_model') || (savedProvider === 'nim' ? 'meta/llama-3.3-70b-instruct' : 'gpt-4o-mini');
   const savedEndpoint = localStorage.getItem('setuppal_ai_endpoint') || (savedProvider === 'nim' ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions');
 
   const savedGhUser = localStorage.getItem('setuppal_github_user') || '';
@@ -268,7 +268,9 @@ export function renderAccountsView(container) {
       const isNim = val.startsWith('nvapi-');
       localStorage.setItem('setuppal_ai_provider', isNim ? 'nim' : 'openai');
       if (isNim) {
-        localStorage.setItem('setuppal_ai_model', 'nvidia/llama-3.1-nemotron-70b-instruct');
+        const currentModel = localStorage.getItem('setuppal_ai_model');
+        const targetModel = (currentModel && !currentModel.includes('gpt-')) ? currentModel : 'meta/llama-3.3-70b-instruct';
+        localStorage.setItem('setuppal_ai_model', targetModel);
         localStorage.setItem('setuppal_ai_endpoint', 'https://integrate.api.nvidia.com/v1/chat/completions');
       }
 
@@ -359,7 +361,7 @@ export function renderAccountsView(container) {
         const res = await apiClient.validateKey({
           apiKey: val,
           provider: isNim ? 'nim' : 'openai',
-          model: isNim ? 'nvidia/llama-3.1-nemotron-70b-instruct' : 'gpt-4o-mini',
+          model: isNim ? (localStorage.getItem('setuppal_ai_model') || 'meta/llama-3.3-70b-instruct') : 'gpt-4o-mini',
           endpoint: isNim ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions',
         });
 

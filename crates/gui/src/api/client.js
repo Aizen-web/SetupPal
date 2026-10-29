@@ -74,12 +74,14 @@ class ApiClient {
     if (apiKey && apiKey.startsWith('nvapi-')) {
       provider = 'nim';
     }
-    let model = localStorage.getItem('setuppal_ai_model') || (provider === 'nim' ? 'nvidia/llama-3.1-nemotron-70b-instruct' : 'gpt-4o-mini');
+    let model = localStorage.getItem('setuppal_ai_model') || (provider === 'nim' ? 'meta/llama-3.3-70b-instruct' : 'gpt-4o-mini');
     let endpoint = localStorage.getItem('setuppal_ai_endpoint') || (provider === 'nim' ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions');
 
     if ((provider === 'nim' || (apiKey && apiKey.startsWith('nvapi-'))) && endpoint.includes('openai.com')) {
       endpoint = 'https://integrate.api.nvidia.com/v1/chat/completions';
-      model = 'nvidia/llama-3.1-nemotron-70b-instruct';
+      if (!model || model.includes('gpt-')) {
+        model = 'meta/llama-3.3-70b-instruct';
+      }
     }
 
     const res = await fetch(`${API_BASE}/chat`, {

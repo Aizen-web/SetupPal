@@ -639,7 +639,7 @@ fn resolve_ai_config(req: &ChatRequest, state_config: &installer_core::CoreConfi
         || req.endpoint.as_deref().map(|e| e.contains("nvidia.com")).unwrap_or(false);
 
     let (default_endpoint, default_model) = if is_nim {
-        ("https://integrate.api.nvidia.com/v1/chat/completions", "nvidia/llama-3.1-nemotron-70b-instruct")
+        ("https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.3-70b-instruct")
     } else {
         ("https://api.openai.com/v1/chat/completions", "gpt-4o-mini")
     };
@@ -705,7 +705,7 @@ async fn test_key_handler(
         || req.endpoint.as_deref().map(|e| e.contains("nvidia.com")).unwrap_or(false);
 
     let (default_endpoint, default_model, provider_name) = if is_nim {
-        ("https://integrate.api.nvidia.com/v1/chat/completions", "nvidia/llama-3.1-nemotron-70b-instruct", "NVIDIA NIM")
+        ("https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.3-70b-instruct", "NVIDIA NIM")
     } else {
         ("https://api.openai.com/v1/chat/completions", "gpt-4o-mini", "OpenAI")
     };
@@ -1340,12 +1340,25 @@ async fn chat_handler(
                     } else {
                         err_flat
                     };
+                    let is_403 = err_short.contains("403") || err_short.contains("Forbidden");
+                    let is_nim = ai_config.api_key.starts_with("nvapi-") || ai_config.endpoint.contains("nvidia.com");
+
+                    let note = if is_403 && is_nim {
+                        "\n\n💡 **NVIDIA API Key Note**:\n\
+                        Keys from the **NVIDIA Developer Program / NGC** (`ngc.nvidia.com`) are for container/model downloads and return `403 Forbidden` for cloud inference.\n\n\
+                        **To fix:**\n\
+                        1. Visit **build.nvidia.com** (NVIDIA API Catalog) and sign in.\n\
+                        2. Select any model (e.g. `meta/llama-3.3-70b-instruct` or `meta/llama-3.1-8b-instruct`) and click **Get API Key** (comes with 1,000 free credits).\n\
+                        3. You can also pick a different model in **Settings** using the quick preset buttons."
+                    } else {
+                        "\n\nCheck your API key and connection in **Settings**, or use an offline recipe."
+                    };
+
                     let reply = format!(
                         "⚠️ **Couldn't reach the AI model**\n\n\
                         I tried `{}` and got this error. Nothing has been changed.\n\n\
-                        > `{}`\n\n\
-                        Check your API key and connection in **Settings**, or use an offline recipe.",
-                        ai_config.model, err_short
+                        > `{}`{}",
+                        ai_config.model, err_short, note
                     );
 
                     let options = vec![
