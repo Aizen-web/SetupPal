@@ -1,7 +1,10 @@
-# UI Polish Changes
+# UI Polish & Scope Alignment Changes
 
 ## Completed
 
+- **CLI-Only Setup Scope Boundary**: Refocused orchestrator scope exclusively to software that supports unattended Command-Line Interface (CLI) installation and verification (web stacks, programming languages, compilers, runtimes, SDKs, package managers, and developer utilities).
+- **Launcher & Store Games Exclusion**: Explicitly excluded desktop apps requiring proprietary GUI launchers, interactive store account logins, or DRM wrappers (e.g. Minecraft Bedrock, Steam, Riot, Epic). Updated AI system prompt, host facts generator, UI cards, and suggestion chips to clearly inform the user that only unattended CLI setups are automated and verified.
+- **New Developer Recipes**: Added `web_fullstack_ts.yaml` (Node.js LTS, Git, NPM verification) and `rust_dev.yaml` (Rustup, Cargo, rustc verification) to deterministic recipes.
 - Added shared design and motion tokens, refined chat spacing and user-message
   contrast, improved scrolling, and made speech bubbles and safety/demo surfaces
   respond to Chill and Hacker themes.

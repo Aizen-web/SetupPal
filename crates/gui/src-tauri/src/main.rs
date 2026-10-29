@@ -459,7 +459,7 @@ fn create_deterministic_demo_plan(
     goal: &str,
 ) -> (Plan, PlanSafetyReport, Vec<serde_json::Value>) {
     let clean_goal = if goal.trim().is_empty() {
-        "Minecraft with performance mods".to_string()
+        "Web development and coding environment".to_string()
     } else {
         goal.trim().to_string()
     };
@@ -477,25 +477,7 @@ fn create_deterministic_demo_plan(
         },
         PlannedStep {
             id: "step-2".to_string(),
-            description: format!("Download official release package for '{clean_goal}'"),
-            step: Step::DownloadArtifact {
-                adapter: AdapterKind::OfficialVendorUrl,
-                id: "https://adoptium.net/temurin/releases/OpenJDK21U-jdk_x64_windows.msi".to_string(),
-                version: "21.0.3".to_string(),
-                destination: PathBuf::from("./downloads/runtime-installer.msi"),
-                expected_sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".to_string(),
-            },
-        },
-        PlannedStep {
-            id: "step-3".to_string(),
-            description: "Register verified toolchain on Windows User PATH (HKCU)".to_string(),
-            step: Step::AddToUserPath {
-                directory: PathBuf::from("C:\\Users\\there\\.orchestrator-env\\bin"),
-            },
-        },
-        PlannedStep {
-            id: "step-4".to_string(),
-            description: format!("Install verified performance core for '{clean_goal}'"),
+            description: "Install verified Node.js LTS CLI runtime via Winget".to_string(),
             step: Step::InstallPackage {
                 ecosystem: installer_core::Ecosystem::Winget,
                 package_id: "OpenJS.NodeJS.LTS".to_string(),
@@ -504,13 +486,30 @@ fn create_deterministic_demo_plan(
             },
         },
         PlannedStep {
-            id: "step-5".to_string(),
-            description: format!("Install community add-on 'FastLight Pro' for '{clean_goal}'"),
+            id: "step-3".to_string(),
+            description: "Register verified CLI toolchain on Windows User PATH (HKCU)".to_string(),
+            step: Step::AddToUserPath {
+                directory: PathBuf::from("C:\\Users\\there\\.orchestrator-env\\bin"),
+            },
+        },
+        PlannedStep {
+            id: "step-4".to_string(),
+            description: "Install official Git version control CLI via Winget".to_string(),
             step: Step::InstallPackage {
-                ecosystem: installer_core::Ecosystem::Modrinth,
-                package_id: "FastLight Pro".to_string(),
+                ecosystem: installer_core::Ecosystem::Winget,
+                package_id: "Git.Git".to_string(),
+                version: Some("2.46.0".to_string()),
+                source_adapter: AdapterKind::Winget,
+            },
+        },
+        PlannedStep {
+            id: "step-5".to_string(),
+            description: "Install community add-on 'fast-bundle-cli' via NPM".to_string(),
+            step: Step::InstallPackage {
+                ecosystem: installer_core::Ecosystem::Npm,
+                package_id: "fast-bundle-cli".to_string(),
                 version: Some("0.1.0-alpha".to_string()),
-                source_adapter: AdapterKind::Modrinth,
+                source_adapter: AdapterKind::Npm,
             },
         },
     ];
@@ -519,7 +518,7 @@ fn create_deterministic_demo_plan(
         plan_id: plan_id.clone(),
         goal: clean_goal.clone(),
         summary: format!(
-            "Zero-trust setup plan for '{clean_goal}'. 5 steps evaluated: 4 verified safe (GREEN) and 1 community package held for review (YELLOW)."
+            "Zero-trust CLI setup plan for '{clean_goal}'. 5 steps evaluated: 4 verified safe (GREEN) and 1 community package held for review (YELLOW)."
         ),
         source: installer_core::PlanSource::Recipe {
             recipe_id: "deterministic_zero_trust".to_string(),
@@ -546,11 +545,11 @@ fn create_deterministic_demo_plan(
             step_id: "step-2".to_string(),
             rating: installer_core::RiskRating::Green,
             risk_score: 0,
-            reasons: vec!["Official publisher download verified. Cryptographic SHA-256 matches release manifest.".to_string()],
+            reasons: vec!["Official Winget manifest verified with 30M+ downloads and zero CVEs on OSV.dev.".to_string()],
             signals: installer_core::SafetySignals {
                 sha256_verified: Some(true),
                 domain_allowlisted: Some(true),
-                download_count: Some(25_000_000),
+                download_count: Some(30_000_000),
                 package_age_days: Some(420),
                 ..Default::default()
             },
@@ -574,12 +573,12 @@ fn create_deterministic_demo_plan(
             step_id: "step-4".to_string(),
             rating: installer_core::RiskRating::Green,
             risk_score: 5,
-            reasons: vec!["Official Winget manifest verified with 30M+ downloads and zero CVEs on OSV.dev.".to_string()],
+            reasons: vec!["Official Git Winget package verified with 50M+ downloads and valid cryptographic hash.".to_string()],
             signals: installer_core::SafetySignals {
                 sha256_verified: Some(true),
                 domain_allowlisted: Some(true),
-                download_count: Some(30_000_000),
-                package_age_days: Some(300),
+                download_count: Some(50_000_000),
+                package_age_days: Some(500),
                 ..Default::default()
             },
             suggested_alternative: None,
@@ -615,17 +614,17 @@ fn create_deterministic_demo_plan(
     let step_metadata = vec![
         serde_json::json!({
             "step_id": "step-1",
-            "source_domain": "adoptium.net",
-            "source_url": "https://adoptium.net",
-            "verdict_title": "Verified runtime",
-            "verdict_desc": "Cryptographic signature valid and passed all security checks."
+            "source_domain": "orchestrator.local",
+            "source_url": null,
+            "verdict_title": "Verified sandbox",
+            "verdict_desc": "Local directory isolated from system files."
         }),
         serde_json::json!({
             "step_id": "step-2",
-            "source_domain": "adoptium.net",
-            "source_url": "https://adoptium.net/temurin/releases/",
-            "verdict_title": "Verified publisher",
-            "verdict_desc": "SHA-256 digest matches official publisher release."
+            "source_domain": "nodejs.org",
+            "source_url": "https://nodejs.org",
+            "verdict_title": "Verified runtime",
+            "verdict_desc": "Node.js LTS manifest verified with 30M+ downloads, zero CVEs."
         }),
         serde_json::json!({
             "step_id": "step-3",
@@ -636,17 +635,17 @@ fn create_deterministic_demo_plan(
         }),
         serde_json::json!({
             "step_id": "step-4",
-            "source_domain": "winget.microsoft.com",
-            "source_url": "https://github.com/microsoft/winget-pkgs",
-            "verdict_title": "Verified package",
-            "verdict_desc": "30M+ verified downloads, zero CVEs on OSV.dev."
+            "source_domain": "git-scm.com",
+            "source_url": "https://git-scm.com",
+            "verdict_title": "Verified tool",
+            "verdict_desc": "50M+ verified downloads, zero CVEs on OSV.dev."
         }),
         serde_json::json!({
             "step_id": "step-5",
-            "source_domain": "modrinth.com",
-            "source_url": "https://modrinth.com",
+            "source_domain": "registry.npmjs.org",
+            "source_url": "https://npmjs.com/package/fast-bundle-cli",
             "verdict_title": "Caution advised",
-            "verdict_desc": "Brand new author, low downloads. Held for your call."
+            "verdict_desc": "Brand new package (< 30 days old). Held for your review."
         }),
     ];
 
@@ -784,10 +783,14 @@ async fn test_key_handler(
 }
 
 /// Bump when the prompt or host-facts format changes so the session cache never serves old-style replies.
-const PROMPT_VERSION: &str = "v15-clear-options";
+const PROMPT_VERSION: &str = "v16-cli-scope";
 
 const STATIC_SYSTEM_PROMPT: &str = "\
-You are SetupPal, a friendly assistant that lives on the user's Windows PC and helps them install and set up software safely.\n\
+You are SetupPal, a friendly assistant that lives on the user's Windows PC and helps them install and set up developer tools, coding languages, web environments, and software safely.\n\
+\n\
+Scope and requirements:\n\
+- You ONLY install and configure software that supports unattended Command-Line Interface (CLI) setup (e.g. web frameworks, coding languages, compilers, runtimes, SDKs, package managers like winget/npm/pip/cargo, and developer utilities like Git, Node.js, Python, Rust, Go, C++, Docker, VS Code).\n\
+- Apps requiring proprietary GUI launchers, interactive store account logins, or DRM wrappers (such as games with launchers like Minecraft Bedrock, Steam, Riot, Epic) CANNOT be installed. If the user asks for these, state clearly and politely that SetupPal only installs things that support unattended CLI setup, explain why (launcher apps cannot be verified or run headlessly via CLI), and recommend relevant CLI or developer tools instead.\n\
 \n\
 How you work:\n\
 - Nothing is installed or changed until the user approves a plan. For now you chat, answer questions, and propose what to do.\n\
@@ -795,12 +798,12 @@ How you work:\n\
 - Keep replies short, clear, and in plain language. Bold the key point. No emoji.\n\
 - Only talk about software the user mentioned. Do not suggest unrelated products.\n\
 \n\
-What to do:
-- Only if the user says hi or asks who you are or what you can do: reply in 1 to 2 sentences, say you can install and set up software and check what is on the PC, and ask what they want to set up.\n\
+What to do:\n\
+- Only if the user says hi or asks who you are or what you can do: reply in 1 to 2 sentences, say you can install and set up developer tools, coding languages, and web environments that support unattended CLI setup, and ask what they want to set up.\n\
 - For every other message, do NOT greet, do NOT introduce yourself, and do NOT ask what they want to set up. Start directly with the answer.\n\
 - Questions about their PC: answer directly from the facts.\n\
-- Clear setup request (e.g. 'install Git'): do not interrogate. State what you will do, mention anything relevant already on the PC, and ask only about real decisions. If there is no real decision, ask nothing and say what you will plan next.\n\
-- Broad or vague request (e.g. 'set up C++', 'make my PC ready for coding'): first say what you found on the PC, then offer a short menu of 2 to 4 concrete things you can set up for that topic, each named specifically (for example a compiler, an editor or IDE, a build tool, a package manager) with a few words on what it is for. Mark the best default Recommended. Ask which they want; let them pick several.\n\
+- Clear setup request (e.g. 'install Git' or 'set up Node.js'): do not interrogate. State what you will do, mention anything relevant already on the PC, and ask only about real decisions. If there is no real decision, ask nothing and say what you will plan next.\n\
+- Broad or vague request (e.g. 'set up C++', 'make my PC ready for coding', 'web dev'): first say what you found on the PC, then offer a short menu of 2 to 4 concrete things you can set up for that topic, each named specifically (for example a compiler, an editor or IDE, a build tool, a package manager) with a few words on what it is for. Mark the best default Recommended. Ask which they want; let them pick several.\n\
 - Follow-up answers: when the user picks an option, move forward with it. Never repeat a question they already answered, and never go back to the broad menu.\n\
 - Ask 1 question when one decision is open, up to 3 when several are open, and 0 when nothing is. Every option must be a complete, specific choice the user can click as-is (like `Visual Studio Code` or `MSVC via Visual Studio Build Tools`), never a fragment of a sentence.\n\
 - If something is already installed, say so and only offer to update or add to it if that is useful.\n\
@@ -857,7 +860,7 @@ fn format_host_facts(
         .join(", ");
 
     let mut out = format!(
-        "- OS: {} {} ({})\n- GPU: {}\n- Free disk: {} GB\n- Installed dev tools: {}",
+        "- OS: {} {} ({})\n- GPU: {}\n- Free disk: {} GB\n- CLI support: winget, user-scope PATH available\n- Supported scope: Unattended CLI setups only (web, coding languages, compilers, dev tools)\n- Installed dev tools: {}",
         profile.os_name,
         profile.os_version,
         profile.arch,
@@ -874,23 +877,12 @@ fn format_host_facts(
         .collect::<Vec<_>>()
         .join(" ");
     let blob = format!("{} {}", user_prompt.to_ascii_lowercase(), recent);
-    let minecraft = ["minecraft", "optifine", "fabric", "forge", "modrinth", "modpack", "sodium"]
+    let launcher_requested = ["minecraft", "bedrock", "steam", "riot", "epic", "launcher", "optifine", "roblox"]
         .iter()
         .any(|k| blob.contains(k));
 
-    if minecraft {
-        let java_folder = if mc_info.java_edition_installed {
-            mc_info.java_edition_path.as_deref().unwrap_or("installed")
-        } else {
-            "not found"
-        };
-        let versions = mc_info.installed_versions.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
-        out.push_str(&format!(
-            "\n- Minecraft Java folder: {}\n- Minecraft Bedrock: {}\n- Installed Minecraft versions: {}",
-            java_folder,
-            if mc_info.bedrock_edition_installed { "installed" } else { "not installed" },
-            if versions.is_empty() { "none".to_string() } else { versions }
-        ));
+    if launcher_requested {
+        out.push_str("\n- Note on requested software: The requested application uses a proprietary GUI launcher, store DRM, or interactive account authentication. SetupPal CANNOT install launcher-based apps or store games; remind the user that SetupPal is strictly designed for unattended CLI software, coding languages, web runtimes, and developer toolchains.");
     }
 
     out

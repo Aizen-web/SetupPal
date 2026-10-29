@@ -392,9 +392,12 @@ class Store {
       let newTitle = userText.slice(0, 24);
       let newIcon = '💬';
 
-      if (lower.includes('minecraft') || lower.includes('optifine')) {
-        newTitle = 'Minecraft mods';
-        newIcon = '🎮';
+      if (lower.includes('web') || lower.includes('node') || lower.includes('typescript') || lower.includes('javascript')) {
+        newTitle = 'Web & TypeScript';
+        newIcon = '🌐';
+      } else if (lower.includes('rust') || lower.includes('cargo')) {
+        newTitle = 'Rust toolchain';
+        newIcon = '🦀';
       } else if (lower.includes('python') || lower.includes('venv') || lower.includes('data science')) {
         newTitle = 'Python AI dev';
         newIcon = '🐍';

@@ -1,0 +1,44 @@
+id: rust_dev
+name: Rust Systems Programming Toolchain (Rustup, Cargo, Rustc, Git)
+triggers:
+  - "rust"
+  - "rustup"
+  - "cargo"
+  - "systems"
+summary: "Installs Rust toolchain installer via Winget, verifies cargo and rustc compiler toolchains, and registers User environment."
+steps:
+  - id: step-1
+    description: "Install Rustup toolchain installer via Winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: Rustlang.Rustup
+        version: "1.27.1"
+        source_adapter: winget
+  - id: step-2
+    description: "Install Git version control system via Winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: Git.Git
+        version: "2.46.0"
+        source_adapter: winget
+  - id: step-3
+    description: "Verify rustc --version responds cleanly"
+    step:
+      action: run_verify_command
+      params:
+        binary: rustc
+        args:
+          - "--version"
+  - id: step-4
+    description: "Verify cargo --version responds cleanly"
+    step:
+      action: run_verify_command
+      params:
+        binary: cargo
+        args:
+          - "--version"
+

@@ -1,8 +1,14 @@
 # Zero-Trust AI Environment & Package Orchestrator
 
-An AI-powered installer and environment setup agent in Rust. State a goal in plain English (`"set me up for C++20 dev"`, `"Minecraft 1.21 with Fabric performance mods"`, `"set up this GitHub repo"`), and the orchestrator scans your host machine, checks deterministic YAML recipes first, or uses NVIDIA NIM with `schemars` JSON Schema enforcement to propose a strictly typed `Plan`.
+An AI-powered installer and environment setup agent in Rust. State a goal in plain English (`"set up a fullstack Node & TypeScript web app"`, `"set me up for C++20 dev"`, `"install Rust toolchain"`, `"setup Python AI data science venv"`), and the orchestrator scans your host machine, checks deterministic YAML recipes first, or uses NVIDIA NIM with `schemars` JSON Schema enforcement to propose a strictly typed `Plan`.
 
 Every step passes through a **deterministic Rust Safety Engine** before execution.
+
+## Supported Software Scope
+
+> **Important Scope Boundary**: SetupPal strictly installs software and environments that support **unattended Command-Line Interface (CLI) setup** (such as package managers like `winget`, `npm`, `pypi`, and `cargo`, programming languages, compilers, runtimes, web frameworks, SDKs, and developer utilities).
+>
+> **Not Supported**: Desktop applications requiring proprietary GUI launchers, interactive account logins, or DRM store wrappers (e.g., desktop games with launchers like Minecraft Bedrock, Steam, Epic) are **not supported**. These cannot be sandboxed, cryptographically audited, or installed headlessly through deterministic CLI automation.
 
 ## Workspace Layout
 - `crates/core` (`installer_core`): All domain logic, traits, OS abstraction, system scanner, recipes, LLM client, safety engine, adapters, executor, verifier, healer, and state transaction log.

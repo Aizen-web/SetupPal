@@ -34,11 +34,11 @@ SetupPal enforces a **multi-tiered token optimization pipeline** combining deter
 
 ### 2.3. High-Density XML Host Context Serialization
 * **Location**: [`crates/gui/src-tauri/src/main.rs`](file:///c:/Users/there/Downloads/zero-trust-orchestrator-milestone-2/zero-trust-orchestrator/crates/gui/src-tauri/src/main.rs#L677-L700)
-* **Mechanism**: When custom queries require host inspection context (OS version, GPU, Minecraft launcher status, Java runtime), SetupPal formats the diagnostic state into high-density XML attribute tags rather than multi-line verbose markdown:
+* **Mechanism**: When custom queries require host inspection context (OS version, GPU, CLI toolchain status, installed runtimes), SetupPal formats the diagnostic state into high-density XML attribute tags rather than multi-line verbose markdown:
   ```xml
-  <host_context os="Windows 11" arch="x86_64" gpu="NVIDIA GeForce RTX 4060 Laptop GPU" mc_java="Installed" mc_bedrock="None" java_runtime="25.0.1" mc_versions="1.21.1,1.20.4"/>
+  <host_context os="Windows 11" arch="x86_64" gpu="NVIDIA GeForce RTX 4060 Laptop GPU" cli_tools="git (2.50.1), node (20.17.0), cargo (1.81.0)" disk_gb="158"/>
   ```
-  Installed version directories are capped to the 3 most relevant rather than dumping dozens of legacy directories.
+  Installed dev tool versions are capped to the most relevant rather than dumping raw logs.
 * **Token Savings**: Reduces host pre-flight overhead from **~250 tokens down to ~35 tokens (86% reduction)** per request.
 
 ---

@@ -4,6 +4,13 @@
 
 SetupPal is an AI-powered assistant designed to help non-technical users install and configure software safely. Because an AI planner can be misled by search engine poisoning, hallucinated package names, or malicious copycat projects, SetupPal does not give the AI unrestricted access to the computer. Instead, it places a deterministic, multi-layer safety system between the AI and the operating system. This architecture is designed to contain blast radius and significantly reduce risk: actions are strictly typed, inspected against security databases, executed with the lowest necessary permissions, verified after completion, and recorded in an undoable ledger.
 
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
 ---
 
 ## How a Typical Install Works
@@ -16,6 +23,13 @@ Installing software with SetupPal follows a predictable six-step workflow design
 4. **Narrated Execution:** During execution, SetupPal switches to an active progress view. The pet assistant narrates each action as it occurs (downloading, checking hashes, installing) while maintaining a real-time activity feed.
 5. **Post-Install Verification:** SetupPal tests that the installed tool actually works in a clean, fresh process (such as running `python --version`). It reports the true outcome to the user rather than assuming success.
 6. **One-Click Undo Available:** Every completed task displays an **Undo** button. If the software is unwanted, broken, or installed by mistake, one click reverts the changes, cleans up the files, and restores the environment.
+
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
 
 ---
 
@@ -31,6 +45,13 @@ Security tools often fail non-technical users by showing endless technical alert
 - **Narrow trust accumulation:** Users can optionally check a *"Don't ask me about this kind of thing again"* box, but this trust is strictly scoped to a specific category (such as *"verified winget packages"*). It never applies globally. Any step flagged Yellow or Red will always interrupt and prompt the user regardless of saved preferences.
 - **Undo is the primary safety net:** Because every action is tracked and reversible, the app can safely reduce upfront friction. Users can proceed confidently knowing that unwanted changes can be rolled back cleanly.
 
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
 ---
 
 ## The Traffic-Light System
@@ -38,10 +59,52 @@ Security tools often fail non-technical users by showing endless technical alert
 SetupPal assigns every action a deterministic risk rating based on multi-signal scoring (from 0 to 100):
 
 | Rating | Score Range | What It Means | What the User Sees | User Action Required |
-| :--- | :--- | :--- | :--- | :--- |
+| :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- |
 | **Green** | 0 – 29 | Verified official source, trusted publisher, clean vulnerability record, valid file checksum. | A green badge with verified source links (e.g., `Getting this from python.org`). | None. Auto-approved within the overall plan. |
 | **Yellow** | 30 – 69 | Unverified website, newly published package, low download count, missing checksum, or admin requirement. | A yellow warning card explaining the reason in plain English with the source domain. | One-time approval required to proceed with this step. |
 | **Red** | 70 – 100 | Known vulnerability (CVE), typosquatting / copycat package, search-spoofed domain, or prohibited command. | A red block card explaining the risk, with the official safe alternative highlighted. | Hard block. No override button is provided. |
+
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
 
 ---
 
@@ -53,6 +116,13 @@ Every download or install action shown in the UI must clearly state its origin:
 - **Actual domain guarantee:** The displayed domain must always be the real network host where the file originates. SetupPal never substitutes friendly display names that could mask the underlying URL.
 - **Untrusted domain flagging:** If a download source does not match the hardcoded official allowlist or verified consensus, SetupPal displays the raw domain and automatically flags the step as Yellow or Red. Showing the real domain provides an intentional, visible layer of defense where deceptive or misspelled domains stand out to users and reviewers.
 
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
 ---
 
 ## Plain-Language UI Translations
@@ -60,7 +130,28 @@ Every download or install action shown in the UI must clearly state its origin:
 Security warnings must be understandable to anyone. SetupPal translates technical findings into plain English across all UI views:
 
 | Technical Finding / Signal | Plain-English UI Translation | User-Facing Explanation |
-| :--- | :--- | :--- |
+| :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- |
 | SHA-256 digest match | Verified source | "File fingerprint matches the official release." |
 | Typosquat match (edit distance 1–2) | Lookalike warning | "This looks like an unofficial copy of the popular package `<name>`." |
 | Active OSV CVE vulnerability | Known security flaw | "This version has an unresolved security issue. SetupPal recommends version `<version>` instead." |
@@ -71,6 +162,13 @@ Security warnings must be understandable to anyone. SetupPal translates technica
 | Verification API timeout / offline | Verification unavailable | "Couldn't reach our safety checks right now. Proceed with caution?" |
 | Missing upstream checksum | Unchecked file integrity | "The publisher did not provide a checksum to verify file integrity." |
 | Requires UAC / Administrator | Administrator access needed | "This tool requires administrator approval to install system-level components." |
+
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
 
 ---
 
@@ -116,6 +214,21 @@ SetupPal implements five distinct protection layers between the AI's suggestions
   Clicking **Undo** executes these rollback actions in reverse order to return the system to its prior state.
 - **Limitations:** Rollback can only remove files, directories, packages, and environment settings that SetupPal managed. If an installed application created independent files outside its designated directory during runtime, the basic uninstaller might leave those files behind.
 
+
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal strictly installs software, toolchains, runtimes, compilers, and packages that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. winget install --silent, pip, 
+pm, cargo, official vendor silent flags like /quiet).
+- **Out-of-Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., desktop games with launchers like Minecraft Bedrock, Steam, Riot, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI without interactive user intervention.
+  2. Require interactive OAuth/Xbox/Store authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or dynamic launcher binaries that cannot be cryptographically verified against public, static SHA-256 release digests.
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
 ---
 
 ## Handling Admin-Required Installs
@@ -127,6 +240,13 @@ Certain software—such as hardware drivers, low-level system runtimes, and game
 3. **Explicit rationale:** The UI explains why administrator rights are needed (e.g., *"This driver requires administrator access to register system hardware components"*).
 4. **Standard Windows UAC prompt:** SetupPal does not bypass or automate Windows User Account Control; the user will still see the standard Windows system prompt before elevated execution can proceed.
 
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
 ---
 
 ## Failure Modes and Defaults
@@ -137,6 +257,13 @@ When network services or verification checks experience disruptions, SetupPal fo
 - **Ambiguous packages:** If a requested package name matches multiple candidates or registries with conflicting information, SetupPal defaults to Yellow and prompts the user to select the authentic publisher.
 - **Checksum mismatches:** If a downloaded file does not match its expected SHA-256 hash, execution immediately terminates with a **Red** rating. The corrupt or modified file is not executed.
 - **Post-install verification failure:** If an installed binary cannot be invoked or fails its version/sanity test (e.g., `python --version` returns an error), SetupPal marks the task as failed, notifies the user honestly, and presents the option to Undo the installation.
+
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
 
 ---
 
@@ -150,6 +277,13 @@ To maintain realistic expectations, users and security evaluators should underst
 4. **Application-level software bugs:** SetupPal verifies the integrity and provenance of software packages, but cannot guarantee that third-party software is bug-free, stable, or compatible with other tools on the machine.
 5. **Intentional override of warnings:** If a user chooses to approve a Yellow-rated step containing unverified software, SetupPal will execute it as requested.
 
+### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
 ---
 
 ## Technical Appendix
@@ -162,13 +296,160 @@ Risk scores are normalized integers from `0` to `100`. The overall plan rating e
 
 ```
 Risk Scores:
-  0 ------------ 29 | 30 ------------------------ 69 | 70 ---------------- 100
+  0 ### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- 29 | 30 ### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- 69 | 70 ### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+---- 100
        GREEN        |              YELLOW             |            RED
   (Auto-approvable) |     (Explicit consent needed)   |      (Hard blocked)
 ```
 
 | Signal / Evaluation Condition | Assigned Score | Resulting Rating | Implementation Module |
-| :--- | :--- | :--- | :--- |
+| :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- |
 | Hard policy violation (shell metacharacters, prohibited commands, credential store access) | `100` | **Red** | `crates/core/src/safety/policy.rs` |
 | SHA-256 verification mismatch | `100` | **Red** | `crates/core/src/safety/hash.rs` |
 | Tavily search consensus confirms spoofed / lookalike domain | `100` | **Red** | `crates/core/src/safety/tavily.rs` |
@@ -257,7 +538,28 @@ All state modifications are appended to `.orchestrator_state.jsonl` as structure
 ### 5. Deterministic Rollback Mappings
 
 | Action Type | Ledger Data Type (`RollbackData`) | Rollback Mechanism Executed on Undo |
-| :--- | :--- | :--- |
+| :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- | :### Operational Boundary: Unattended CLI Setup Only
+- **Requirement:** SetupPal only manages software, runtimes, compilers, and tools that support **unattended Command-Line Interface (CLI) installation and verification** (e.g. `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags).
+- **Out of Scope (Launcher-based & GUI Store Apps):** Applications requiring interactive GUI launchers, DRM activation, or proprietary store account logins (e.g., games with launchers like Minecraft Bedrock, Steam, Epic) are explicitly rejected. These apps:
+  1. Cannot be executed or verified headlessly via CLI.
+  2. Require interactive authentication popups that break automated verification.
+  3. Distribute proprietary, encrypted AppX/MSIX or launcher blobs that cannot be cryptographically verified against public, static SHA-256 release digests.
+
+--- |
 | `InstallPackage` | `PackageInstall` | Spawns registered silent uninstaller (e.g., `winget uninstall <ID> --silent` or `pip uninstall -y <ID>`). |
 | `DownloadArtifact` | `FileDownload` | Deletes the downloaded artifact file directly from the filesystem (`std::fs::remove_file`). |
 | `CreateIsolatedEnv` | `IsolatedEnv` | Recursively removes the isolated directory (`std::fs::remove_dir_all`), such as `.venv/`. |

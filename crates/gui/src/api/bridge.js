@@ -487,7 +487,7 @@ export class BackendBridge {
 
     try {
       if (!this.activeExecutionPlan) {
-        const initialGoal = store.getState().activePlan?.title || "Minecraft with performance mods";
+        const initialGoal = store.getState().activePlan?.title || "Web and TypeScript development stack";
         const data = await apiClient.createPlan(initialGoal);
         this.activeExecutionPlan = data.plan;
       }

@@ -184,20 +184,20 @@ export function renderChatView(container) {
               </div>
 
               <p class="ask-card-desc">
-                Tell me what you'd like to set up. I'll inspect your system, ask clarifying questions, and formulate a verified setup plan.
+                Tell me what you'd like to set up. I can configure web environments, coding languages, and developer tools that support unattended CLI setup.
               </p>
 
               <!-- 3 Starter Cards in 3-column row -->
               <div class="starter-cards-grid">
-                <!-- Card 1: Minecraft & OptiFine -->
-                <div class="starter-card" data-prompt="I want to download minecraft mods like optifine.">
+                <!-- Card 1: Web & TypeScript Stack -->
+                <div class="starter-card" data-prompt="set up fullstack Node.js and TypeScript web environment">
                   <div class="starter-card-top">
                     <div class="terminal-square-icon-sm">>_</div>
-                    <div class="starter-card-title">Minecraft & OptiFine</div>
+                    <div class="starter-card-title">Web & TypeScript<br/>Stack</div>
                     <div class="starter-card-arrow">${icon('arrowRight', 16)}</div>
                   </div>
                   <div class="starter-card-body">
-                    Install and configure Minecraft with OptiFine, mods, and performance tweaks.
+                    Install Node.js LTS, TypeScript, Vite, NPM, and modern web build tooling.
                   </div>
                 </div>
 
@@ -230,9 +230,9 @@ export function renderChatView(container) {
               <div class="dry-run-pill-row">
                 <div class="dry-run-pill">
                   <span class="dry-run-green-dot"></span>
-                  <span>Dry-Run Simulation Active</span>
+                  <span>Unattended CLI Setups Only</span>
                   <span class="dry-run-dot-sep">•</span>
-                  <span>No random downloads will ever alter your machine</span>
+                  <span>Web stacks, runtimes & coding languages only (no launchers)</span>
                 </div>
               </div>
             </div>
@@ -302,7 +302,7 @@ export function renderChatView(container) {
 
         <!-- Suggestion Chips matching screenshot -->
         <div class="chips-row">
-          <button class="suggestion-chip" data-chip="minecraft">Minecraft + mods</button>
+          <button class="suggestion-chip" data-chip="web">Web & TypeScript</button>
           <button class="suggestion-chip" data-chip="cpp">C++ toolchain</button>
           <button class="suggestion-chip" data-chip="python">Python data science</button>
           <button class="suggestion-chip chip-attack" data-chip="attack">
@@ -545,8 +545,8 @@ export function renderChatView(container) {
       sounds.play('ui.click');
       if (type === 'attack') {
         bridge.runAttackRadar();
-      } else if (type === 'minecraft') {
-        const goal = 'I want to download minecraft mods like optifine.';
+      } else if (type === 'web') {
+        const goal = 'set up fullstack Node.js and TypeScript web environment';
         petVoiceEngine.trigger('prompt_selected', { prompt: goal });
         bridge.submitGoal(goal);
       } else if (type === 'cpp') {

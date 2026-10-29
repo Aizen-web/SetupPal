@@ -1,0 +1,56 @@
+id: web_fullstack_ts
+name: Modern Web & TypeScript Development Stack (Node.js LTS, Git, NPM)
+triggers:
+  - "web"
+  - "web dev"
+  - "typescript"
+  - "node"
+  - "nodejs"
+  - "fullstack"
+  - "frontend"
+  - "javascript"
+summary: "Installs Node.js LTS, NPM package manager, and Git via Winget with verified SHA-256 digests and confirms CLI toolchain readiness."
+steps:
+  - id: step-1
+    description: "Install Node.js LTS runtime and NPM via Winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: OpenJS.NodeJS.LTS
+        version: "20.17.0"
+        source_adapter: winget
+  - id: step-2
+    description: "Install Git version control system via Winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: Git.Git
+        version: "2.46.0"
+        source_adapter: winget
+  - id: step-3
+    description: "Verify node --version responds cleanly"
+    step:
+      action: run_verify_command
+      params:
+        binary: node
+        args:
+          - "--version"
+  - id: step-4
+    description: "Verify npm --version responds cleanly"
+    step:
+      action: run_verify_command
+      params:
+        binary: npm
+        args:
+          - "--version"
+  - id: step-5
+    description: "Verify git --version responds cleanly"
+    step:
+      action: run_verify_command
+      params:
+        binary: git
+        args:
+          - "--version"
+
