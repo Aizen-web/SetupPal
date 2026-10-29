@@ -781,49 +781,186 @@ async fn test_key_handler(
     }
 }
 
+/// Bump when the system prompt / host-context shape changes so session cache cannot serve stale biased replies.
+const PROMPT_VERSION: &str = "v9-general-installer";
+
 const STATIC_SYSTEM_PROMPT: &str = "\
-You are SetupPal, a careful setup assistant. Your replies render in a compact chat UI, so follow this format exactly.\n\
+You are SetupPal, a careful setup assistant for this PC.\n\
+Follow the instruction block in the user message exactly.\n\
 \n\
 Rules:\n\
-- Open with ONE bold sentence stating what you understood, then one short sentence saying nothing has been changed yet.\n\
-- No emoji. No headings named \"Section\". One fact per list item; never chain facts with bullets inside a paragraph.\n\
-- State only facts found in <host_context>. Never invent versions, sizes, speeds, or \"Nx faster\" claims.\n\
-\n\
-Use only the blocks that apply:\n\
-\n\
-### System check\n\
-- **Label**: `value` (Status: Verified | Attention | Missing | Skipped) — short note\n\
-Include only items relevant to the task; mark irrelevant ones Skipped.\n\
-\n\
-### Your choices\n\
-1. **Question name**: `Option A` (Recommended) — one-line trade-off | `Option B` — one-line trade-off\n\
-Ask at most 3 questions with 2-3 options each, separated by |. Put the safest default first and mark it Recommended.\n\
-\n\
-Sources I'll check: domain.com · other.com\n\
-\n\
-Next: one short sentence saying what happens after the user chooses.\n\
-\n\
-For a plain question or explanation, answer in short paragraphs and lists with no blocks.";
+- Start with ONE bold sentence, then the line: Nothing has been changed yet.\n\
+- No emoji. Never invent versions, sizes, speeds, or benchmarks.\n\
+- Use only facts from <host_context>. Human labels only (OS, GPU, Java, Python, Node, Minecraft folder).\n\
+- Never print XML attribute names. Never dump unrelated tools.\n\
+- Never steer to a product the user did not mention.\n\
+- Never output placeholders like MODE A/B/C, \"Real question\", \"short note\", or \"publisher.example\".";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostContextMode {
+    Minimal,
+    GeneralTools,
+    Minecraft,
+    Python,
+    Node,
+    Cpp,
+}
+
+fn detect_host_context_mode(user_prompt: &str, history: &[ChatMessageItem]) -> HostContextMode {
+    let blob = {
+        let mut s = user_prompt.to_ascii_lowercase();
+        for m in history.iter().rev().take(4) {
+            s.push(' ');
+            s.push_str(&m.content.to_ascii_lowercase());
+        }
+        s
+    };
+
+    // Hardware / OS fact questions only need the base fields always included in host_context.
+    if (blob.contains("gpu") || blob.contains("graphics") || blob.contains("disk") || blob.contains("what os"))
+        && !(blob.contains("install") || blob.contains("minecraft") || blob.contains("python") || blob.contains("node"))
+    {
+        return HostContextMode::Minimal;
+    }
+
+    let vague = matches!(
+        blob.trim(),
+        "" | "hi" | "hello" | "hey" | "test" | "help" | "what can you do" | "what can you do?" | "what do you do" | "what do you do?"
+    ) || blob.trim().len() <= 4 && !blob.contains(' ');
+
+    if vague
+        && !blob.contains("minecraft")
+        && !blob.contains("python")
+        && !blob.contains("node")
+        && !blob.contains("c++")
+    {
+        return HostContextMode::Minimal;
+    }
+
+    if blob.contains("minecraft")
+        || blob.contains("optifine")
+        || blob.contains("fabric")
+        || blob.contains("forge")
+        || blob.contains("neoforge")
+        || blob.contains("modrinth")
+        || blob.contains("modpack")
+        || blob.contains("shader")
+        || blob.contains("sodium")
+        || blob.contains("iris")
+    {
+        return HostContextMode::Minecraft;
+    }
+    if blob.contains("python") || blob.contains("pytorch") || blob.contains("jupyter") || blob.contains("pip ")
+    {
+        return HostContextMode::Python;
+    }
+    if blob.contains("node") || blob.contains("npm") || blob.contains("javascript") || blob.contains("typescript")
+    {
+        return HostContextMode::Node;
+    }
+    if blob.contains("c++") || blob.contains("cpp") || blob.contains("cmake") || blob.contains("compiler")
+    {
+        return HostContextMode::Cpp;
+    }
+    HostContextMode::GeneralTools
+}
+
+fn tool_version(profile: &installer_core::SystemProfile, name: &str) -> Option<String> {
+    profile.installed_tools.iter().find_map(|t| {
+        if t.binary.executable_name() == name {
+            let ver = t.version_output.lines().next().unwrap_or("").trim();
+            let ver_short = if ver.len() > 56 {
+                format!("{}...", &ver[..ver.floor_char_boundary(56)])
+            } else {
+                ver.to_string()
+            };
+            Some(ver_short.replace('"', "'"))
+        } else {
+            None
+        }
+    })
+}
 
 fn format_compact_host_context(
-    mc_info: &MinecraftInspection,
     profile: &installer_core::SystemProfile,
+    mc_info: &MinecraftInspection,
+    mode: HostContextMode,
 ) -> String {
-    let mc_java = if mc_info.java_edition_installed {
-        mc_info.java_edition_path.as_deref().unwrap_or("Installed")
-    } else {
-        "None"
-    };
-    let mc_bedrock = if mc_info.bedrock_edition_installed { "Installed" } else { "None" };
-    let java_ver = mc_info.java_runtime_version.as_deref().unwrap_or("None");
-    let gpu = mc_info.gpu_detected.as_deref().unwrap_or("Standard");
-    let versions_sample = mc_info.installed_versions.iter().take(3).cloned().collect::<Vec<_>>().join(",");
-    let versions_str = if versions_sample.is_empty() { "none" } else { &versions_sample };
+    let gpu = profile
+        .gpu_detected
+        .as_deref()
+        .or(mc_info.gpu_detected.as_deref())
+        .unwrap_or("unknown");
+    let disk_gb = profile.free_disk_bytes / (1024 * 1024 * 1024);
 
-    format!(
-        "<host_context os=\"{} {}\" arch=\"{}\" gpu=\"{}\" mc_java=\"{}\" mc_bedrock=\"{}\" java_runtime=\"{}\" mc_versions=\"{}\"/>",
-        profile.os_name, profile.os_version, profile.arch, gpu, mc_java, mc_bedrock, java_ver, versions_str
-    )
+    let mut xml = format!(
+        "<host_context os=\"{} {}\" arch=\"{}\" gpu=\"{}\" free_disk_gb=\"{}\"",
+        profile.os_name, profile.os_version, profile.arch, gpu, disk_gb
+    );
+
+    let push_tool = |xml: &mut String, name: &str| {
+        if let Some(ver) = tool_version(profile, name) {
+            xml.push_str(&format!(" {name}=\"{ver}\""));
+        }
+    };
+
+    match mode {
+        HostContextMode::Minimal => {}
+        HostContextMode::GeneralTools => {
+            for name in ["git", "python", "node", "java", "winget", "cargo"] {
+                push_tool(&mut xml, name);
+            }
+        }
+        HostContextMode::Minecraft => {
+            push_tool(&mut xml, "java");
+            push_tool(&mut xml, "git");
+            let mc_java = if mc_info.java_edition_installed {
+                mc_info.java_edition_path.as_deref().unwrap_or("Installed")
+            } else {
+                "None"
+            };
+            let mc_bedrock = if mc_info.bedrock_edition_installed {
+                "Installed"
+            } else {
+                "None"
+            };
+            let versions_sample = mc_info
+                .installed_versions
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",");
+            let versions_str = if versions_sample.is_empty() {
+                "none"
+            } else {
+                &versions_sample
+            };
+            xml.push_str(&format!(
+                " minecraft_folder=\"{}\" minecraft_bedrock=\"{}\" minecraft_versions=\"{}\"",
+                mc_java, mc_bedrock, versions_str
+            ));
+        }
+        HostContextMode::Python => {
+            push_tool(&mut xml, "python");
+            push_tool(&mut xml, "pip");
+            push_tool(&mut xml, "git");
+        }
+        HostContextMode::Node => {
+            push_tool(&mut xml, "node");
+            push_tool(&mut xml, "npm");
+            push_tool(&mut xml, "git");
+        }
+        HostContextMode::Cpp => {
+            push_tool(&mut xml, "g++");
+            push_tool(&mut xml, "clang++");
+            push_tool(&mut xml, "cmake");
+            push_tool(&mut xml, "git");
+        }
+    }
+
+    xml.push_str("/>");
+    xml
 }
 
 fn distill_history(raw_history: &[ChatMessageItem]) -> (Vec<ChatMessageItem>, usize) {
@@ -883,11 +1020,81 @@ fn distill_history(raw_history: &[ChatMessageItem]) -> (Vec<ChatMessageItem>, us
     (items, compacted_count)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplyMode {
+    Vague,
+    Fact,
+    Install,
+}
+
+fn detect_reply_mode(user_prompt: &str) -> ReplyMode {
+    let l = user_prompt.trim().to_ascii_lowercase();
+    let vague = matches!(
+        l.as_str(),
+        "" | "hi" | "hello" | "hey" | "test" | "help" | "what can you do" | "what can you do?"
+            | "what do you do" | "what do you do?" | "who are you" | "who are you?"
+    ) || (l.len() <= 4 && !l.contains(' '));
+
+    if vague {
+        return ReplyMode::Vague;
+    }
+
+    let fact = l.starts_with("what ")
+        || l.starts_with("which ")
+        || l.starts_with("do i have")
+        || l.starts_with("is ")
+        || l.contains("what gpu")
+        || l.contains("what os")
+        || l.contains("how much disk");
+
+    if fact && !(l.contains("install") || l.contains("set up") || l.contains("setup") || l.contains("download"))
+    {
+        return ReplyMode::Fact;
+    }
+
+    ReplyMode::Install
+}
+
+fn reply_mode_instruction(mode: ReplyMode) -> &'static str {
+    match mode {
+        ReplyMode::Vague => "\
+Instruction: The user did not name a product.\n\
+Reply with exactly:\n\
+**I am ready to help.**\n\
+Nothing has been changed yet.\n\
+I help install and configure software safely on this PC.\n\
+What would you like to set up?\n\
+Stop. No System check. No choices. No product names.",
+        ReplyMode::Fact => "\
+Instruction: Answer only the asked fact from <host_context>.\n\
+Reply shape:\n\
+**One bold sentence with the answer.**\n\
+Nothing has been changed yet.\n\
+Optional: one short supporting sentence.\n\
+Do not mention unrelated tools. Do not show System check or choices.",
+        ReplyMode::Install => "\
+Instruction: The user already named a product or install task. Stay on that topic.\n\
+Do NOT ask what they want to set up.\n\
+Only mention tools/facts that appear in <host_context>. Never invent Missing tools that are absent from host facts.\n\
+After the required opener, output:\n\
+### System check\n\
+At most 4 relevant rows. Format:\n\
+- **Label**: `value` (Status: Verified | Attention | Missing | Skipped) — short note\n\
+### Your choices\n\
+1. **Question**: `Option A` (Recommended) — trade-off | `Option B` — trade-off\n\
+At most 3 questions, 2-3 options each, safest first marked Recommended.\n\
+Sources I'll check: real publisher domains for this product\n\
+Next: one sentence that you will draft a verified plan after they choose.\n\
+Use real question names for their product. Never copy template placeholders.",
+    }
+}
+
 async fn call_ai_chat(
     ai_config: &ResolvedAiConfig,
     user_prompt: &str,
     history: &[ChatMessageItem],
     compact_host_context: &str,
+    reply_mode: ReplyMode,
 ) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(45))
@@ -913,9 +1120,10 @@ async fn call_ai_chat(
         }));
     }
 
-    // 3. User prompt accompanied by high-density XML host context
+    // 3. Server-chosen reply mode + host facts + user message
     let formatted_user_turn = format!(
-        "{}\n{}",
+        "{}\n\nHost facts:\n{}\n\nUser message:\n{}",
+        reply_mode_instruction(reply_mode),
         compact_host_context,
         user_prompt
     );
@@ -1061,7 +1269,14 @@ async fn chat_handler(
     let hist_sig = req.history.as_deref().map(|h| {
         h.iter().map(|i| format!("{}:{}", i.role, i.content.chars().take(20).collect::<String>())).collect::<Vec<_>>().join(";")
     }).unwrap_or_default();
-    let cache_key = format!("{}:{}:{}:{}", ai_config.model, ai_config.endpoint, hist_sig, raw_msg.to_ascii_lowercase());
+    let cache_key = format!(
+        "{}:{}:{}:{}:{}",
+        PROMPT_VERSION,
+        ai_config.model,
+        ai_config.endpoint,
+        hist_sig,
+        raw_msg.to_ascii_lowercase()
+    );
 
     // Session cache of real AI replies only
     {
@@ -1086,11 +1301,13 @@ async fn chat_handler(
         goal: raw_msg.to_string(),
     });
 
-    let compact_host_xml = format_compact_host_context(&mc_info, &profile);
     let raw_hist = req.history.as_deref().unwrap_or(&[]);
+    let host_mode = detect_host_context_mode(raw_msg, raw_hist);
+    let reply_mode = detect_reply_mode(raw_msg);
+    let compact_host_xml = format_compact_host_context(&profile, &mc_info, host_mode);
     let (distilled_history, _) = distill_history(raw_hist);
 
-    match call_ai_chat(&ai_config, raw_msg, &distilled_history, &compact_host_xml).await {
+    match call_ai_chat(&ai_config, raw_msg, &distilled_history, &compact_host_xml, reply_mode).await {
         Ok(ai_reply) => {
             {
                 let mut cache = state.ai_cache.write().await;
