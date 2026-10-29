@@ -62,6 +62,8 @@ export class BackendBridge {
   constructor() {
     this.isBackendOnline = false;
     this.activeExecutionPlan = null;
+    this.chatControllers = new Map();
+    this.chatQueues = new Map();
     this._connectionPromise = new Promise(resolve => {
       this._resolveConnection = resolve;
     });
@@ -294,181 +296,208 @@ export class BackendBridge {
     }
   }
 
-  async submitGoal(goal) {
+  submitGoal(goal) {
+    const conversationId = store.getState().activeConversationId;
+    const previous = this.chatQueues.get(conversationId) || Promise.resolve();
+    const current = previous.catch(() => null).then(() => this.runChatTurn(goal, conversationId));
+    this.chatQueues.set(conversationId, current);
+    const clearQueue = () => {
+      if (this.chatQueues.get(conversationId) === current) this.chatQueues.delete(conversationId);
+    };
+    current.then(clearQueue, clearQueue);
+    return current;
+  }
+
+  stopChat(conversationId = store.getState().activeConversationId) {
+    this.chatControllers.get(conversationId)?.abort();
+  }
+
+  async runChatTurn(goal, conversationId) {
+    const activePet = store.getState().activePet || 'ghost';
     sounds.play('msg.send');
-    store.updateConversationTitleFromMessage(goal);
+    if (store.getState().activeConversationId === conversationId) {
+      store.updateConversationTitleFromMessage(goal);
+    }
     petVoiceEngine.trigger('thinking', { query: goal });
 
     const userMsg = {
-      id: 'u_' + Date.now(),
+      id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       sender: 'user',
       text: goal,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-
-    store.setState(s => ({
-      ...s,
-      chatMessages: [...s.chatMessages, userMsg],
-      terminalLogs: [
-        ...(s.terminalLogs || []).slice(-100),
-        { id: Date.now() + Math.random(), text: `> user inquiry: "${goal}"`, type: 'info' }
-      ]
+    store.appendConversationMessage(conversationId, userMsg);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const state = store.getState();
+      if (state.activeConversationId !== conversationId || state.activePage !== 'chats') return;
+      const scrollArea = document.querySelector('#main-view-container .workspace-scroll-area');
+      if (scrollArea) scrollArea.scrollTop = scrollArea.scrollHeight;
     }));
-
-    if (!this.isBackendOnline) {
-      store.setMascotState('scanning', petVoiceEngine.line('thinking'));
-      const ready = await this.waitForConnection(3500);
-      if (!ready) {
-        const health = await apiClient.checkHealth(1000);
-        if (health) this.isBackendOnline = true;
-      }
+    if (store.getState().activeConversationId === conversationId) {
+      store.setState(s => ({
+        ...s,
+        terminalLogs: [
+          ...(s.terminalLogs || []).slice(-100),
+          { id: Date.now() + Math.random(), text: '> user inquiry received', type: 'info' }
+        ]
+      }));
     }
 
-    try {
-      // Build token-efficient history for conversational AI (windowed & distilled)
-      // Exclude the current message just pushed to store so it is not duplicated in prompt
-      const allMsgs = store.getState().chatMessages || [];
-      const previousTurns = allMsgs.length > 1 ? allMsgs.slice(0, -1) : [];
-      // Send the whole conversation (each message size-capped). The backend folds older turns
-      // into short notes, so nothing the user said is forgotten and tokens stay small.
-      const history = previousTurns.slice(-60).map(m => ({
-        role: m.sender === 'user' ? 'user' : 'assistant',
-        content: (m.text || '').trim().slice(0, 1200)
-      }));
+    const assistantId = `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const assistant = {
+      id: assistantId,
+      sender: 'assistant',
+      text: '',
+      options: [],
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      planAttached: false,
+      isStreaming: true,
+      pet: activePet,
+    };
+    const controller = new AbortController();
+    this.chatControllers.set(conversationId, controller);
+    store.appendConversationMessage(conversationId, assistant);
+    if (store.getState().activeConversationId === conversationId) {
+      store.setState({ isChatGenerating: true });
+    }
 
-      let data;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          data = await apiClient.sendChat(goal, history, store.getState().activePet || 'ghost');
-          break;
-        } catch (err) {
-          const isTransient = err?.message && (
-            err.message.includes('fetch') ||
-            err.message.includes('500') ||
-            err.message.includes('502') ||
-            err.message.includes('503') ||
-            err.message.includes('ECONNREFUSED')
-          );
-          if (isTransient && attempt < 2) {
-            console.warn(`sendChat transient error (attempt ${attempt + 1}), retrying in 500ms...`, err);
-            await new Promise(r => setTimeout(r, 500));
-          } else {
-            throw err;
-          }
+    let reply = '';
+    let pendingText = '';
+    let frame = null;
+    let completed = null;
+    const flush = () => {
+      frame = null;
+      reply = pendingText;
+      store.updateConversationMessage(conversationId, assistantId, { text: reply, isStreaming: true });
+      window.dispatchEvent(new CustomEvent('setuppal:stream-delta', {
+        detail: { conversationId, messageId: assistantId, text: reply }
+      }));
+    };
+    const persistTimer = window.setInterval(() => {
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+        flush();
+      }
+      store.persistConversations();
+    }, 1000);
+
+    try {
+      if (!this.isBackendOnline) {
+        store.setMascotState('scanning', petVoiceEngine.line('thinking'));
+        const ready = await this.waitForConnection(3500);
+        if (!ready) {
+          const health = await apiClient.checkHealth(1000);
+          if (health) this.isBackendOnline = true;
         }
       }
 
-      setLastContext(data.context);
+      const previousTurns = store.getConversationMessages(conversationId)
+        .filter(message =>
+          message.id !== assistantId &&
+          message.id !== userMsg.id &&
+          !message.isStreaming &&
+          !message.stopped &&
+          !message.failed
+        );
+      const history = previousTurns.slice(-60).map(message => ({
+        role: message.sender === 'user' ? 'user' : 'assistant',
+        content: (message.text || '').trim().slice(0, 1200)
+      }));
 
-      if (data.plan && data.safety) {
-        const plan = data.plan;
-        const safety = data.safety;
-        this.activeExecutionPlan = plan;
+      await apiClient.sendChatStream(goal, history, activePet, {
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (event.type === 'message.delta' && typeof event.text === 'string') {
+            pendingText += event.text;
+            if (frame === null) frame = requestAnimationFrame(flush);
+          } else if (event.type === 'message.end') {
+            completed = event;
+          } else if (event.type === 'message.error') {
+            throw new Error(event.message || 'The response stream failed.');
+          }
+        }
+      });
 
-        const safeStepsCount = (safety.step_reports || []).filter(r => (r.rating || '').toLowerCase() === 'green').length;
-        const heldStepsCount = (safety.step_reports || []).filter(r => (r.rating || '').toLowerCase() === 'yellow').length;
-        const blockedStepsCount = (safety.step_reports || []).filter(r => (r.rating || '').toLowerCase() === 'red').length;
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+        flush();
+      }
+      if (!completed) throw new Error('The response stream ended before completion.');
 
-        const tasks = plan.steps.map((s, idx) => {
-          const report = (safety.step_reports || []).find(r => r.step_id === s.id);
-          const meta = (data.step_metadata || []).find(m => m.step_id === s.id);
-          const rating = (report?.rating || 'green').toUpperCase();
-          const details = formatStepDetails(s.step);
-
-          return {
-            id: s.id,
-            num: idx + 1,
-            title: s.description,
-            desc: details.desc,
-            source: details.source,
-            sourceDomain: meta?.source_domain || details.source,
-            sourceUrl: meta?.source_url || null,
-            verdictTitle: meta?.verdict_title || (rating === 'GREEN' ? 'Verified source' : rating === 'YELLOW' ? 'Caution advised' : 'Safety block'),
-            verdictDesc: meta?.verdict_desc || (report?.reasons?.[0] || 'Checked by zero-trust radar'),
-            verdict: rating,
-            status: rating === 'RED' ? 'blocked' : rating === 'YELLOW' ? 'held' : 'waiting',
-            reversible: true,
-            reasons: report?.reasons || [],
-            rawStep: s
-          };
+      reply = completed.reply || reply;
+      if (completed.context) setLastContext(completed.context);
+      store.updateConversationMessage(conversationId, assistantId, {
+        text: reply,
+        options: [],
+        isStreaming: false,
+      });
+      store.persistConversations();
+      if (store.getState().activeConversationId === conversationId) {
+        store.setState(s => ({
+          ...s,
+          isChatGenerating: false,
+          chatMessages: s.chatMessages.map(message =>
+            message.id === assistantId ? { ...message, text: reply, isStreaming: false } : message
+          ),
+          terminalLogs: [
+            ...s.terminalLogs,
+            { id: Date.now() + Math.random(), text: '> assistant response complete', type: 'green' }
+          ]
+        }));
+      }
+      sounds.play('msg.receive');
+      petVoiceEngine.trigger('questions_asked');
+      return { reply, context: completed.context || null };
+    } catch (error) {
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+        flush();
+      }
+      if (controller.signal.aborted) {
+        store.updateConversationMessage(conversationId, assistantId, {
+          text: reply,
+          isStreaming: false,
+          stopped: true,
         });
-
-        const subtitle = `${plan.steps.length} steps · ${safeStepsCount} safe${heldStepsCount > 0 ? ` · ${heldStepsCount} held` : ''}${blockedStepsCount > 0 ? ` · ${blockedStepsCount} blocked` : ''}`;
-
-        store.setState(s => ({
-          ...s,
-          activePlan: {
-            id: plan.plan_id,
-            title: plan.goal || plan.summary,
-            subtitle: subtitle,
-            safety: 'strict',
-            status: 'awaiting_approval',
-            tasks: tasks
-          },
-          chatMessages: [
-            ...s.chatMessages,
-            {
-              id: 'a_' + Date.now(),
-              sender: 'assistant',
-              text: data.reply,
-              options: data.options || [],
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              planAttached: true
-            }
-          ],
-          terminalLogs: [
-            ...s.terminalLogs,
-            { id: Date.now() + Math.random(), text: `✓ zero-trust plan synthesized: ${plan.steps.length} verified actions`, type: 'green' }
-          ]
-        }));
-
-        sounds.play('msg.receive');
-        petVoiceEngine.trigger('plan_ready', { stepCount: tasks.length });
-      } else {
-        // Clarification / Problem Definition Phase (Questions asked, waiting for user response)
-        store.setState(s => ({
-          ...s,
-          chatMessages: [
-            ...s.chatMessages,
-            {
-              id: 'a_' + Date.now(),
-              sender: 'assistant',
-              text: data.reply,
-              options: data.options || [],
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              planAttached: false
-            }
-          ],
-          terminalLogs: [
-            ...s.terminalLogs,
-            { id: Date.now() + Math.random(), text: `? pre-flight diagnosis complete; awaiting user clarification`, type: 'yellow' }
-          ]
-        }));
-
-        sounds.play('msg.receive');
-        petVoiceEngine.trigger('questions_asked');
+        store.persistConversations();
+        if (store.getState().activeConversationId === conversationId) {
+          store.setState(s => ({
+            ...s,
+            isChatGenerating: false,
+            chatMessages: s.chatMessages.map(message =>
+              message.id === assistantId ? { ...message, text: reply, isStreaming: false, stopped: true } : message
+            )
+          }));
+        }
+        store.setMascotState('idle', petVoiceEngine.line('stopped'));
+        return { reply, stopped: true };
       }
 
-      return data;
-    } catch (err) {
-      console.error("Error creating plan or sending chat:", err);
+      const errorText = error?.message || 'The response could not be completed.';
+      const partialReply = reply ? `${reply}\n\n**Connection issue:** ${errorText}` : `**Error:** ${errorText}`;
+      store.updateConversationMessage(conversationId, assistantId, {
+        text: partialReply,
+        isStreaming: false,
+        failed: true,
+      });
+      store.persistConversations();
+      if (store.getState().activeConversationId === conversationId) {
+        store.setState(s => ({
+          ...s,
+          isChatGenerating: false,
+          chatMessages: s.chatMessages.map(message =>
+            message.id === assistantId ? { ...message, text: partialReply, isStreaming: false, failed: true } : message
+          )
+        }));
+      }
       sounds.play('error');
       store.setMascotState('error', petVoiceEngine.line('error'));
-      store.setState(s => ({
-        ...s,
-        chatMessages: [
-          ...s.chatMessages,
-          {
-            id: 'a_' + Date.now(),
-            sender: 'assistant',
-            text: `**Error:** ${err.message}`,
-            options: [],
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            planAttached: false
-          }
-        ]
-      }));
       return null;
+    } finally {
+      window.clearInterval(persistTimer);
+      if (this.chatControllers.get(conversationId) === controller) {
+        this.chatControllers.delete(conversationId);
+      }
     }
   }
 

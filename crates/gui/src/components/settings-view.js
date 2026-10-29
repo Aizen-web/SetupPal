@@ -48,6 +48,18 @@ export function renderSettingsView(container) {
               <button id="btn-force-hacker" class="btn-review" style="padding: 6px 12px; font-size: 12px;">Hacker</button>
             </div>
           </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0 2px; border-top: 1px solid var(--border-subtle);">
+            <div>
+              <div style="font-weight: 600; font-size: 13.5px; color: var(--ink);">Ambient background</div>
+              <div style="font-size: 12px; color: var(--ink-soft);">A quiet theme-matched glow behind the workspace</div>
+            </div>
+            <select id="select-background" style="background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px;">
+              <option value="off" ${settings.backgroundIntensity === 'off' ? 'selected' : ''}>Off</option>
+              <option value="subtle" ${!settings.backgroundIntensity || settings.backgroundIntensity === 'subtle' ? 'selected' : ''}>Subtle</option>
+              <option value="lively" ${settings.backgroundIntensity === 'lively' ? 'selected' : ''}>Lively</option>
+            </select>
+          </div>
         </div>
 
         <!-- Zero-Trust Safety Card -->
@@ -162,6 +174,14 @@ export function renderSettingsView(container) {
 
   container.querySelector('#btn-force-chill').onclick = () => store.setMode('chill');
   container.querySelector('#btn-force-hacker').onclick = () => store.setMode('hacker');
+
+  container.querySelector('#select-background').onchange = (event) => {
+    store.setState(s => ({
+      ...s,
+      settings: { ...s.settings, backgroundIntensity: event.target.value }
+    }));
+    sounds.play('ui.click');
+  };
 
   container.querySelector('#select-safety').onchange = (e) => {
     store.setState(s => ({ ...s, settings: { ...s.settings, safetyLevel: e.target.value } }));

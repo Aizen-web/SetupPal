@@ -10,8 +10,9 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:3001',
         changeOrigin: true,
-        timeout: 10000,
-        proxyTimeout: 10000,
+        // Keep Vite's proxy alive longer than the backend's 120-second AI stream timeout.
+        timeout: 130000,
+        proxyTimeout: 130000,
         configure: (proxy, _options) => {
           proxy.on('error', (err, _req, res) => {
             if (res && !res.headersSent && typeof res.writeHead === 'function') {

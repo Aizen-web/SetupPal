@@ -8,15 +8,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{header, Method, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::{mpsc, RwLock};
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tokio_stream::{Stream, StreamExt};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
@@ -87,13 +87,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/doctor", get(doctor_handler))
         .route("/api/recipes", get(recipes_handler))
         .route("/api/chat", post(chat_handler))
+        .route("/api/chat/stream", post(chat_stream_handler))
         .route("/api/plan", post(plan_handler))
         .route("/api/execute", post(execute_handler))
         .route("/api/history", get(history_handler))
         .route("/api/history/export", get(history_export_handler))
         .route("/api/undo", post(undo_handler))
         .route("/api/events", get(events_handler))
-        .route("/api/test-key", post(test_key_handler))
+        .route("/api/test-key", post(test_provider_key_handler))
+        .route("/api/models", get(models_handler))
         .layer(cors)
         .with_state(app_state);
 
@@ -113,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn read_dotenv_nim_key() -> Option<String> {
+fn read_dotenv_value(name: &str) -> Option<String> {
     let content = std::fs::read_to_string(".env").ok()?;
     for line in content.lines() {
         let line = line.trim().trim_start_matches('\u{feff}');
@@ -121,7 +123,7 @@ fn read_dotenv_nim_key() -> Option<String> {
             continue;
         }
         let line = line.strip_prefix("export ").unwrap_or(line).trim();
-        if let Some(val) = line.strip_prefix("NIM_API_KEY=") {
+        if let Some(val) = line.strip_prefix(&format!("{name}=")) {
             if let Some(clean) = normalize_api_key(val) {
                 return Some(clean);
             }
@@ -130,21 +132,18 @@ fn read_dotenv_nim_key() -> Option<String> {
     None
 }
 
+fn read_dotenv_nim_key() -> Option<String> {
+    read_dotenv_value("NIM_API_KEY").or_else(|| read_dotenv_value("NVIDIA_API_KEY"))
+}
+
 async fn health_handler(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
-    let env_key = read_dotenv_nim_key()
-        .or_else(|| state.config.nim_api_key.clone().filter(|s| !s.trim().is_empty()))
-        .or_else(|| std::env::var("NIM_API_KEY").ok().filter(|s| !s.trim().is_empty()));
-
-    let has_key = env_key.is_some();
-    let masked_key = env_key.map(|k| {
-        if k.len() > 10 {
-            format!("{}••••••••{}", &k[..6], &k[k.len() - 4..])
-        } else {
-            "••••••••".to_string()
-        }
-    });
+    let has_key = resolve_nim_api_key(state.config.nim_api_key.as_deref()).is_some();
+    let has_nebius_key =
+        resolve_env_key("NEBIUS_API_KEY", state.config.nebius_api_key.as_deref()).is_some();
+    let has_tavily_key =
+        resolve_env_key("TAVILY_API_KEY", state.config.tavily_api_key.as_deref()).is_some();
 
     Json(serde_json::json!({
         "status": "ok",
@@ -153,9 +152,10 @@ async fn health_handler(
         "safety_level": "strict",
         "deterministic_gates": true,
         "has_env_key": has_key,
-        "env_key_masked": masked_key,
-        "provider": "nim",
-        "model": AI_MODEL
+        "has_nebius_key": has_nebius_key,
+        "has_tavily_key": has_tavily_key,
+        "provider": if has_nebius_key { "nebius" } else { "nim" },
+        "model": state.config.nebius_model.as_deref().unwrap_or(&state.config.nim_model)
     }))
 }
 
@@ -325,16 +325,16 @@ pub fn create_metadata_for_plan(plan: &Plan, safety_report: &PlanSafetyReport) -
     }).collect()
 }
 
-/// Single NVIDIA NIM endpoint + model used for chat. Model must be enabled on the key's account.
-pub const AI_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
-pub const AI_MODEL: &str = "nvidia/nemotron-3.5-bolt-e4b";
-
 #[derive(Debug, Clone)]
 pub struct ResolvedAiConfig {
     pub api_key: String,
     pub endpoint: String,
     pub model: String,
+    pub provider: String,
 }
+
+pub const AI_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
+pub const AI_MODEL: &str = "nvidia/nemotron-3.5-bolt-e4b";
 
 fn normalize_api_key(raw: &str) -> Option<String> {
     let clean = raw
@@ -350,24 +350,69 @@ fn normalize_api_key(raw: &str) -> Option<String> {
     }
 }
 
-fn resolve_ai_config(req: &ChatRequest, state_config: &installer_core::CoreConfig) -> Option<ResolvedAiConfig> {
-    // Prefer a live `.env` read so rotating the key does not require a backend restart,
-    // then process env / startup config, then a key saved in the GUI.
-    let api_key = read_dotenv_nim_key()
-        .or_else(|| std::env::var("NIM_API_KEY").ok().and_then(|s| normalize_api_key(&s)))
-        .or_else(|| state_config.nim_api_key.as_deref().and_then(normalize_api_key))
-        .or_else(|| req.api_key.as_deref().and_then(normalize_api_key))?;
+fn resolve_env_key(name: &str, configured: Option<&str>) -> Option<String> {
+    read_dotenv_value(name)
+        .or_else(|| std::env::var(name).ok().and_then(|value| normalize_api_key(&value)))
+        .or_else(|| configured.and_then(normalize_api_key))
+}
+
+fn resolve_nim_api_key(configured: Option<&str>) -> Option<String> {
+    resolve_env_key("NIM_API_KEY", configured)
+        .or_else(|| resolve_env_key("NVIDIA_API_KEY", None))
+}
+
+fn prefers_nebius(requested_provider: Option<&str>, has_nebius_key: bool) -> bool {
+    match requested_provider {
+        Some("nebius") => true,
+        Some("nim") => false,
+        _ => has_nebius_key,
+    }
+}
+
+fn resolve_ai_config(
+    req: &ChatRequest,
+    state_config: &installer_core::CoreConfig,
+) -> Option<ResolvedAiConfig> {
+    let has_nebius_key =
+        resolve_env_key("NEBIUS_API_KEY", state_config.nebius_api_key.as_deref()).is_some();
+    let use_nebius = prefers_nebius(req.provider.as_deref(), has_nebius_key);
+
+    let (api_key, base_url, model, provider) = if use_nebius {
+        (
+            resolve_env_key("NEBIUS_API_KEY", state_config.nebius_api_key.as_deref())?,
+            req.endpoint
+                .clone()
+                .unwrap_or_else(|| state_config.nebius_base_url.clone()),
+            req.model
+                .clone()
+                .or_else(|| state_config.nebius_model.clone())
+                .unwrap_or_default(),
+            "nebius",
+        )
+    } else {
+        (
+            resolve_nim_api_key(state_config.nim_api_key.as_deref())
+                .or_else(|| req.api_key.as_deref().and_then(normalize_api_key))?,
+            req.endpoint
+                .clone()
+                .unwrap_or_else(|| state_config.nim_base_url.clone()),
+            req.model.clone().unwrap_or_else(|| state_config.nim_model.clone()),
+            "nim",
+        )
+    };
 
     Some(ResolvedAiConfig {
         api_key,
-        endpoint: AI_ENDPOINT.to_string(),
-        model: AI_MODEL.to_string(),
+        endpoint: format!("{}/chat/completions", base_url.trim_end_matches('/')),
+        model,
+        provider: provider.to_string(),
     })
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TestKeyRequest {
     pub api_key: String,
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -455,11 +500,145 @@ async fn test_key_handler(
     }
 }
 
+async fn test_provider_key_handler(
+    State(state): State<AppState>,
+    Json(req): Json<TestKeyRequest>,
+) -> Json<TestKeyResponse> {
+    let use_nebius = req.provider.as_deref() == Some("nebius");
+    let provider = if use_nebius { "Nebius" } else { "NVIDIA NIM" }.to_string();
+    let base_url = if use_nebius {
+        &state.config.nebius_base_url
+    } else {
+        &state.config.nim_base_url
+    };
+    let model = if use_nebius {
+        state.config.nebius_model.clone().unwrap_or_default()
+    } else {
+        state.config.nim_model.clone()
+    };
+    let key = if req.api_key.trim().is_empty() {
+        let (name, configured) = if use_nebius {
+            ("NEBIUS_API_KEY", state.config.nebius_api_key.as_deref())
+        } else {
+            ("NIM_API_KEY", state.config.nim_api_key.as_deref())
+        };
+        if use_nebius {
+            resolve_env_key(name, configured).unwrap_or_default()
+        } else {
+            resolve_nim_api_key(configured).unwrap_or_default()
+        }
+    } else {
+        normalize_api_key(&req.api_key).unwrap_or_default()
+    };
+    if key.is_empty() {
+        return Json(TestKeyResponse {
+            valid: false,
+            message: "No API key found in the request or environment.".to_string(),
+            model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
+            provider,
+        });
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => {
+            return Json(TestKeyResponse {
+                valid: false,
+                message: "HTTP client initialization failed.".to_string(),
+                model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
+                provider,
+            });
+        }
+    };
+
+    match client
+        .get(format!("{}/models", base_url.trim_end_matches('/')))
+        .bearer_auth(&key)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => Json(TestKeyResponse {
+            valid: true,
+            message: "Key works. Model list is available.".to_string(),
+            model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
+            provider,
+        }),
+        Ok(response) => Json(TestKeyResponse {
+            valid: false,
+            message: format!("Provider returned HTTP {}. Check the key and endpoint.", response.status()),
+            model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
+            provider,
+        }),
+        Err(error) => Json(TestKeyResponse {
+            valid: false,
+            message: format!("Network request failed: {}", error.without_url()),
+            model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
+            provider,
+        }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsQuery {
+    provider: Option<String>,
+}
+
+async fn models_handler(
+    State(state): State<AppState>,
+    Query(query): Query<ModelsQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let use_nebius = query.provider.as_deref() == Some("nebius");
+    let (provider, base_url, configured_key) = if use_nebius {
+        ("nebius", &state.config.nebius_base_url, state.config.nebius_api_key.as_deref())
+    } else {
+        ("nim", &state.config.nim_base_url, state.config.nim_api_key.as_deref())
+    };
+    let key_name = if use_nebius { "NEBIUS_API_KEY" } else { "NIM_API_KEY" };
+    let key = if use_nebius {
+        resolve_env_key(key_name, configured_key)
+    } else {
+        resolve_nim_api_key(configured_key)
+    }
+    .ok_or((StatusCode::UNAUTHORIZED, "No provider key is configured.".to_string()))?;
+    let models = fetch_model_ids(base_url, &key).await
+        .map_err(|message| (StatusCode::BAD_GATEWAY, message))?;
+    Ok(Json(serde_json::json!({ "provider": provider, "models": models })))
+}
+
+async fn fetch_model_ids(base_url: &str, api_key: &str) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Could not initialize the model-list client.".to_string())?;
+    let response = client
+        .get(format!("{}/models", base_url.trim_end_matches('/')))
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|error| format!("Could not retrieve models: {}", error.without_url()))?;
+    if !response.status().is_success() {
+        return Err(format!("Model service returned HTTP {}.", response.status()));
+    }
+    let payload: serde_json::Value = response.json().await
+        .map_err(|_| "Model service returned an invalid response.".to_string())?;
+    let models = payload.get("data")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect();
+    Ok(models)
+}
+
 /// Bump when the prompt or host-facts format changes so the session cache never serves old-style replies.
-const PROMPT_VERSION: &str = "v18-compact-memory";
+const PROMPT_VERSION: &str = "v20-mascot-personalities";
 
 const STATIC_SYSTEM_PROMPT: &str = "\
-You are Pixel, the SetupPal assistant on the user's Windows PC. You help them plan and install developer software: programming languages, runtimes, compilers, SDKs, package managers, web stacks, and dev tools.\n\
+You are SetupPal's chat assistant on the user's Windows PC. The active mascot identity and speaking style are provided separately. Help the user plan developer software: programming languages, runtimes, compilers, SDKs, package managers, web stacks, and dev tools.\n\
 \n\
 Scope: you only install things that can be set up unattended from the command line (winget, npm, pip, cargo, etc.) and checked with a CLI command like `node -v`. Apps that need a GUI launcher, store login, or DRM (Steam, Epic, Minecraft Bedrock, and similar) are out of scope. If asked, say so briefly and suggest a CLI or developer alternative.\n\
 \n\
@@ -469,12 +648,22 @@ How to work:\n\
 - Your job is to get to a concrete install plan quickly. Work out what is needed, what is already present, and what is missing. Ask a question only when a real decision changes the plan (for example which version, or which of several tools). If the request is clear, skip questions and state the plan.\n\
 - If the request is vague, suggest 2 to 4 specific things you can set up and recommend one.\n\
 - When you have enough information, give the plan as a short numbered list of install steps, each with the tool name and how it will be verified. Then say the user can approve it to begin. Nothing is installed until they approve.\n\
-- Do not greet or introduce yourself unless the user greets you or asks who you are. Never repeat a question that was already answered.\n\
+- If the user greets you, reply with a brief greeting in your mascot's voice and ask what they would like to set up. Never return an empty answer. Do not introduce yourself unless asked, and never repeat a question that was already answered.\n\
 \n\
-Style: plain language, short, markdown allowed, bold the key point, no emoji. You are a playful little ghost, so one light touch is enough, never in the facts.";
+Style: plain language, short, markdown allowed, bold the key point. Keep the mascot voice in the wording, but keep technical facts and safety decisions accurate. The grumpy mascot may be dry or playfully blunt, but must never demean, threaten, or harass the user.";
 
-fn pet_persona(_pet: Option<&str>) -> &'static str {
-    "Character: Pixel, a playful, curious little ghost. Friendly and a bit shy."
+fn pet_persona(pet: Option<&str>) -> &'static str {
+    match pet {
+        Some("cat") => {
+            "Mascot: Byte the cat. Personality: nonchalant, dry, mildly grumpy, and clever. Use concise deadpan humor and occasional playful bluntness; never insult or demean the user."
+        }
+        Some("bunny") => {
+            "Mascot: Mochi the bunny. Personality: timid, gentle, and earnest. Speak softly, sometimes a little hesitant, while staying clear, useful, and confident about safety."
+        }
+        _ => {
+            "Mascot: Pixel the ghost. Personality: playful, curious, and warm. Add light, slightly spooky humor without letting it obscure the answer."
+        }
+    }
 }
 
 /// Plain-text facts about this PC. Minecraft details are only added when the chat is about Minecraft.
@@ -766,7 +955,7 @@ Confirm it is a build.nvidia.com inference key (nvapi-...), not an expired NGC d
     }
     if status == StatusCode::UNAUTHORIZED {
         return format!(
-            "HTTP 401 Unauthorized: API key was rejected. Check NIM_API_KEY in .env. Detail: {short}"
+            "HTTP 401 Unauthorized: API key was rejected. Check NIM_API_KEY or NVIDIA_API_KEY in .env. Detail: {short}"
         );
     }
     format!("AI Provider returned HTTP {status}: {short}")
@@ -777,8 +966,6 @@ async fn chat_handler(
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
     let raw_msg = req.message.trim();
-
-    info!("Received chat message: {:?}", raw_msg);
 
     let profile = state
         .scanner
@@ -806,12 +993,27 @@ async fn chat_handler(
         context: None,
     };
 
-    let Some(ai_config) = resolve_ai_config(&req, &state.config) else {
+    let Some(mut ai_config) = resolve_ai_config(&req, &state.config) else {
         return Ok(Json(error_response(
-            "**Error: no API key set.** Add your NVIDIA API key in **Settings** (or `NIM_API_KEY` in `.env`).".to_string(),
+            "**No AI provider is configured.** Add either `NEBIUS_API_KEY` or an NVIDIA key (`NIM_API_KEY` / `NVIDIA_API_KEY`) to your local `.env` file.".to_string(),
             true,
         )));
     };
+    if ai_config.model.is_empty() {
+        let models = fetch_model_ids(
+            ai_config.endpoint.trim_end_matches("/chat/completions"),
+            &ai_config.api_key,
+        )
+        .await
+        .map_err(|message| (StatusCode::BAD_GATEWAY, message))?;
+        ai_config.model = models
+            .into_iter()
+            .find(|model| model.to_ascii_lowercase().contains("nemotron"))
+            .ok_or((
+                StatusCode::BAD_GATEWAY,
+                "No Nemotron model is available for this Nebius account.".to_string(),
+            ))?;
+    }
 
     let raw_hist = req.history.as_deref().unwrap_or(&[]);
     let keep_recent = req.memory_turns.unwrap_or(6);
@@ -924,6 +1126,295 @@ async fn chat_handler(
             )))
         }
     }
+}
+
+type ChatSseSender = mpsc::Sender<Result<Event, Infallible>>;
+
+async fn chat_stream_handler(
+    State(state): State<AppState>,
+    Json(mut req): Json<ChatRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
+    let raw_msg = req.message.trim().to_string();
+    if raw_msg.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Message cannot be empty.".to_string()));
+    }
+
+    let profile = state
+        .scanner
+        .scan()
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    let mc_info = inspect_minecraft_system(&profile);
+    req.endpoint = None;
+    let mut ai_config = resolve_ai_config(&req, &state.config)
+        .ok_or((StatusCode::UNAUTHORIZED, "Add a provider key in the local environment to start chat.".to_string()))?;
+    if ai_config.model.is_empty() {
+        let models = fetch_model_ids(
+            ai_config.endpoint.trim_end_matches("/chat/completions"),
+            &ai_config.api_key,
+        )
+        .await
+        .map_err(|message| (StatusCode::BAD_GATEWAY, message))?;
+        ai_config.model = models
+            .into_iter()
+            .find(|model| model.to_ascii_lowercase().contains("nemotron"))
+            .ok_or((
+                StatusCode::BAD_GATEWAY,
+                "No Nemotron model is available for this Nebius account.".to_string(),
+            ))?;
+    }
+
+    let history = req.history.take().unwrap_or_default();
+    let context = build_context(&history, &raw_msg, req.memory_turns.unwrap_or(6));
+    let host_facts = if req.include_pc_facts.unwrap_or(true) {
+        format_host_facts(&profile, &mc_info, &raw_msg, &history)
+    } else {
+        "(PC facts are turned off by the user. Do not claim to know what is installed.)".to_string()
+    };
+    let max_tokens = req.max_reply_tokens.unwrap_or(800).clamp(200, 2000);
+    let system_tokens = est_tokens(STATIC_SYSTEM_PROMPT)
+        + est_tokens(pet_persona(req.pet.as_deref()));
+    let memory_tokens = context.memory_note.as_deref().map(est_tokens).unwrap_or(0);
+    let recent_tokens: usize = context
+        .recent
+        .iter()
+        .map(|message| est_tokens(&message.content))
+        .sum();
+    let facts_tokens = est_tokens(&host_facts);
+    let user_tokens = est_tokens(&raw_msg);
+    let context_payload = serde_json::json!({
+        "model": ai_config.model,
+        "system_tokens": system_tokens,
+        "memory_tokens": memory_tokens,
+        "recent_tokens": recent_tokens,
+        "facts_tokens": facts_tokens,
+        "user_tokens": user_tokens,
+        "total_tokens": system_tokens + memory_tokens + recent_tokens + facts_tokens + user_tokens,
+        "reply_budget": max_tokens,
+        "total_messages": history.len(),
+        "recent_messages": context.recent.len(),
+        "compacted_messages": context.compacted,
+        "memory_note": context.memory_note,
+        "recent": context.recent,
+        "facts": host_facts,
+    });
+
+    let (sender, receiver) = mpsc::channel(32);
+    tokio::spawn(async move {
+        if send_chat_event(
+            &sender,
+            "message.start",
+            serde_json::json!({ "model": ai_config.model, "provider": ai_config.provider }),
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
+
+        match call_ai_chat_stream(
+            &ai_config,
+            &raw_msg,
+            &context,
+            &host_facts,
+            req.pet.as_deref(),
+            max_tokens,
+            &sender,
+        )
+        .await
+        {
+            Ok(reply) => {
+                let _ = send_chat_event(
+                    &sender,
+                    "message.end",
+                    serde_json::json!({ "reply": reply, "context": context_payload }),
+                )
+                .await;
+            }
+            Err(message) => {
+                let _ = send_chat_event(
+                    &sender,
+                    "message.error",
+                    serde_json::json!({ "message": message }),
+                )
+                .await;
+            }
+        }
+    });
+
+    Ok(Sse::new(ReceiverStream::new(receiver)).keep_alive(KeepAlive::default()))
+}
+
+async fn send_chat_event(
+    sender: &ChatSseSender,
+    event_name: &str,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    let data = serde_json::to_string(&payload).map_err(|_| "Could not encode stream event.".to_string())?;
+    sender
+        .send(Ok(Event::default().event(event_name).data(data)))
+        .await
+        .map_err(|_| "Chat stream was cancelled.".to_string())
+}
+
+async fn call_ai_chat_stream(
+    ai_config: &ResolvedAiConfig,
+    user_prompt: &str,
+    context: &PromptContext,
+    host_facts: &str,
+    pet: Option<&str>,
+    max_tokens: u32,
+    sender: &ChatSseSender,
+) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|_| "Could not initialize the AI connection.".to_string())?;
+
+    let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
+        "role": "system",
+        "content": format!("{}\n\n{}", STATIC_SYSTEM_PROMPT, pet_persona(pet))
+    })];
+    if let Some(note) = &context.memory_note {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": format!("Earlier in this chat (compacted notes, oldest first). Treat what the user said here as still true:\n{note}")
+        }));
+    }
+    for item in &context.recent {
+        messages.push(serde_json::json!({ "role": item.role, "content": item.content }));
+    }
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": format!("Facts about this PC:\n{host_facts}\n\nUser message:\n{user_prompt}")
+    }));
+
+    let request_body = serde_json::json!({
+        "model": ai_config.model,
+        "messages": messages,
+        "temperature": 0.5,
+        "max_tokens": max_tokens,
+        "stream": true
+    });
+    let response = {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let request = client
+                .post(&ai_config.endpoint)
+                .bearer_auth(&ai_config.api_key)
+                .json(&request_body)
+                .send();
+            let result = tokio::select! {
+                _ = sender.closed() => return Err("Chat stream was cancelled.".to_string()),
+                result = request => result,
+            };
+            match result {
+                Ok(response) if response.status().is_success() => break response,
+                Ok(response) => {
+                    let status = response.status();
+                    let retryable = status == StatusCode::TOO_MANY_REQUESTS
+                        || status.is_server_error();
+                    if !retryable || attempt >= 3 {
+                        return Err(format!("AI provider returned HTTP {status}."));
+                    }
+                }
+                Err(error) if attempt >= 3 => {
+                    return Err(format!(
+                        "Could not connect to AI provider: {}",
+                        error.without_url()
+                    ));
+                }
+                Err(_) => {}
+            }
+            tokio::select! {
+                _ = sender.closed() => return Err("Chat stream was cancelled.".to_string()),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(400 * attempt)) => {}
+            }
+        }
+    };
+
+    let mut body = response.bytes_stream();
+    let mut pending = Vec::<u8>::new();
+    let mut data_lines = Vec::<String>::new();
+    let mut reply = String::new();
+    let mut complete = false;
+    loop {
+        let next_chunk = tokio::select! {
+            _ = sender.closed() => return Err("Chat stream was cancelled.".to_string()),
+            next_chunk = body.next() => next_chunk,
+        };
+        let Some(chunk) = next_chunk else { break };
+        let chunk = chunk.map_err(|error| format!("AI stream failed: {}", error.without_url()))?;
+        pending.extend_from_slice(&chunk);
+        while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+            let mut line: Vec<u8> = pending.drain(..=newline).collect();
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            if consume_chat_sse_line(&line, &mut data_lines, &mut reply, sender).await? {
+                complete = true;
+                break;
+            }
+        }
+        if complete {
+            break;
+        }
+    }
+
+    if !complete && !pending.is_empty() {
+        consume_chat_sse_line(&pending, &mut data_lines, &mut reply, sender).await?;
+    }
+    if !complete && !data_lines.is_empty() {
+        let final_line = [];
+        consume_chat_sse_line(&final_line, &mut data_lines, &mut reply, sender).await?;
+    }
+    if !reply.chars().any(char::is_alphanumeric) {
+        return Err("AI provider returned no usable reply text. Please try again.".to_string());
+    }
+    Ok(reply)
+}
+
+async fn consume_chat_sse_line(
+    line: &[u8],
+    data_lines: &mut Vec<String>,
+    reply: &mut String,
+    sender: &ChatSseSender,
+) -> Result<bool, String> {
+    if line.is_empty() {
+        if data_lines.is_empty() {
+            return Ok(false);
+        }
+        let payload = data_lines.join("\n");
+        data_lines.clear();
+        if payload.trim() == "[DONE]" {
+            return Ok(true);
+        }
+        let value: serde_json::Value = serde_json::from_str(&payload)
+            .map_err(|_| "AI provider sent an invalid streaming response.".to_string())?;
+        if let Some(text) = value
+            .get("choices")
+            .and_then(|choices| choices.get(0))
+            .and_then(|choice| choice.get("delta"))
+            .and_then(|delta| delta.get("content"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.is_empty())
+        {
+            reply.push_str(text);
+            send_chat_event(sender, "message.delta", serde_json::json!({ "text": text })).await?;
+        }
+        return Ok(false);
+    }
+
+    if line.starts_with(b":") {
+        return Ok(false);
+    }
+    if let Some(data) = line.strip_prefix(b"data:") {
+        data_lines.push(String::from_utf8_lossy(data).trim().to_string());
+    }
+    Ok(false)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1158,4 +1649,25 @@ async fn events_handler(
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+#[cfg(test)]
+mod provider_selection_tests {
+    use super::prefers_nebius;
+
+    #[test]
+    fn auto_prefers_nebius_when_a_nebius_key_is_configured() {
+        assert!(prefers_nebius(Some("auto"), true));
+    }
+
+    #[test]
+    fn auto_falls_back_to_nvidia_without_a_nebius_key() {
+        assert!(!prefers_nebius(Some("auto"), false));
+    }
+
+    #[test]
+    fn explicit_provider_choice_is_preserved() {
+        assert!(!prefers_nebius(Some("nim"), true));
+        assert!(prefers_nebius(Some("nebius"), false));
+    }
 }

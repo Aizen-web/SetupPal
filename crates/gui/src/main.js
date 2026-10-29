@@ -13,6 +13,7 @@ import { simulation } from './state/simulation.js';
 import { bridge } from './api/bridge.js';
 import { renderSidebar } from './components/sidebar.js';
 import { renderChatView } from './components/chat-view.js';
+import { updateStreamingMessage } from './components/chat-message.js';
 import { renderTaskPanel } from './components/task-panel.js';
 import { renderDownloadsView } from './components/downloads-view.js';
 import { renderHistoryView } from './components/history-view.js';
@@ -41,8 +42,15 @@ function initApp() {
   const taskPanelEl = document.getElementById('task-panel-container');
   const modalEl = document.getElementById('modal-container');
 
+  window.addEventListener('setuppal:stream-delta', (event) => {
+    const { conversationId, messageId, text } = event.detail || {};
+    if (store.getState().activeConversationId !== conversationId) return;
+    updateStreamingMessage(messageId, text);
+  });
+
   function render() {
     const state = store.getState();
+    document.documentElement.dataset.bgIntensity = state.settings.backgroundIntensity || 'subtle';
 
     // 1. Sidebar
     renderSidebar(sidebarEl);

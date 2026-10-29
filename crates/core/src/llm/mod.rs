@@ -29,7 +29,8 @@ pub trait LlmClient: Send + Sync {
     ) -> Result<Plan, CoreError>;
 }
 
-/// NVIDIA NIM client speaking OpenAI-compatible `/v1/chat/completions`
+/// OpenAI-compatible inference client for NVIDIA NIM or Nebius
+/// speaking `/v1/chat/completions`
 /// with `schemars` JSON Schema enforcement and an offline deterministic mock mode (`NIM_MOCK=1`).
 #[derive(Debug, Clone)]
 pub struct NimClient {
@@ -90,12 +91,89 @@ impl NimClient {
         let root_schema = schema_for!(Plan);
         Ok(serde_json::to_value(&root_schema)?)
     }
+
+    async fn provider_settings(&self) -> Result<(String, String, String), CoreError> {
+        if let Some(api_key) = self
+            .config
+            .nebius_api_key
+            .as_deref()
+            .filter(|key| !key.trim().is_empty())
+        {
+            let model = if let Some(model) = self.config.nebius_model.as_deref() {
+                model.to_string()
+            } else {
+                let response = self
+                    .http
+                    .get(format!(
+                        "{}/models",
+                        self.config.nebius_base_url.trim_end_matches('/')
+                    ))
+                    .bearer_auth(api_key)
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        CoreError::Llm(format!(
+                            "Could not retrieve Nebius models: {}",
+                            error.without_url()
+                        ))
+                    })?;
+                if !response.status().is_success() {
+                    return Err(CoreError::Llm(format!(
+                        "Nebius model lookup returned HTTP {}.",
+                        response.status()
+                    )));
+                }
+                let payload: Value = response.json().await?;
+                payload
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|item| item.get("id").and_then(Value::as_str))
+                    .find(|model| model.to_ascii_lowercase().contains("nemotron"))
+                    .ok_or_else(|| {
+                        CoreError::Llm(
+                            "No Nemotron model is available for this Nebius account.".to_string(),
+                        )
+                    })?
+                    .to_string()
+            };
+            return Ok((
+                api_key.to_string(),
+                self.config.nebius_base_url.clone(),
+                model,
+            ));
+        }
+
+        let api_key = self
+            .config
+            .nim_api_key
+            .as_deref()
+            .filter(|key| !key.trim().is_empty())
+            .ok_or_else(|| {
+                CoreError::Config(
+                    "Set NEBIUS_API_KEY or NIM_API_KEY in your local .env file.".to_string(),
+                )
+            })?;
+        Ok((
+            api_key.to_string(),
+            self.config.nim_base_url.clone(),
+            self.config.nim_model.clone(),
+        ))
+    }
 }
 
 #[async_trait]
 impl LlmClient for NimClient {
     fn model_name(&self) -> &str {
-        &self.config.nim_model
+        if self.config.nebius_api_key.is_some() {
+            self.config
+                .nebius_model
+                .as_deref()
+                .unwrap_or("Nemotron selected from live model list")
+        } else {
+            &self.config.nim_model
+        }
     }
 
     async fn propose_plan(
@@ -104,12 +182,7 @@ impl LlmClient for NimClient {
         profile: &SystemProfile,
         untrusted_context: Option<&str>,
     ) -> Result<Plan, CoreError> {
-        let api_key = self.config.nim_api_key.as_deref().ok_or_else(|| {
-            CoreError::Config(
-                "NIM_API_KEY is not set. Add it to your .env file."
-                    .to_string(),
-            )
-        })?;
+        let (api_key, base_url, model) = self.provider_settings().await?;
 
         let schema_value = Self::plan_json_schema()?;
         let system_prompt = sanitizer::build_hardened_system_prompt(&schema_value)?;
@@ -117,11 +190,11 @@ impl LlmClient for NimClient {
 
         let endpoint = format!(
             "{}/chat/completions",
-            self.config.nim_base_url.trim_end_matches('/')
+            base_url.trim_end_matches('/')
         );
 
         let request_body = ChatCompletionRequest {
-            model: self.config.nim_model.clone(),
+            model,
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -147,16 +220,15 @@ impl LlmClient for NimClient {
         let response = self
             .http
             .post(&endpoint)
-            .bearer_auth(api_key)
+            .bearer_auth(&api_key)
             .json(&request_body)
             .send()
             .await?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let err_text = response.text().await.unwrap_or_default();
             return Err(CoreError::Llm(format!(
-                "NVIDIA NIM HTTP {status}: {err_text}"
+                "AI provider returned HTTP {status}."
             )));
         }
 
@@ -185,12 +257,7 @@ impl LlmClient for NimClient {
         diagnostic: &str,
         attempt: u8,
     ) -> Result<Plan, CoreError> {
-        let api_key = self.config.nim_api_key.as_deref().ok_or_else(|| {
-            CoreError::Config(
-                "NIM_API_KEY is not set. Add it to your .env file."
-                    .to_string(),
-            )
-        })?;
+        let (api_key, base_url, model) = self.provider_settings().await?;
 
         let schema_value = Self::plan_json_schema()?;
         let system_prompt = sanitizer::build_hardened_system_prompt(&schema_value)?;
@@ -204,11 +271,11 @@ impl LlmClient for NimClient {
 
         let endpoint = format!(
             "{}/chat/completions",
-            self.config.nim_base_url.trim_end_matches('/')
+            base_url.trim_end_matches('/')
         );
 
         let request_body = ChatCompletionRequest {
-            model: self.config.nim_model.clone(),
+            model,
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -234,16 +301,15 @@ impl LlmClient for NimClient {
         let response = self
             .http
             .post(&endpoint)
-            .bearer_auth(api_key)
+            .bearer_auth(&api_key)
             .json(&request_body)
             .send()
             .await?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let err_text = response.text().await.unwrap_or_default();
             return Err(CoreError::Llm(format!(
-                "NVIDIA NIM HTTP {status}: {err_text}"
+                "AI provider returned HTTP {status}."
             )));
         }
 

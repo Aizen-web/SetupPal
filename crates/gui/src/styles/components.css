@@ -303,7 +303,94 @@
   background-color: var(--bg-canvas);
   overflow: hidden;
   position: relative;
+  isolation: isolate;
   transition: background-color var(--trans-mode);
+}
+
+.main-content::before,
+.main-content::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.main-content::before {
+  inset: -18%;
+  opacity: .46;
+  background:
+    radial-gradient(ellipse at 18% 82%, rgba(255, 159, 107, .17), transparent 38%),
+    radial-gradient(ellipse at 78% 14%, rgba(185, 167, 255, .13), transparent 35%),
+    radial-gradient(ellipse at 92% 78%, rgba(255, 194, 71, .12), transparent 34%);
+  animation: ambient-drift 54s var(--ease-soft) infinite alternate;
+  transition: opacity 400ms ease;
+}
+
+.main-content::after {
+  opacity: 0;
+  background-image:
+    linear-gradient(rgba(57, 255, 20, .09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(57, 255, 20, .09) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: radial-gradient(ellipse at center, transparent 24%, #000 100%);
+  transition: opacity 350ms ease;
+}
+
+.main-content > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes ambient-drift {
+  from { transform: translate3d(-1.2%, .8%, 0) scale(1); }
+  to { transform: translate3d(1.2%, -.8%, 0) scale(1.025); }
+}
+
+[data-mode="hacker"] .main-content::before {
+  background:
+    radial-gradient(ellipse at 12% 84%, rgba(57, 255, 20, .1), transparent 34%),
+    radial-gradient(ellipse at 88% 18%, rgba(61, 245, 255, .07), transparent 34%);
+}
+
+[data-mode="hacker"] .main-content::after { opacity: .32; }
+[data-bg-intensity="off"] .main-content::before,
+[data-bg-intensity="off"] .main-content::after { opacity: 0; animation: none; }
+[data-bg-intensity="lively"] .main-content::before { opacity: .82; }
+[data-bg-intensity="lively"][data-mode="hacker"] .main-content::after { opacity: .52; }
+
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:not(.active):hover,
+  .recent-item:hover,
+  .task-icon-btn:hover,
+  .btn-review:hover {
+    transform: translateY(-1px);
+  }
+
+  .plan-card:hover,
+  .acc-key-card:hover {
+    border-color: var(--accent);
+    box-shadow: var(--shadow-floating);
+  }
+
+  .chat-bubble.bot-bubble:hover .chat-avatar-wrap {
+    border-color: var(--pop-apricot);
+    transform: translateY(-1px);
+  }
+}
+
+.chat-avatar-wrap {
+  transition: border-color 180ms ease, transform 180ms var(--ease-snap);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-content::before,
+  .main-content::after {
+    animation: none;
+    transition: none;
+  }
+
+  .chat-avatar-wrap { transition: none; }
 }
 
 /* Mode Switch Header Banner */
@@ -325,6 +412,28 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.pet-select-wrap {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 10px;
+}
+
+.pet-select {
+  max-width: 178px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--ink);
+  font: 600 12px var(--font-ui);
+  cursor: pointer;
+}
+
+.pet-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .pet-pill-btn {
@@ -1714,4 +1823,3 @@
 }
 
 .history-empty { padding: 14px; font-size: 13px; color: var(--ink-soft); }
-

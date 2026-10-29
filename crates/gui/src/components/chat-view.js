@@ -10,7 +10,7 @@ import { simulation } from '../state/simulation.js';
 import { bridge } from '../api/bridge.js';
 import { petVoiceEngine } from '../mascot/voicelines.js';
 import { createMascotSvg } from '../mascot/pets.js';
-import { renderMessage } from './chat-message.js';
+import { PETS, renderMessage } from './chat-message.js';
 import { icon } from './icon.js';
 import { contextButtonHtml, contextModalHtml, bindContextPanel, isContextOpen } from './context-panel.js';
 
@@ -171,8 +171,10 @@ export function renderChatView(container) {
   const state = store.getState();
   const plan = state.activePlan;
   const isHacker = state.mode === 'hacker';
-  const activePet = 'ghost';
+  const activePet = PETS[state.activePet] ? state.activePet : 'ghost';
+  const pet = PETS[activePet];
   const isWorking = Boolean(plan?.tasks?.some((task) => task.status === 'running'));
+  const isGenerating = Boolean(state.isChatGenerating);
   const hasMessages = Boolean(state.chatMessages && state.chatMessages.length > 0);
 
   // Preserve scroll position (the DOM is rebuilt below)
@@ -202,6 +204,14 @@ export function renderChatView(container) {
       <div class="top-nav-bar">
         ${contextButtonHtml()}
         <div class="top-nav-spacer" aria-hidden="true"></div>
+        <label class="pet-select-wrap">
+          <span class="sr-only">Choose chat mascot</span>
+          <select id="select-chat-pet" class="pet-select" aria-label="Choose chat mascot">
+            ${Object.entries(PETS).map(([id, identity]) => `
+              <option value="${id}" ${activePet === id ? 'selected' : ''}>${identity.name} · ${identity.style}</option>
+            `).join('')}
+          </select>
+        </label>
         <div class="mode-toggle-group" title="Switch Chill / Hacker">
           <button id="toggle-chill" class="mode-btn ${!isHacker ? 'active' : ''}" aria-label="Chill mode">
             ${leafSvg()}
@@ -215,7 +225,7 @@ export function renderChatView(container) {
       </div>
 
       <div class="mascot-hero-section ${hasMessages ? 'is-compact' : ''}">
-        <div id="hero-mascot" class="mascot-container" title="Click to interact with Pixel!">
+        <div id="hero-mascot" class="mascot-container" title="Click to interact with ${pet.name}!">
           ${createMascotSvg(activePet, petSize, petPrefix)}
         </div>
         ${hasMessages ? '' : `
@@ -250,10 +260,11 @@ export function renderChatView(container) {
         ` : `
           ${hasMessages ? `
             <div class="chat-thread-stream" id="chat-thread-stream">
-              ${messages.map(m => renderMessage(m, {
+              ${messages.map((m, index) => renderMessage(m, {
                 isLast: m === lastMsg,
                 isNew: !firstRender && newMsgIds.includes(m.id),
                 activePet,
+                retryText: messages[index - 1]?.sender === 'user' ? messages[index - 1].text : '',
                 ui: chatUi,
               })).join('')}
             </div>
@@ -265,8 +276,8 @@ export function renderChatView(container) {
 
       <div class="bottom-bar">
         <div class="composer-box">
-          <input id="chat-input" class="composer-input" type="text" placeholder="${isWorking ? 'Working... press Esc to stop' : 'What would you like to set up?'}" />
-          ${isWorking ? '<button id="btn-stop-run" class="btn-stop" type="button">Stop</button>' : ''}
+          <input id="chat-input" class="composer-input" type="text" placeholder="${isGenerating ? 'Ask another question while Pixel replies…' : isWorking ? 'Working... press Esc to stop' : 'What would you like to set up?'}" />
+          ${isWorking || isGenerating ? `<button id="btn-stop-run" class="btn-stop" type="button" aria-label="${isGenerating ? 'Stop response' : 'Stop task'}">Stop</button>` : ''}
           <button id="btn-chat-send" class="btn-send" type="button" aria-label="Send">
             <span class="btn-send-label">Send</span>
             ${icon('send')}
@@ -294,6 +305,10 @@ export function renderChatView(container) {
   container.querySelector('#toggle-hacker').onclick = () => {
     store.setMode('hacker');
     petVoiceEngine.trigger('mode_toggle', { mode: 'hacker' });
+  };
+
+  container.querySelector('#select-chat-pet').onchange = (event) => {
+    store.setActivePet(event.target.value);
   };
 
   const heroMascot = container.querySelector('#hero-mascot');
@@ -343,7 +358,16 @@ export function renderChatView(container) {
   const chatInput = container.querySelector('#chat-input');
   const btnSend = container.querySelector('#btn-chat-send');
   const btnStop = container.querySelector('#btn-stop-run');
-  if (btnStop) btnStop.onclick = () => simulation.stopRun();
+  container.querySelectorAll('.chat-retry-btn').forEach((button) => {
+    button.onclick = () => {
+      const prompt = button.getAttribute('data-retry-text')?.trim();
+      if (prompt) bridge.submitGoal(prompt);
+    };
+  });
+  if (btnStop) btnStop.onclick = () => {
+    if (store.getState().isChatGenerating) bridge.stopChat();
+    else simulation.stopRun();
+  };
 
   if (chatInput) {
     if (prevValue && !chatInput.value) {

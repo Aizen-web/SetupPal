@@ -35,19 +35,40 @@ pub enum CoreError {
 }
 
 /// Runtime configuration loaded from environment variables (with safe defaults).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CoreConfig {
     pub nim_base_url: String,
     pub nim_model: String,
     pub nim_api_key: Option<String>,
+    pub nebius_base_url: String,
+    pub nebius_model: Option<String>,
+    pub nebius_api_key: Option<String>,
     pub tavily_api_key: Option<String>,
     pub recipes_dir: PathBuf,
     pub state_log_path: PathBuf,
 }
 
+impl std::fmt::Debug for CoreConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CoreConfig")
+            .field("nim_base_url", &self.nim_base_url)
+            .field("nim_model", &self.nim_model)
+            .field("has_nim_api_key", &self.nim_api_key.is_some())
+            .field("nebius_base_url", &self.nebius_base_url)
+            .field("nebius_model", &self.nebius_model)
+            .field("has_nebius_api_key", &self.nebius_api_key.is_some())
+            .field("has_tavily_api_key", &self.tavily_api_key.is_some())
+            .field("recipes_dir", &self.recipes_dir)
+            .field("state_log_path", &self.state_log_path)
+            .finish()
+    }
+}
+
 impl CoreConfig {
     pub const DEFAULT_NIM_BASE_URL: &'static str = "https://integrate.api.nvidia.com/v1";
     pub const DEFAULT_NIM_MODEL: &'static str = "nvidia/nemotron-3.5-bolt-e4b";
+    pub const DEFAULT_NEBIUS_BASE_URL: &'static str = "https://api.tokenfactory.nebius.com/v1";
 
     /// Loads configuration from process environment variables.
     /// Automatically loads a `.env` file if present in the current directory.
@@ -64,7 +85,20 @@ impl CoreConfig {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| Self::DEFAULT_NIM_MODEL.to_string());
 
-        let nim_api_key = env::var("NIM_API_KEY")
+        let nim_api_key = ["NIM_API_KEY", "NVIDIA_API_KEY"]
+            .iter()
+            .find_map(|name| env::var(name).ok().filter(|value| !value.trim().is_empty()));
+
+        let nebius_base_url = env::var("NEBIUS_BASE_URL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| Self::DEFAULT_NEBIUS_BASE_URL.to_string());
+
+        let nebius_model = env::var("NEBIUS_MODEL")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+
+        let nebius_api_key = env::var("NEBIUS_API_KEY")
             .ok()
             .filter(|v| !v.trim().is_empty());
 
@@ -84,6 +118,9 @@ impl CoreConfig {
             nim_base_url,
             nim_model,
             nim_api_key,
+            nebius_base_url,
+            nebius_model,
+            nebius_api_key,
             tavily_api_key,
             recipes_dir,
             state_log_path,
@@ -105,6 +142,32 @@ impl CoreConfig {
                 let v = value.trim().trim_matches('"').trim_matches('\'');
                 if !k.is_empty() && env::var_os(k).is_none() {
                     env::set_var(k, v);
+                }
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use super::*;
+
+                #[test]
+                fn debug_output_redacts_provider_keys() {
+                    let config = CoreConfig {
+                        nim_base_url: CoreConfig::DEFAULT_NIM_BASE_URL.to_string(),
+                        nim_model: CoreConfig::DEFAULT_NIM_MODEL.to_string(),
+                        nim_api_key: Some("test-nim-secret".to_string()),
+                        nebius_base_url: CoreConfig::DEFAULT_NEBIUS_BASE_URL.to_string(),
+                        nebius_model: None,
+                        nebius_api_key: Some("test-nebius-secret".to_string()),
+                        tavily_api_key: Some("test-tavily-secret".to_string()),
+                        recipes_dir: PathBuf::from("recipes"),
+                        state_log_path: PathBuf::from(".orchestrator_state.jsonl"),
+                    };
+
+                    let debug = format!("{config:?}");
+                    assert!(!debug.contains("test-nim-secret"));
+                    assert!(!debug.contains("test-nebius-secret"));
+                    assert!(!debug.contains("test-tavily-secret"));
+                    assert!(debug.contains("has_nebius_api_key"));
                 }
             }
         }

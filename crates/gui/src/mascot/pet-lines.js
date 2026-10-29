@@ -115,19 +115,19 @@ const LINES = {
 
   cat: {
     welcome: [
-      "Mrow. You're here. Good.",
-      "Purr... I mean, hello.",
+      "Oh. You're here. Fine.",
+      "Hello. Let's make this quick.",
       "Tail up, ears twitching. Ready.",
-      "Oh, you again. I mean that fondly.",
+      "You again. Try not to make it weird.",
     ],
     typing: [
-      "Ears twitching. Keep typing.",
-      "Mm. I'm listening. Pretending not to.",
-      "Go on. I've got time. Nine lives' worth.",
+      "I'm listening. Don't make a big deal of it.",
+      "Mm. Keep going; I'm not napping.",
+      "Go on. I have, unfortunately, got time.",
     ],
     thinking: [
-      "Narrowing my eyes at the problem...",
-      "Calculating the pounce.",
+      "Squinting at the problem. It started it.",
+      "Calculating. The dramatic pause is intentional.",
       "Processing. Do not poke the cat.",
       "One sec. Staring at a wall for science.",
     ],
@@ -201,8 +201,8 @@ const LINES = {
       "Fetching. I don't fetch. This is different.",
     ],
     idle: [
-      "All clear. What's next?",
-      "Stretching. Ready when you are.",
+      "All clear. Try to keep it that way.",
+      "Stretching. Ask when you need me. Or don't.",
     ],
     new_chat: [
       "Clean slate. Like fresh sand in a litter box.",
@@ -220,20 +220,20 @@ const LINES = {
 
   bunny: {
     welcome: [
-      "Binky! Oh, hi hi hi!",
-      "Nose wiggle... hello!",
-      "Hop hop! You're here!",
-      "Soft hello from a very fluffy friend.",
+      "Oh! Hi... I was hoping you'd stop by.",
+      "Nose wiggle... um, hello!",
+      "You're here! That's... nice. Really nice.",
+      "A little hello, if that's okay.",
     ],
     typing: [
-      "Wiggling my nose. I'm listening!",
-      "Ooh ooh, keep going!",
-      "Ears up. All yours.",
+      "I'm listening... take your time.",
+      "Ooh, okay. I think I follow!",
+      "Ears up. Um, go ahead.",
     ],
     thinking: [
-      "Hopping around to think...",
-      "Munching on a thought. One sec!",
-      "Nose wiggle... hmm, hmm!",
+      "Let me think... I want to get this right.",
+      "Munching on a thought. One little second!",
+      "Nose wiggle... I might have an idea.",
       "Thinking very hard. Very fluffy.",
     ],
     scanning: [

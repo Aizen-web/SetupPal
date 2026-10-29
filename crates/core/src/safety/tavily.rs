@@ -37,18 +37,27 @@ pub trait TavilyVerifier: Send + Sync {
 }
 
 /// Live HTTP client querying Tavily API (`https://api.tavily.com/search`).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HttpTavilyVerifier {
     api_key: String,
     endpoint: String,
     http: reqwest::Client,
 }
 
+impl std::fmt::Debug for HttpTavilyVerifier {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HttpTavilyVerifier")
+            .field("endpoint", &self.endpoint)
+            .field("has_api_key", &!self.api_key.is_empty())
+            .finish()
+    }
+}
+
 #[derive(Debug, Serialize)]
-struct TavilySearchRequest<'a> {
-    api_key: &'a str,
+struct TavilySearchRequest {
     query: String,
-    search_depth: &'a str,
+    search_depth: &'static str,
     include_answer: bool,
     max_results: u8,
 }
@@ -111,7 +120,6 @@ impl TavilyVerifier for HttpTavilyVerifier {
 
         let query = format!("official website and github repository for {software_name}");
         let payload = TavilySearchRequest {
-            api_key: &self.api_key,
             query,
             search_depth: "basic",
             include_answer: true,
@@ -121,15 +129,15 @@ impl TavilyVerifier for HttpTavilyVerifier {
         let res = self
             .http
             .post(&self.endpoint)
+            .bearer_auth(&self.api_key)
             .json(&payload)
             .send()
             .await?;
 
         if !res.status().is_success() {
             let status = res.status();
-            let body = res.text().await.unwrap_or_default();
             return Err(CoreError::Validation(format!(
-                "Tavily search API returned HTTP {status}: {body}"
+                "Tavily search API returned HTTP {status}."
             )));
         }
 
@@ -149,6 +157,19 @@ impl TavilyVerifier for HttpTavilyVerifier {
                         || host_lower.ends_with(&format!(".{candidate_host}"))
                     {
                         matches_candidate = true;
+                    }
+                }
+
+                #[cfg(test)]
+                mod tests {
+                    use super::*;
+
+                    #[test]
+                    fn debug_output_redacts_api_key() {
+                        let verifier = HttpTavilyVerifier::new("test-tavily-secret");
+                        let debug = format!("{verifier:?}");
+                        assert!(!debug.contains("test-tavily-secret"));
+                        assert!(debug.contains("has_api_key"));
                     }
                 }
             }

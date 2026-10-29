@@ -7,6 +7,8 @@ import { petLine } from '../mascot/pet-lines.js';
 
 const STORAGE_KEY = 'setuppal_local_conversations_v2';
 const ACTIVE_CONV_KEY = 'setuppal_active_conv_id_v2';
+const ACTIVE_PET_KEY = 'setuppal_active_pet';
+const PET_IDS = ['ghost', 'cat', 'bunny'];
 
 function generateConvId() {
   return 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
@@ -32,7 +34,15 @@ function loadStoredConversations() {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        const recovered = parsed.map(conversation => ({
+          ...conversation,
+          chatMessages: (conversation.chatMessages || []).map(message =>
+            message.isStreaming
+              ? { ...message, isStreaming: false, stopped: true }
+              : message
+          ),
+        }));
+        return recovered;
       }
     }
   } catch (e) {
@@ -76,7 +86,9 @@ class Store {
       activeConversationId: activeId,
 
       // Mascot & Pets
-      activePet: 'ghost', // 'ghost' | 'cat' | 'bunny'
+      activePet: PET_IDS.includes(localStorage.getItem(ACTIVE_PET_KEY))
+        ? localStorage.getItem(ACTIVE_PET_KEY)
+        : 'ghost',
       mascotState: 'idle',
       mascotSpeech: petLine('ghost', 'welcome'),
       mascotSpeechSpeed: 25, // ms per char
@@ -96,6 +108,7 @@ class Store {
 
       // Chat Messages (restored from active conversation)
       chatMessages: activeConv.chatMessages || [],
+      isChatGenerating: (activeConv.chatMessages || []).some(message => message.isStreaming),
 
       // RECENT list in sidebar (synced with conversations)
       recentChats: conversations.map(c => ({
@@ -120,6 +133,7 @@ class Store {
       settings: {
         safetyLevel: 'strict', // 'strict' | 'balanced' | 'relaxed'
         textScale: 'm', // 's' | 'm' | 'l'
+        backgroundIntensity: 'subtle',
         reduceMotion: false,
         mascotAnimations: true,
         speechBubbles: true,
@@ -163,6 +177,44 @@ class Store {
     for (const callback of this.subscribers) {
       callback(this.state);
     }
+  }
+
+  updateConversationMessage(conversationId, messageId, patch) {
+    const updateMessages = (messages = []) => messages.map(message =>
+      message.id === messageId ? { ...message, ...patch } : message
+    );
+    this.state.conversations = this.state.conversations.map(conversation =>
+      conversation.id === conversationId
+        ? { ...conversation, chatMessages: updateMessages(conversation.chatMessages) }
+        : conversation
+    );
+    if (this.state.activeConversationId === conversationId) {
+      this.state.chatMessages = updateMessages(this.state.chatMessages);
+    }
+  }
+
+  getConversationMessages(conversationId) {
+    return this.state.conversations.find(conversation => conversation.id === conversationId)?.chatMessages || [];
+  }
+
+  appendConversationMessage(conversationId, message) {
+    this.state.conversations = this.state.conversations.map(conversation =>
+      conversation.id === conversationId
+        ? { ...conversation, chatMessages: [...(conversation.chatMessages || []), message] }
+        : conversation
+    );
+    if (this.state.activeConversationId === conversationId) {
+      this.setState(s => ({
+        ...s,
+        chatMessages: [...s.chatMessages, message],
+      }));
+    } else {
+      this.persistConversations();
+    }
+  }
+
+  persistConversations() {
+    saveStoredConversations(this.state.conversations, this.state.activeConversationId);
   }
 
   setState(updater) {
@@ -230,6 +282,7 @@ class Store {
       conversations: allConvs,
       activeConversationId: newConv.id,
       chatMessages: [],
+      isChatGenerating: false,
       activePlan: null,
       terminalLogs: newConv.terminalLogs,
       activePage: 'chats',
@@ -272,6 +325,7 @@ class Store {
       conversations: updatedConvs,
       activeConversationId: targetConv.id,
       chatMessages: targetConv.chatMessages || [],
+      isChatGenerating: (targetConv.chatMessages || []).some(message => message.isStreaming),
       activePlan: targetConv.activePlan || null,
       terminalLogs: targetConv.terminalLogs || [
         { id: 1, text: '> Zero-Trust Orchestrator ready. Standing by for user request...', type: 'info' }
@@ -312,6 +366,7 @@ class Store {
       conversations: remaining,
       activeConversationId: nextActiveId,
       chatMessages: nextConv.chatMessages || [],
+      isChatGenerating: (nextConv.chatMessages || []).some(message => message.isStreaming),
       activePlan: nextConv.activePlan || null,
       terminalLogs: nextConv.terminalLogs || [],
       recentChats: remaining.map(c => ({
@@ -410,7 +465,8 @@ class Store {
   }
 
   setActivePet(pet) {
-    pet = 'ghost';
+    if (!PET_IDS.includes(pet)) return;
+    localStorage.setItem(ACTIVE_PET_KEY, pet);
     this.setState({ activePet: pet });
     sounds.play('ui.click');
     

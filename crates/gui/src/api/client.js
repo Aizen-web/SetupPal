@@ -44,10 +44,12 @@ class ApiClient {
     return await res.json();
   }
 
-  async validateKey({ apiKey = null } = {}) {
-    const key = apiKey || localStorage.getItem('setuppal_ai_api_key');
+  async validateKey({ apiKey = null, provider = 'nim' } = {}) {
+    const key = apiKey || '';
     if (!key || !key.trim()) {
-      return { valid: false, message: 'No API key provided.' };
+      if (provider === 'nim' && localStorage.getItem('setuppal_ai_api_key')) {
+        return this.validateKey({ apiKey: localStorage.getItem('setuppal_ai_api_key'), provider });
+      }
     }
 
     try {
@@ -56,6 +58,7 @@ class ApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           api_key: key.trim(),
+          provider,
         }),
       });
 
@@ -63,10 +66,20 @@ class ApiClient {
         const text = await res.text();
         return { valid: false, message: `Server error (${res.status}): ${text}` };
       }
+
       return await res.json();
     } catch (err) {
       return { valid: false, message: `Could not reach backend: ${err.message}` };
     }
+  }
+
+  async getModels(provider = 'nebius') {
+    const res = await fetch(`${API_BASE}/models?provider=${encodeURIComponent(provider)}`);
+    if (!res.ok) {
+      const message = await res.text();
+      throw new Error(message || `Model lookup failed (${res.status}).`);
+    }
+    return await res.json();
   }
 
   async sendChat(message, history = [], pet = 'ghost') {
@@ -88,6 +101,61 @@ class ApiClient {
       throw new Error(`Chat failed (${res.status}): ${text}`);
     }
     return await res.json();
+  }
+
+  async sendChatStream(message, history = [], pet = 'ghost', { signal, onEvent } = {}) {
+    const apiKey = localStorage.getItem('setuppal_ai_api_key') || null;
+    const response = await fetch(`${API_BASE}/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      signal,
+      body: JSON.stringify({
+        message,
+        history,
+        pet,
+        api_key: apiKey,
+        provider: 'auto',
+        ...chatPrefsPayload(),
+      }),
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || `Chat failed (${response.status}).`);
+    }
+    if (!response.body) throw new Error('The backend did not open a streaming response.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const dispatch = (block) => {
+      const lines = block.split(/\r?\n/);
+      const eventName = lines.find(line => line.startsWith('event:'))?.slice(6).trim() || 'message';
+      const data = lines.filter(line => line.startsWith('data:'))
+        .map(line => line.slice(5).replace(/^ /, '')).join('\n');
+      if (!data) return;
+      let payload;
+      try {
+        payload = JSON.parse(data);
+      } catch {
+        throw new Error('The backend sent an invalid streaming event.');
+      }
+      onEvent?.({ type: eventName, ...payload });
+    };
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() || '';
+        for (const block of blocks) dispatch(block);
+        if (done) break;
+      }
+      if (buffer.trim()) dispatch(buffer);
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   async createPlan(goal, untrustedReadme = null) {
