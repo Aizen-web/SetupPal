@@ -144,32 +144,32 @@ impl CoreConfig {
                     env::set_var(k, v);
                 }
             }
-
-            #[cfg(test)]
-            mod tests {
-                use super::*;
-
-                #[test]
-                fn debug_output_redacts_provider_keys() {
-                    let config = CoreConfig {
-                        nim_base_url: CoreConfig::DEFAULT_NIM_BASE_URL.to_string(),
-                        nim_model: CoreConfig::DEFAULT_NIM_MODEL.to_string(),
-                        nim_api_key: Some("test-nim-secret".to_string()),
-                        nebius_base_url: CoreConfig::DEFAULT_NEBIUS_BASE_URL.to_string(),
-                        nebius_model: None,
-                        nebius_api_key: Some("test-nebius-secret".to_string()),
-                        tavily_api_key: Some("test-tavily-secret".to_string()),
-                        recipes_dir: PathBuf::from("recipes"),
-                        state_log_path: PathBuf::from(".orchestrator_state.jsonl"),
-                    };
-
-                    let debug = format!("{config:?}");
-                    assert!(!debug.contains("test-nim-secret"));
-                    assert!(!debug.contains("test-nebius-secret"));
-                    assert!(!debug.contains("test-tavily-secret"));
-                    assert!(debug.contains("has_nebius_api_key"));
-                }
-            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_output_redacts_provider_keys() {
+        let config = CoreConfig {
+            nim_base_url: CoreConfig::DEFAULT_NIM_BASE_URL.to_string(),
+            nim_model: CoreConfig::DEFAULT_NIM_MODEL.to_string(),
+            nim_api_key: Some("test-nim-secret".to_string()),
+            nebius_base_url: CoreConfig::DEFAULT_NEBIUS_BASE_URL.to_string(),
+            nebius_model: None,
+            nebius_api_key: Some("test-nebius-secret".to_string()),
+            tavily_api_key: Some("test-tavily-secret".to_string()),
+            recipes_dir: PathBuf::from("recipes"),
+            state_log_path: PathBuf::from(".orchestrator_state.jsonl"),
+        };
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-nim-secret"));
+        assert!(!debug.contains("test-nebius-secret"));
+        assert!(!debug.contains("test-tavily-secret"));
+        assert!(debug.contains("has_nebius_api_key"));
     }
 }

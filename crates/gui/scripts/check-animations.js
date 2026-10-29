@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { ANIMATIONS } from '../src/mascot/animations.js';
 
-const [animationCss, sidebar, lab] = await Promise.all([
+const [animationCss, lab, settings] = await Promise.all([
   readFile(new URL('../src/styles/ghost.css', import.meta.url), 'utf8'),
-  readFile(new URL('../src/components/sidebar.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/components/animation-lab.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/components/settings-view.js', import.meta.url), 'utf8'),
 ]);
 
 const errors = [];
@@ -39,10 +39,13 @@ for (const animation of ANIMATIONS) {
   }
 }
 
-for (const [file, contents] of [['sidebar', sidebar], ['Mascot Lab', lab]]) {
-  if (!contents.includes('ANIMATIONS.length')) {
-    errors.push(`${file} count is not derived from ANIMATIONS.length`);
-  }
+if (!lab.includes('ANIMATIONS.length')) {
+  errors.push('Mascot Lab count is not derived from ANIMATIONS.length');
+}
+
+// Settings hosts the Mascot Lab entry point; any count it shows must come from the registry.
+if (/\b\d+\s+(?:animations|animation states|states)\b/i.test(settings)) {
+  errors.push('Settings shows a hardcoded animation count; derive it from ANIMATIONS.length');
 }
 
 if (errors.length > 0) {

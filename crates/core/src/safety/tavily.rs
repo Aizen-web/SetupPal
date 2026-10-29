@@ -159,19 +159,6 @@ impl TavilyVerifier for HttpTavilyVerifier {
                         matches_candidate = true;
                     }
                 }
-
-                #[cfg(test)]
-                mod tests {
-                    use super::*;
-
-                    #[test]
-                    fn debug_output_redacts_api_key() {
-                        let verifier = HttpTavilyVerifier::new("test-tavily-secret");
-                        let debug = format!("{verifier:?}");
-                        assert!(!debug.contains("test-tavily-secret"));
-                        assert!(debug.contains("has_api_key"));
-                    }
-                }
             }
         }
 
@@ -200,5 +187,18 @@ impl TavilyVerifier for HttpTavilyVerifier {
             consensus_summary: summary,
             warning,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_output_redacts_api_key() {
+        let verifier = HttpTavilyVerifier::new("test-tavily-secret");
+        let debug = format!("{verifier:?}");
+        assert!(!debug.contains("test-tavily-secret"));
+        assert!(debug.contains("has_api_key"));
     }
 }

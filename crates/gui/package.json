@@ -7,10 +7,12 @@
     "app": "powershell -ExecutionPolicy Bypass -File ./launch-app.ps1",
     "start": "powershell -ExecutionPolicy Bypass -File ./launch-app.ps1",
     "dev": "vite",
+    "dev:all": "concurrently --kill-others --names api,ui --prefix-colors magenta,cyan \"cd ../.. && cargo run -p installer_gui\" \"vite --open\"",
     "build": "vite build",
     "check:animations": "node ./scripts/check-animations.js"
   },
   "devDependencies": {
+    "concurrently": "^10.0.6",
     "vite": "^8.3.5"
   },
   "dependencies": {
