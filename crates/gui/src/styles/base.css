@@ -32,9 +32,14 @@ html, body {
 }
 
 /* Custom Scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -48,6 +53,10 @@ html, body {
   box-shadow: 0 0 4px var(--accent);
 }
 
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
 /* Typography Utility */
 .font-pixel {
   font-family: var(--font-display);
@@ -58,6 +67,15 @@ html, body {
 }
 
 /* Scanline Overlay disabled to eliminate lines across GUI elements */
-.hacker-scanlines {
-  display: none !important;
+.hacker-scanlines { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

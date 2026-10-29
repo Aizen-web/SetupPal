@@ -5,6 +5,7 @@
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { createMascotSvg } from '../mascot/pets.js';
+import { icon } from './icon.js';
 
 export function renderDownloadsView(container) {
   const state = store.getState();
@@ -67,7 +68,7 @@ export function renderDownloadsView(container) {
             ${downloads.map(d => `
               <tr style="border-bottom: 1px solid var(--border-subtle);">
                 <td style="padding: 12px 16px; font-weight: 600; color: var(--ink);">
-                  📦 ${d.filename}
+                  ${icon('package', 16)} ${d.filename}
                 </td>
                 <td style="padding: 12px 16px;">
                   <span style="font-weight: 500;">${d.source}</span>

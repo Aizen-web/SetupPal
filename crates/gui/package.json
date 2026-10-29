@@ -7,7 +7,8 @@
     "app": "powershell -ExecutionPolicy Bypass -File ./launch-app.ps1",
     "start": "powershell -ExecutionPolicy Bypass -File ./launch-app.ps1",
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "check:animations": "node ./scripts/check-animations.js"
   },
   "devDependencies": {
     "vite": "^8.3.5"

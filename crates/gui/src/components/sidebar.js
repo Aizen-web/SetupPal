@@ -5,7 +5,8 @@
 
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
-import { createMascotHeadIconSvg } from '../mascot/mascot-art.js';
+import { ANIMATIONS } from '../mascot/animations.js';
+import { icon } from './icon.js';
 
 export function renderSidebar(container) {
   const state = store.getState();
@@ -14,12 +15,12 @@ export function renderSidebar(container) {
     <div class="sidebar">
       <div class="sidebar-header">
         <div class="logo-row">
-          <div style="font-size: 24px; line-height: 1;">👻</div>
+          <div class="logo-mascot" aria-hidden="true">${icon('ghost', 28)}</div>
           <div class="logo-text">Setup Pal</div>
         </div>
         <button id="btn-new-chat" class="btn-new-setup">
           <span style="font-size: 16px; font-weight: 500;">+</span>
-          <span>New Setup</span>
+          <span>New setup</span>
         </button>
       </div>
 
@@ -64,13 +65,11 @@ export function renderSidebar(container) {
         ${state.recentChats.map(c => `
           <div class="recent-item ${c.active ? 'selected' : ''}" data-chat-id="${c.id}">
             <div class="recent-item-title-wrap" data-chat-id="${c.id}">
-              <svg class="recent-star-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
-              </svg>
+              ${icon('ghost', 16, 'recent-star-icon')}
               <span class="recent-title-text">${c.title}</span>
             </div>
             ${state.recentChats.length > 1 ? `
-              <button class="btn-delete-recent" data-chat-id="${c.id}" title="Delete setup">×</button>
+              <button class="btn-delete-recent" data-chat-id="${c.id}" title="Delete setup" aria-label="Delete ${c.title}">${icon('close', 14)}</button>
             ` : ''}
           </div>
         `).join('')}
@@ -91,7 +90,7 @@ export function renderSidebar(container) {
             <line x1="8.5" y1="2" x2="15.5" y2="2"></line>
             <line x1="14" y1="9" x2="10" y2="9"></line>
           </svg>
-          <span>Mascot Lab (19 Animations)</span>
+          <span>Mascot Lab (${ANIMATIONS.length} ${ANIMATIONS.length === 1 ? 'animation' : 'animations'})</span>
         </button>
 
         <button id="btn-open-settings" class="btn-sidebar-bottom ${state.activePage === 'settings' ? 'active' : ''}">

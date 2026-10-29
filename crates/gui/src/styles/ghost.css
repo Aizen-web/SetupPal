@@ -5,7 +5,7 @@
  */
 
 :root {
-  --t-float: 2.4s;
+  --t-float: 3.2s;
   --t-blink: 4.8s;
 }
 
@@ -55,6 +55,10 @@
 
 .pet-body-group {
   animation: ghostFloat var(--t-float) ease-in-out infinite;
+}
+
+.pet-root[data-state="idle"] .pet-body-group {
+  animation: ghostFloat var(--t-float) var(--ease-soft) infinite;
 }
 
 .ghost-shadow ellipse {
@@ -381,6 +385,12 @@
   opacity: 0 !important;
 }
 
+.pet-root[data-mode="chill"] .acc-glasses,
+.pet-root[data-mode="chill"] .glasses-glint {
+  visibility: hidden;
+  transform: translateY(-8px);
+}
+
 .pet-root[data-state="glasses-off"] .pet-body-group {
   animation: ghostFloat var(--t-float) ease-in-out infinite;
 }
@@ -567,6 +577,52 @@
 .pet-root[data-state="wave-hello"] .pet-arm-r {
   animation: pawWaveLoop 1.0s ease-in-out infinite;
   transform-origin: 139px 116px;
+}
+
+@keyframes waveHelloBody {
+  0%, 78%, 100% { transform: translateY(0) scale(1); }
+  8% { transform: translateY(2px) scale(1.06, .94); }
+  22% { transform: translateY(-14px) scale(.96, 1.08); }
+  66% { transform: translateY(-12px) rotate(-3deg); }
+  72% { transform: translateY(-12px) rotate(3deg); }
+}
+
+@keyframes waveHelloHand {
+  0%, 16%, 88%, 100% { opacity: 0; transform: scale(0) rotate(-40deg); }
+  20% { opacity: 1; transform: scale(1.15) rotate(-10deg); }
+  28% { transform: scale(1) rotate(-18deg); }
+  40% { transform: scale(1) rotate(22deg); }
+  50% { transform: scale(1) rotate(-14deg); }
+  60% { transform: scale(1) rotate(16deg); }
+  70% { transform: scale(1) rotate(-6deg); }
+  78% { transform: scale(1) rotate(0deg); }
+}
+
+.pet-root[data-state="wave-hello"] .pet-body-group {
+  animation: waveHelloBody 1.8s var(--ease-soft) both;
+}
+
+.pet-ghost[data-state="wave-hello"] .pet-arm-r {
+  animation: pawWaveLoop 1.8s var(--ease-soft) both;
+}
+
+.pet-ghost[data-state="wave-hello"] .acc-hand {
+  transform-box: fill-box;
+  transform-origin: left bottom;
+  animation: waveHelloHand 1.8s var(--ease-spring) both;
+}
+
+.pet-cat[data-state="wave-hello"] .pet-arm-r,
+.pet-bunny[data-state="wave-hello"] .pet-arm-r {
+  animation: pawWaveLoop 1.8s var(--ease-soft) both;
+}
+
+.pet-cat[data-state="wave-hello"] .cat-tail {
+  animation: catTailSwish 1.8s var(--ease-soft) both;
+}
+
+.pet-bunny[data-state="wave-hello"] .bunny-ear-r {
+  animation: bunnyEarFlop 1.8s var(--ease-soft) both;
 }
 
 /* ========================================================
@@ -811,4 +867,9 @@
   .pet-body-group {
     animation-duration: 4.8s !important;
   }
+}
+
+.document-hidden .pet-root *,
+.document-hidden .pet-root {
+  animation-play-state: paused !important;
 }

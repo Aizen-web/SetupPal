@@ -5,6 +5,7 @@
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { createMascotSvg } from '../mascot/pets.js';
+import { icon } from './icon.js';
 
 export function renderAccountsView(container) {
   const state = store.getState();
@@ -41,7 +42,7 @@ export function renderAccountsView(container) {
         <!-- GitHub -->
         <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px; box-shadow: var(--shadow-card);">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-            <div style="font-weight: 700; font-size: 15px; color: var(--ink);">🐙 GitHub</div>
+            <div class="integration-name">${icon('code', 20)} GitHub</div>
             <span class="badge badge-green">CONNECTED</span>
           </div>
           <div style="font-size: 12.5px; color: var(--ink-soft); margin-bottom: 14px;">
@@ -54,7 +55,7 @@ export function renderAccountsView(container) {
         <!-- NVIDIA NIM / Nebius -->
         <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px; box-shadow: var(--shadow-card);">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-            <div style="font-weight: 700; font-size: 15px; color: var(--ink);">⚡ NVIDIA NIM</div>
+            <div class="integration-name">${icon('bolt', 20)} NVIDIA NIM</div>
             <span class="badge badge-green">ACTIVE</span>
           </div>
           <div style="font-size: 12.5px; color: var(--ink-soft); margin-bottom: 14px;">
@@ -67,7 +68,7 @@ export function renderAccountsView(container) {
         <!-- Tavily -->
         <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px; box-shadow: var(--shadow-card);">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-            <div style="font-weight: 700; font-size: 15px; color: var(--ink);">🔍 Tavily Search</div>
+            <div class="integration-name">${icon('search', 20)} Tavily Search</div>
             <span class="badge badge-green">ACTIVE</span>
           </div>
           <div style="font-size: 12.5px; color: var(--ink-soft); margin-bottom: 14px;">

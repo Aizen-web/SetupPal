@@ -128,6 +128,7 @@ export function createGhostSvg(size = 140, idPrefix = '') {
     <g id="${p}arms">
       <path id="${p}arm-l" class="pet-arm-l" d="M 61 116 Q 52 120 57 127 Q 63 127 65 120" fill="#E1D7FF" stroke="#BBAEFF" stroke-width="2.5" />
       <path id="${p}arm-r" class="pet-arm-r" d="M 139 116 Q 148 120 143 127 Q 137 127 135 120" fill="#E1D7FF" stroke="#BBAEFF" stroke-width="2.5" />
+      <path id="${p}acc-hand" class="acc-hand" d="M 139 118 Q 148 111 153 117 Q 157 123 149 128 L 140 126 Z" fill="#E1D7FF" stroke="#BBAEFF" stroke-width="2.5" opacity="0" />
     </g>
 
     <!-- #acc-hardhat -->

@@ -6,7 +6,11 @@
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { createMascotSvg } from '../mascot/pets.js';
+import { ANIMATIONS } from '../mascot/animations.js';
+import { icon } from './icon.js';
 import confetti from 'canvas-confetti';
+
+const labPlayback = { speed: 1, loop: true };
 
 export function renderAnimationLab(container) {
   const state = store.getState();
@@ -17,65 +21,58 @@ export function renderAnimationLab(container) {
 
   const activePet = state.activePet || 'ghost';
 
-  const animations = [
-    { id: 'idle', label: '1. Idle Float', desc: 'Gentle float + shadow & tail/ear sways', sound: 'ui.click' },
-    { id: 'blink', label: '2. Blink', desc: 'Rapid cute anime eye blink cycle', sound: 'ui.click' },
-    { id: 'speaking', label: '3. Speaking', desc: 'Mouth squashes with rhythmic body bob', sound: 'msg.receive' },
-    { id: 'thinking', label: '4. Thinking', desc: 'Thoughtful float, 3 pulsing thought dots', sound: 'ui.click' },
-    { id: 'scanning', label: '5. Scanning', desc: 'Flashlight beam sweeps left-right', sound: 'ui.click' },
-    { id: 'working', label: '6. Working', desc: 'Hardhat on, rapid float, sparkles / typing paws', sound: 'task.start' },
-    { id: 'glasses-on', label: '7. Glasses On', desc: 'Hacker sunglasses on with lens glint sweep', sound: 'mode.hacker' },
-    { id: 'glasses-off', label: '8. Glasses Off', desc: 'Sunglasses slide away', sound: 'mode.chill' },
-    { id: 'green', label: '9. Green Verdict', desc: 'Happy eyes, sparkle burst, joyful hop loop', sound: 'verdict.green' },
-    { id: 'yellow', label: '10. Yellow / Held', desc: 'Worried tilt float, sweat drop, worried brow', sound: 'verdict.yellow' },
-    { id: 'red', label: '11. Red / Blocked', desc: 'Sad crying face, streaming tears, shield pulse', sound: 'verdict.red' },
-    { id: 'celebrate', label: '12. Celebrate', desc: '360° victory spin loop, confetti shower', sound: 'celebrate' },
-    { id: 'wave-hello', label: '13. Wave Hello', desc: 'Playful left & right welcoming wave loop', sound: 'msg.send' },
-    { id: 'listening', label: '14. Listening', desc: 'Attentive lean hover, eyes widen', sound: 'ui.click' },
-    { id: 'downloading', label: '15. Downloading', desc: 'Carries package box, speed ripple hover', sound: 'download.done' },
-    { id: 'error', label: '16. Error (Crying)', desc: 'Sad mouth, drooping bob, shedding animated tears', sound: 'error' },
-    { id: 'held-sign', label: '17. Held Sign', desc: 'Holds up yellow warning caution sign', sound: 'verdict.yellow' },
-    { id: 'rewind', label: '18. Rewind', desc: 'Reverse spin, backwards clock hands', sound: 'rewind' },
-    { id: 'sleepy', label: '19. Sleepy', desc: 'Drowsy slow float, floating Zzz bubbles', sound: 'ui.click' },
-    { id: 'peek-a-boo', label: '20. Peek-A-Boo', desc: 'Playful peek in and out hide-and-seek loop', sound: 'task.done' }
-  ];
-
   container.innerHTML = `
     <div class="modal-backdrop" id="lab-backdrop">
-      <div class="modal-card" style="max-width: 680px;">
+      <div class="modal-card mascot-lab-card">
         <div class="modal-header">
-          <div class="modal-title">Kawaii Mascot Lab (20 Animations)</div>
-          <button class="btn-close-modal" id="btn-close-lab">✕</button>
+          <div>
+            <div class="modal-title">Mascot Lab (${ANIMATIONS.length} ${ANIMATIONS.length === 1 ? 'animation' : 'animations'})</div>
+            <div class="lab-coverage">${ANIMATIONS.length} registered states · 3 selectable mascots</div>
+          </div>
+          <button class="btn-close-modal" id="btn-close-lab" aria-label="Close Mascot Lab">${icon('close')}</button>
         </div>
 
-        <!-- Pet Selector Tabs -->
-        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0;">
-          <div style="display: flex; gap: 6px;">
-            <button class="mode-btn ${activePet === 'ghost' ? 'active' : ''}" data-select-pet="ghost">👻 Pixel the Ghost</button>
-            <button class="mode-btn ${activePet === 'cat' ? 'active' : ''}" data-select-pet="cat">🐱 Byte the Cat</button>
-            <button class="mode-btn ${activePet === 'bunny' ? 'active' : ''}" data-select-pet="bunny">🐰 Mochi the Bunny</button>
+        <div class="lab-controls">
+          <div class="lab-pet-selector">
+            <button class="mode-btn ${activePet === 'ghost' ? 'active' : ''}" data-select-pet="ghost">${icon('ghost', 18)}<span>Pixel</span></button>
+            <button class="mode-btn ${activePet === 'cat' ? 'active' : ''}" data-select-pet="cat">${icon('cat', 18)}<span>Byte</span></button>
+            <button class="mode-btn ${activePet === 'bunny' ? 'active' : ''}" data-select-pet="bunny">${icon('bunny', 18)}<span>Mochi</span></button>
           </div>
-          <div style="font-size: 12px; color: var(--ink-soft);">
-            Total: <strong>20 Animations</strong>
+          <div class="mode-toggle-group">
+            <button class="mode-btn ${state.mode === 'chill' ? 'active' : ''}" data-lab-mode="chill">Chill</button>
+            <button class="mode-btn ${state.mode === 'hacker' ? 'active' : ''}" data-lab-mode="hacker">Hacker</button>
           </div>
+        </div>
+
+        <div class="lab-playback-controls" aria-label="Animation playback controls">
+          <div class="lab-speed-controls" role="group" aria-label="Animation speed">
+            ${[0.25, 0.5, 1].map((speed) => `
+              <button class="lab-speed-btn ${labPlayback.speed === speed ? 'active' : ''}" type="button" data-speed="${speed}" aria-pressed="${labPlayback.speed === speed}">
+                ${speed}×
+              </button>
+            `).join('')}
+          </div>
+          <button class="lab-loop-btn" type="button" data-loop aria-pressed="${labPlayback.loop}">
+            Loop: ${labPlayback.loop ? 'On' : 'Off'}
+          </button>
         </div>
 
         <!-- Mascot Live Preview -->
-        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 0; background: var(--bg-canvas); border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
-          <div style="width: 150px; height: 150px; display: flex; align-items: center; justify-content: center;" id="lab-mascot-box">
+        <div class="lab-preview">
+          <div class="lab-mascot-box" id="lab-mascot-box">
             ${createMascotSvg(activePet, 140, 'lab')}
           </div>
-          <div style="margin-top: 10px; font-weight: 700; font-size: 14px; color: var(--accent-strong);" id="lab-status-text">
-            Pet: ${activePet.toUpperCase()} · Active: ${state.mascotState.toUpperCase()}
+          <div class="lab-status-text" id="lab-status-text">
+            ${activePet.toUpperCase()} · ${state.mascotState.toUpperCase()}
           </div>
         </div>
 
-        <!-- 20 Animations Grid -->
-        <div class="lab-grid" style="grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));">
-          ${animations.map(a => `
-            <button class="btn-lab-state ${state.mascotState === a.id ? 'active' : ''}" data-anim="${a.id}" data-sound="${a.sound}">
-              <span>${a.label}</span>
-              <span style="font-size: 10px; font-weight: 400; color: var(--ink-soft);">${a.desc}</span>
+        <div class="lab-grid">
+          ${ANIMATIONS.map((a) => `
+            <button class="btn-lab-state ${state.mascotState === a.id ? 'active' : ''}" data-anim="${a.id}" data-sound="${a.sound}" aria-label="Replay ${a.label}">
+              <span class="lab-animation-name">${a.label}</span>
+              <span class="lab-animation-meta">${(a.durationMs / 1000).toFixed(1)} s · ${a.loop ? 'loop' : 'one-shot'}</span>
+              <span class="lab-implemented">${icon('check', 14)} State registered</span>
             </button>
           `).join('')}
         </div>
@@ -91,7 +88,24 @@ export function renderAnimationLab(container) {
     if (state.mode === 'hacker' || state.mascotState === 'glasses-on') {
       labSvg.dataset.glasses = 'true';
     }
+    applyPlaybackSettings(labSvg);
   }
+
+  container.querySelectorAll('[data-speed]').forEach((btn) => {
+    btn.onclick = () => {
+      labPlayback.speed = Number(btn.getAttribute('data-speed'));
+      const currentLabSvg = getLabSvg();
+      if (currentLabSvg) applyPlaybackSettings(currentLabSvg);
+      renderAnimationLab(container);
+    };
+  });
+
+  container.querySelector('[data-loop]').onclick = () => {
+    labPlayback.loop = !labPlayback.loop;
+    const currentLabSvg = getLabSvg();
+    if (currentLabSvg) applyPlaybackSettings(currentLabSvg);
+    renderAnimationLab(container);
+  };
 
   // Pet selection
   container.querySelectorAll('[data-select-pet]').forEach(btn => {
@@ -99,6 +113,10 @@ export function renderAnimationLab(container) {
       const pet = btn.getAttribute('data-select-pet');
       store.setActivePet(pet);
     };
+  });
+
+  container.querySelectorAll('[data-lab-mode]').forEach((btn) => {
+    btn.onclick = () => store.setMode(btn.getAttribute('data-lab-mode'));
   });
 
   // Close Lab
@@ -167,10 +185,18 @@ export function renderAnimationLab(container) {
         currentLabSvg.dataset.state = '';
         void currentLabSvg.offsetWidth;
         currentLabSvg.dataset.state = anim;
+        applyPlaybackSettings(currentLabSvg);
       }
 
       const statusText = container.querySelector('#lab-status-text');
       if (statusText) statusText.innerText = `Pet: ${activePet.toUpperCase()} · Active: ${anim.toUpperCase()}`;
     };
   });
+}
+
+function applyPlaybackSettings(svg) {
+  for (const animation of svg.getAnimations({ subtree: true })) {
+    animation.playbackRate = labPlayback.speed;
+    animation.effect.updateTiming({ iterations: labPlayback.loop ? Infinity : 1 });
+  }
 }

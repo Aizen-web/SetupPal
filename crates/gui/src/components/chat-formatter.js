@@ -102,7 +102,7 @@ export function formatInline(text) {
   out = out.replace(/\[([^\]]+)\]\((file:\/\/\/[^\s)]+)\)/g, (_, label, url) =>
     hold(`<a href="${url}" class="chat-file-link" title="Open path">${label}</a>`));
   out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) =>
-    hold(`<a href="${url}" target="_blank" rel="noopener noreferrer" class="chat-inline-link">${label}<span class="ext-arrow" aria-hidden="true">↗</span></a>`));
+    hold(`<a href="${url}" target="_blank" rel="noopener noreferrer" class="chat-inline-link">${label}<span class="ext-arrow">${icon('arrow', 12)}</span></a>`));
 
   // 3. Emphasis
   out = out.replace(/\*\*(?!\s)([^\n]*?[^\s])\*\*/g, '<strong class="chat-bold">$1</strong>');

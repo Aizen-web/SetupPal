@@ -7,6 +7,7 @@
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { createClipboardTaskArtSvg, createSleepingMascotOnBooksSvg } from '../mascot/mascot-art.js';
+import { icon } from './icon.js';
 
 export function renderTaskPanel(container) {
   const state = store.getState();
@@ -26,10 +27,7 @@ export function renderTaskPanel(container) {
       <!-- Top Action Bar (Search & Settings icons) -->
       <div class="task-panel-top-actions">
         <button class="task-icon-btn" id="btn-task-search" title="Search setups & packages">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"></circle>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          </svg>
+          ${icon('search')}
         </button>
         <button class="task-icon-btn" id="btn-task-settings" title="Settings">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -68,9 +66,7 @@ export function renderTaskPanel(container) {
           <!-- Screenshot Empty State: Clipboard Art + Copy -->
           <div class="task-empty-state">
             <div class="task-empty-art-wrap">
-              ${!isHacker ? createClipboardTaskArtSvg(92) : `
-                <div style="font-size: 38px; margin: 8px 0; opacity: 0.85;">📋</div>
-              `}
+              ${createClipboardTaskArtSvg(92)}
             </div>
             <div class="task-empty-title">No active plan yet.</div>
             <div class="task-empty-desc">
@@ -82,16 +78,16 @@ export function renderTaskPanel(container) {
           let chipClass = '';
 
           if (t.status === 'done') {
-            iconHtml = `<div class="task-status-icon done">✓</div>`;
+            iconHtml = `<div class="task-status-icon done">${icon('check', 14)}</div>`;
             chipClass = 'badge-green';
           } else if (t.status === 'running') {
-            iconHtml = `<div class="task-status-icon running">⟳</div>`;
+            iconHtml = `<div class="task-status-icon running">${icon('refresh', 14)}</div>`;
             chipClass = 'badge-green';
           } else if (t.status === 'held') {
-            iconHtml = `<div class="task-status-icon held">!</div>`;
+            iconHtml = `<div class="task-status-icon held">${icon('alert', 14)}</div>`;
             chipClass = 'badge-yellow';
           } else if (t.status === 'blocked') {
-            iconHtml = `<div class="task-status-icon" style="border-color: var(--v-red); color: var(--v-red); background: rgba(196,73,58,0.15);">✕</div>`;
+            iconHtml = `<div class="task-status-icon blocked">${icon('close', 14)}</div>`;
             chipClass = 'badge-red';
           } else {
             iconHtml = `<div class="task-status-icon waiting">${t.num}</div>`;
@@ -130,12 +126,7 @@ export function renderTaskPanel(container) {
     </div>
   `;
 
-  const btnSettings = container.querySelector('#btn-task-settings');
-  if (btnSettings) {
-    btnSettings.onclick = () => {
-      store.setActivePage('settings');
-    };
-  }
+  container.querySelector('#btn-task-settings')?.remove();
 
   const btnSearch = container.querySelector('#btn-task-search');
   if (btnSearch) {

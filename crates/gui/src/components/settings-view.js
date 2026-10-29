@@ -5,6 +5,7 @@
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { apiClient } from '../api/client.js';
+import { icon } from './icon.js';
 
 export function renderSettingsView(container) {
   const state = store.getState();
@@ -99,7 +100,7 @@ export function renderSettingsView(container) {
               </div>
               <div style="display: flex; gap: 8px;">
                 <input id="input-ai-key" type="password" placeholder="Paste your API key here..." style="flex: 1; background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; font-family: var(--font-mono); outline: none;" />
-                <button id="btn-toggle-key-vis" class="btn-review" style="padding: 6px 10px; font-size: 12px;" title="Show/Hide Key">👁️</button>
+                <button id="btn-toggle-key-vis" class="btn-review" style="padding: 6px 10px; font-size: 12px;" title="Show API key" aria-label="Show API key">${icon('eye', 18)}</button>
               </div>
             </div>
 
@@ -124,7 +125,7 @@ export function renderSettingsView(container) {
             <!-- Token Optimization Features Callout -->
             <div style="background: rgba(34, 197, 94, 0.06); border: 1px solid rgba(34, 197, 94, 0.2); border-radius: var(--radius-md); padding: 10px 14px; font-size: 11.5px; line-height: 1.5; color: var(--ink);">
               <div style="font-weight: 600; color: #16a34a; margin-bottom: 3px; display: flex; align-items: center; gap: 6px;">
-                <span>⚡ Zero-Waste Token Engine Active</span>
+                <span>${icon('bolt', 16)} Zero-Waste Token Engine Active</span>
               </div>
               <div style="color: var(--ink-soft);">
                 • <strong>Prompt Caching Prefix</strong>: Immutable system prompts trigger OpenAI/NIM cache discounts (up to 50%).<br/>
@@ -165,9 +166,9 @@ export function renderSettingsView(container) {
               <div style="font-size: 12px; color: var(--ink-soft);">Each pet features 20 unique animations and distinct personalities</div>
             </div>
             <select id="select-active-pet" style="background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px; outline: none;">
-              <option value="ghost" ${state.activePet === 'ghost' ? 'selected' : ''}>👻 Pixel the Ghost</option>
-              <option value="cat" ${state.activePet === 'cat' ? 'selected' : ''}>🐱 Byte the Cat</option>
-              <option value="bunny" ${state.activePet === 'bunny' ? 'selected' : ''}>🐰 Mochi the Bunny</option>
+              <option value="ghost" ${state.activePet === 'ghost' ? 'selected' : ''}>Pixel the Ghost</option>
+              <option value="cat" ${state.activePet === 'cat' ? 'selected' : ''}>Byte the Cat</option>
+              <option value="bunny" ${state.activePet === 'bunny' ? 'selected' : ''}>Mochi the Bunny</option>
             </select>
           </div>
         </div>
@@ -306,7 +307,10 @@ export function renderSettingsView(container) {
   if (btnToggleVis && keyInput) {
     btnToggleVis.onclick = () => {
       keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
-      btnToggleVis.textContent = keyInput.type === 'password' ? '👁️' : '🙈';
+      const isHidden = keyInput.type === 'password';
+      btnToggleVis.innerHTML = icon(isHidden ? 'eye' : 'eyeOff', 18);
+      btnToggleVis.title = isHidden ? 'Show API key' : 'Hide API key';
+      btnToggleVis.setAttribute('aria-label', btnToggleVis.title);
     };
   }
 
