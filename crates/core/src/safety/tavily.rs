@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::sync::RwLock;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,7 +26,7 @@ pub struct TavilyVerificationResult {
     pub warning: Option<String>,
 }
 
-/// Trait abstracting Tavily web search verification so tests can run offline deterministically.
+/// Trait abstracting Tavily web search verification .
 #[async_trait]
 pub trait TavilyVerifier: Send + Sync {
     async fn verify_source(
@@ -181,158 +179,5 @@ impl TavilyVerifier for HttpTavilyVerifier {
             consensus_summary: summary,
             warning,
         })
-    }
-}
-
-/// Offline mock verifier for deterministic testing without live Tavily API calls.
-#[derive(Debug)]
-pub struct MockTavilyVerifier {
-    fixtures: RwLock<HashMap<String, TavilyVerificationResult>>,
-}
-
-impl Default for MockTavilyVerifier {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl MockTavilyVerifier {
-    pub fn new() -> Self {
-        let mut fixtures = HashMap::new();
-
-        // Built-in fixture simulating the infamous DS4Windows lookalike malware trap
-        fixtures.insert(
-            "ds4windows:spoofed".to_string(),
-            TavilyVerificationResult {
-                is_verified: false,
-                is_spoofed: true,
-                confidence_score: 0.99,
-                official_domains: vec!["github.com/Ryochan7/DS4Windows".to_string()],
-                consensus_summary: "Official open-source repository is maintained by Ryochan7 on GitHub. Standalone .dev/.com websites are known third-party malware distributors.".to_string(),
-                warning: Some("SEO Poisoning Alert: `ds4-windows.dev` is a known impersonation domain. The official source is `https://github.com/Ryochan7/DS4Windows`.".to_string()),
-            },
-        );
-
-        fixtures.insert(
-            "ds4windows:official".to_string(),
-            TavilyVerificationResult {
-                is_verified: true,
-                is_spoofed: false,
-                confidence_score: 0.98,
-                official_domains: vec!["github.com/Ryochan7/DS4Windows".to_string()],
-                consensus_summary: "Verified official GitHub release from Ryochan7/DS4Windows.".to_string(),
-                warning: None,
-            },
-        );
-
-        Self {
-            fixtures: RwLock::new(fixtures),
-        }
-    }
-
-    pub fn insert_fixture(&self, key: impl Into<String>, result: TavilyVerificationResult) {
-        if let Ok(mut map) = self.fixtures.write() {
-            map.insert(key.into(), result);
-        }
-    }
-}
-
-#[async_trait]
-impl TavilyVerifier for MockTavilyVerifier {
-    async fn verify_source(
-        &self,
-        software_name: &str,
-        candidate_url: &str,
-    ) -> Result<TavilyVerificationResult, CoreError> {
-        let name_lower = software_name.to_ascii_lowercase();
-        let url_lower = candidate_url.to_ascii_lowercase();
-
-        // Check DS4Windows trap fixture
-        if name_lower.contains("ds4windows") || name_lower.contains("ds4") {
-            if url_lower.contains("ds4-windows.dev")
-                || url_lower.contains("ds4windows.com")
-                || url_lower.contains("ds4-windows.com")
-            {
-                if let Ok(map) = self.fixtures.read() {
-                    if let Some(res) = map.get("ds4windows:spoofed") {
-                        return Ok(res.clone());
-                    }
-                }
-            } else if url_lower.contains("github.com/ryochan7/ds4windows") {
-                if let Ok(map) = self.fixtures.read() {
-                    if let Some(res) = map.get("ds4windows:official") {
-                        return Ok(res.clone());
-                    }
-                }
-            }
-        }
-
-        // Generic mock behavior:
-        // Known official domains pass; sketchy/untrusted domains get flagged
-        let is_github = url_lower.contains("github.com");
-        let is_python = url_lower.contains("python.org");
-        let is_npm = url_lower.contains("npmjs.org");
-        let is_adoptium = url_lower.contains("adoptium.net");
-
-        if is_github || is_python || is_npm || is_adoptium {
-            Ok(TavilyVerificationResult {
-                is_verified: true,
-                is_spoofed: false,
-                confidence_score: 0.95,
-                official_domains: vec![candidate_url.to_string()],
-                consensus_summary: format!("Verified official repository/distribution for `{software_name}`."),
-                warning: None,
-            })
-        } else {
-            // Unverified lookalike or unknown third-party domain
-            Ok(TavilyVerificationResult {
-                is_verified: false,
-                is_spoofed: true,
-                confidence_score: 0.88,
-                official_domains: vec![format!("github.com/official/{software_name}")],
-                consensus_summary: format!(
-                    "Tavily search consensus does not recognize `{candidate_url}` as an authorized publisher for `{software_name}`."
-                ),
-                warning: Some(format!(
-                    "Unverified Source Alert: `{candidate_url}` lacks community consensus for `{software_name}`."
-                )),
-            })
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn catches_ds4windows_spoofed_malware_domain() {
-        let verifier = MockTavilyVerifier::new();
-        let res = verifier
-            .verify_source("DS4Windows", "https://ds4-windows.dev/files/setup.exe")
-            .await
-            .unwrap();
-
-        assert!(!res.is_verified);
-        assert!(res.is_spoofed);
-        assert!(res.confidence_score >= 0.90);
-        assert!(res.official_domains.iter().any(|d| d.contains("Ryochan7")));
-        assert!(res.warning.as_ref().unwrap().contains("SEO Poisoning"));
-    }
-
-    #[tokio::test]
-    async fn approves_authentic_ds4windows_github_source() {
-        let verifier = MockTavilyVerifier::new();
-        let res = verifier
-            .verify_source(
-                "DS4Windows",
-                "https://github.com/Ryochan7/DS4Windows/releases/download/v3.3.3/DS4Windows_3.3.3_x64.zip",
-            )
-            .await
-            .unwrap();
-
-        assert!(res.is_verified);
-        assert!(!res.is_spoofed);
-        assert!(res.warning.is_none());
     }
 }

@@ -1,4 +1,3 @@
-pub mod mock;
 pub mod sanitizer;
 
 use async_trait::async_trait;
@@ -96,11 +95,7 @@ impl NimClient {
 #[async_trait]
 impl LlmClient for NimClient {
     fn model_name(&self) -> &str {
-        if self.config.nim_mock {
-            "nim-mock-deterministic"
-        } else {
-            &self.config.nim_model
-        }
+        &self.config.nim_model
     }
 
     async fn propose_plan(
@@ -109,13 +104,9 @@ impl LlmClient for NimClient {
         profile: &SystemProfile,
         untrusted_context: Option<&str>,
     ) -> Result<Plan, CoreError> {
-        if self.config.nim_mock {
-            return mock::generate_mock_plan(goal, profile, untrusted_context);
-        }
-
         let api_key = self.config.nim_api_key.as_deref().ok_or_else(|| {
             CoreError::Config(
-                "NIM_API_KEY is not set and NIM_MOCK is disabled. Set NIM_API_KEY or NIM_MOCK=1."
+                "NIM_API_KEY is not set. Add it to your .env file."
                     .to_string(),
             )
         })?;
@@ -194,19 +185,9 @@ impl LlmClient for NimClient {
         diagnostic: &str,
         attempt: u8,
     ) -> Result<Plan, CoreError> {
-        if self.config.nim_mock {
-            return mock::generate_mock_remediation_plan(
-                goal,
-                profile,
-                failed_step_id,
-                diagnostic,
-                attempt,
-            );
-        }
-
         let api_key = self.config.nim_api_key.as_deref().ok_or_else(|| {
             CoreError::Config(
-                "NIM_API_KEY is not set and NIM_MOCK is disabled. Set NIM_API_KEY or NIM_MOCK=1."
+                "NIM_API_KEY is not set. Add it to your .env file."
                     .to_string(),
             )
         })?;

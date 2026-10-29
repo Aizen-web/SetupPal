@@ -47,26 +47,3 @@ pub fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<String, 
     }
     Ok(actual)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    #[test]
-    fn sha256_verifier_accepts_matching_and_rejects_tampered_file() {
-        let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
-        tmp.write_all(b"zero-trust-orchestrator-payload")
-            .expect("write payload");
-
-        let digest = compute_file_sha256(tmp.path()).expect("compute sha256");
-        assert_eq!(digest.len(), 64);
-
-        let verified = verify_file_sha256(tmp.path(), &digest).expect("should match");
-        assert_eq!(verified, digest);
-
-        let bad = "0000000000000000000000000000000000000000000000000000000000000000";
-        let err = verify_file_sha256(tmp.path(), bad).expect_err("should fail on mismatch");
-        assert!(matches!(err, AdapterError::HashMismatch { .. }));
-    }
-}

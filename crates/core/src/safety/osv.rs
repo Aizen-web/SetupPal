@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -167,40 +166,5 @@ impl OsvClient for HttpOsvClient {
             .collect();
 
         Ok(summaries)
-    }
-}
-
-/// Deterministic in-memory OSV client for unit tests and offline mode.
-#[derive(Debug, Clone, Default)]
-pub struct MockOsvClient {
-    vulns_by_pkg: HashMap<String, Vec<VulnerabilitySummary>>,
-}
-
-impl MockOsvClient {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn insert_vulnerability(&mut self, package_name: &str, vuln: VulnerabilitySummary) {
-        self.vulns_by_pkg
-            .entry(package_name.to_ascii_lowercase())
-            .or_default()
-            .push(vuln);
-    }
-}
-
-#[async_trait]
-impl OsvClient for MockOsvClient {
-    async fn query_package(
-        &self,
-        _ecosystem: Ecosystem,
-        package_name: &str,
-        _version: Option<&str>,
-    ) -> Result<Vec<VulnerabilitySummary>, CoreError> {
-        Ok(self
-            .vulns_by_pkg
-            .get(&package_name.to_ascii_lowercase())
-            .cloned()
-            .unwrap_or_default())
     }
 }

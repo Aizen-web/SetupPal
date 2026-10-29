@@ -46,23 +46,6 @@ pub fn render_system_profile(profile: &SystemProfile) {
     println!();
 }
 
-pub fn render_demo_attack_banner(poisoned_readme: &str) {
-    println!(
-        "{}",
-        "=== ZERO-TRUST ADVERSARIAL ATTACK SIMULATION (DEMO-ATTACK) ==="
-            .bold()
-            .bright_red()
-    );
-    println!(
-        "  {}",
-        "Untrusted Repository README Input (wrapped in <untrusted_external_data>):".bold()
-    );
-    for line in poisoned_readme.lines() {
-        println!("    {}", line.bright_yellow());
-    }
-    println!();
-}
-
 fn format_badge(rating: RiskRating, score: u8) -> ColoredString {
     match rating {
         RiskRating::Green => format!("[GREEN  score={score:02}/100]").bold().bright_green(),
@@ -75,7 +58,6 @@ pub fn render_plan_with_safety(
     plan: &Plan,
     safety: &PlanSafetyReport,
     dry_run: bool,
-    nim_mock: bool,
 ) {
     println!(
         "{}",
@@ -92,8 +74,7 @@ pub fn render_plan_with_safety(
             .bright_green()
             .to_string(),
         PlanSource::Llm { model } => {
-            let mode = if nim_mock { "offline mock" } else { "live NIM" };
-            format!("NVIDIA NIM (`{model}` - {mode})")
+            format!("NVIDIA NIM (`{model}`)")
                 .bright_yellow()
                 .to_string()
         }

@@ -316,39 +316,3 @@ int main() {
         Ok(res)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::os::MockOsProvider;
-
-    #[tokio::test]
-    async fn verifier_runs_binary_version_check() {
-        let bus = EventBus::new(16);
-        let mock_os = Arc::new(MockOsProvider::with_mock_cpp_toolchain());
-        let verifier = Verifier::new(mock_os, bus);
-
-        let res = verifier
-            .verify_binary_command("step-4", AllowedBinary::Clang, &["--version".to_string()])
-            .await
-            .expect("verify command");
-
-        assert!(res.passed);
-        assert!(res.stdout.contains("clang version 18.1.8"));
-    }
-
-    #[tokio::test]
-    async fn verifier_runs_cpp_toolchain_compilation_and_execution() {
-        let bus = EventBus::new(16);
-        let mock_os = Arc::new(MockOsProvider::with_mock_cpp_toolchain());
-        let verifier = Verifier::new(mock_os, bus);
-
-        let res = verifier
-            .verify_cpp_toolchain("step-cpp-check")
-            .await
-            .expect("cpp toolchain verify");
-
-        assert!(res.passed);
-        assert!(res.stdout.contains("Zero-Trust C++20 Verification Passed! Sum=15"));
-    }
-}

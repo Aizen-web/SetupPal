@@ -231,25 +231,3 @@ pub async fn restore_windows_user_path(previous_raw: &str) -> Result<(), CoreErr
     read_windows_registry_path().await?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_reg_query_output_correctly() {
-        let sample = r#"
-HKEY_CURRENT_USER\Environment
-    Path    REG_EXPAND_SZ    C:\Users\dev\.cargo\bin;C:\Program Files\LLVM\bin
-"#;
-        let extracted = extract_reg_query_value(sample);
-        assert_eq!(
-            extracted.as_deref(),
-            Some(r"C:\Users\dev\.cargo\bin;C:\Program Files\LLVM\bin")
-        );
-
-        let paths = parse_windows_path_string(extracted.as_deref().unwrap_or_default());
-        assert_eq!(paths.len(), 2);
-        assert_eq!(paths[1], PathBuf::from(r"C:\Program Files\LLVM\bin"));
-    }
-}

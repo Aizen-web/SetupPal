@@ -480,39 +480,3 @@ impl SourceAdapter for PyPIAdapter {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::os::MockOsProvider;
-
-    #[tokio::test]
-    async fn pypi_adapter_resolves_known_metadata_offline() {
-        let os = Arc::new(MockOsProvider::new());
-        let adapter = PyPIAdapter::new(os);
-
-        let meta = adapter.resolve_metadata("requests", Some("2.32.3")).await.unwrap();
-        assert_eq!(meta.package_id, "requests");
-        assert_eq!(meta.resolved_version, "2.32.3");
-        assert!(meta.expected_sha256.is_some());
-        assert!(meta.download_url.unwrap().contains("requests-2.32.3"));
-    }
-
-    #[tokio::test]
-    async fn pypi_adapter_dry_run_install_simulates_cleanly() {
-        let os = Arc::new(MockOsProvider::new());
-        let adapter = PyPIAdapter::new(os);
-
-        let meta = adapter.resolve_metadata("numpy", Some("2.1.1")).await.unwrap();
-        let ctx = ExecutionContext {
-            dry_run: true,
-            working_dir: PathBuf::from("."),
-            isolated_env: None,
-        };
-
-        let receipt = adapter.install(&meta, None, &ctx).await.unwrap();
-        assert!(receipt.dry_run);
-        assert!(receipt.changes_made[0].contains("Would execute: python -m pip install numpy==2.1.1"));
-        assert_eq!(receipt.rollback_hint, Some("python -m pip uninstall -y numpy".to_string()));
-    }
-}

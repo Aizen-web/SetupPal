@@ -1,8 +1,6 @@
-pub mod mock;
 pub mod unix;
 pub mod windows;
 
-pub use mock::MockOsProvider;
 
 use std::path::{Path, PathBuf};
 use async_trait::async_trait;

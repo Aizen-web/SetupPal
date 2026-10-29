@@ -1,12 +1,10 @@
 pub mod github;
-pub mod mock;
 pub mod modrinth;
 pub mod npm;
 pub mod pypi;
 pub mod winget;
 
 pub use github::GitHubReleasesAdapter;
-pub use mock::MockAdapter;
 pub use modrinth::ModrinthAdapter;
 pub use npm::NpmAdapter;
 pub use pypi::PyPIAdapter;
@@ -102,7 +100,7 @@ pub enum AdapterError {
 }
 
 /// Unified interface implemented by `Winget`, `PyPI`, `Npm`, `Modrinth`,
-/// `GitHubReleases`, `OfficialVendorUrl`, and `MockAdapter`.
+/// `GitHubReleases`, `OfficialVendorUrl`.
 #[async_trait]
 pub trait SourceAdapter: Send + Sync {
     fn kind(&self) -> AdapterKind;
@@ -147,26 +145,10 @@ impl AdapterRegistry {
         }
     }
 
-    /// Creates a registry pre-populated with safe deterministic mock adapters for all `AdapterKind`s.
-    pub fn with_default_mocks() -> Self {
-        let mut reg = Self::new();
-        for kind in [
-            AdapterKind::Winget,
-            AdapterKind::PyPI,
-            AdapterKind::Npm,
-            AdapterKind::Modrinth,
-            AdapterKind::GitHubReleases,
-            AdapterKind::OfficialVendorUrl,
-        ] {
-            reg.register(Arc::new(mock::MockAdapter::with_defaults_for(kind)));
-        }
-        reg
-    }
-
     /// Creates a registry using real system adapters (e.g. `WingetAdapter`, `PyPIAdapter`,
     /// `NpmAdapter`, `ModrinthAdapter`, `GitHubReleasesAdapter`), backed by `OsProvider`.
     pub fn with_system_defaults(os_provider: Arc<dyn crate::os::OsProvider>) -> Self {
-        let mut reg = Self::with_default_mocks();
+        let mut reg = Self::new();
         reg.register(Arc::new(winget::WingetAdapter::new(os_provider.clone())));
         reg.register(Arc::new(pypi::PyPIAdapter::new(os_provider.clone())));
         reg.register(Arc::new(npm::NpmAdapter::new(os_provider.clone())));

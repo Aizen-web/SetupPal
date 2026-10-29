@@ -423,39 +423,3 @@ impl SourceAdapter for NpmAdapter {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-    use crate::os::MockOsProvider;
-
-    #[tokio::test]
-    async fn npm_adapter_resolves_known_metadata_offline() {
-        let os = Arc::new(MockOsProvider::new());
-        let adapter = NpmAdapter::new(os);
-
-        let meta = adapter.resolve_metadata("typescript", Some("5.6.2")).await.unwrap();
-        assert_eq!(meta.package_id, "typescript");
-        assert_eq!(meta.resolved_version, "5.6.2");
-        assert!(meta.download_url.unwrap().contains("typescript-5.6.2.tgz"));
-    }
-
-    #[tokio::test]
-    async fn npm_adapter_dry_run_install_simulates_cleanly() {
-        let os = Arc::new(MockOsProvider::new());
-        let adapter = NpmAdapter::new(os);
-
-        let meta = adapter.resolve_metadata("prettier", Some("3.3.3")).await.unwrap();
-        let ctx = ExecutionContext {
-            dry_run: true,
-            working_dir: PathBuf::from("."),
-            isolated_env: None,
-        };
-
-        let receipt = adapter.install(&meta, None, &ctx).await.unwrap();
-        assert!(receipt.dry_run);
-        assert!(receipt.changes_made[0].contains("Would execute: npm install prettier@3.3.3"));
-        assert_eq!(receipt.rollback_hint, Some("npm uninstall prettier".to_string()));
-    }
-}

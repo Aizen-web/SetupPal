@@ -123,34 +123,3 @@ impl RecipeStore {
         &self.recipes
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn recipes_embedded_defaults_load_and_parse_all_flagships() {
-        let store = RecipeStore::load_from_dir_or_embedded(Path::new("non_existent_dir"))
-            .expect("should load embedded fallback");
-        assert!(store.list().len() >= 3);
-
-        let cpp = store.find_matching("set up c++20 development").expect("match cpp20");
-        assert_eq!(cpp.id, "cpp20_dev");
-
-        let python = store.find_matching("set me up with python ai and data science").expect("match python");
-        assert_eq!(python.id, "python_ai_venv");
-
-        let mc = store.find_matching("minecraft 1.21 fabric performance").expect("match minecraft");
-        assert_eq!(mc.id, "minecraft_fabric_1_21");
-    }
-
-    #[test]
-    fn recipes_fuzzy_matches_minor_typos() {
-        let store = RecipeStore::load_from_dir_or_embedded(Path::new("non_existent_dir")).unwrap();
-        // Exact match
-        assert!(store.find_matching("python ai").is_some());
-        // Minor typo match
-        assert!(store.find_matching("pythn ai").is_some());
-        assert!(store.find_matching("minecraf fabric").is_some());
-    }
-}

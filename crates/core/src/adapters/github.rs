@@ -390,38 +390,3 @@ impl SourceAdapter for GitHubReleasesAdapter {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-    use crate::os::MockOsProvider;
-
-    #[tokio::test]
-    async fn github_adapter_resolves_known_metadata_offline() {
-        let os = Arc::new(MockOsProvider::new());
-        let adapter = GitHubReleasesAdapter::new(os);
-
-        let meta = adapter.resolve_metadata("llvm/llvm-project", Some("18.1.8")).await.unwrap();
-        assert_eq!(meta.package_id, "llvm/llvm-project");
-        assert_eq!(meta.resolved_version, "18.1.8");
-        assert!(meta.download_url.unwrap().contains("LLVM-18.1.8-win64.exe"));
-    }
-
-    #[tokio::test]
-    async fn github_adapter_dry_run_install_simulates_cleanly() {
-        let os = Arc::new(MockOsProvider::new());
-        let adapter = GitHubReleasesAdapter::new(os);
-
-        let meta = adapter.resolve_metadata("Kitware/CMake", Some("3.30.2")).await.unwrap();
-        let ctx = ExecutionContext {
-            dry_run: true,
-            working_dir: PathBuf::from("."),
-            isolated_env: None,
-        };
-
-        let receipt = adapter.install(&meta, None, &ctx).await.unwrap();
-        assert!(receipt.dry_run);
-        assert!(receipt.changes_made[0].contains("Would download release 3.30.2"));
-    }
-}

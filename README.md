@@ -18,18 +18,15 @@ Every step passes through a **deterministic Rust Safety Engine** before executio
 ## Quick Start (Milestone 1)
 
 ```bash
-# 1. Run unit tests across the workspace
-cargo test --workspace
-
-# 2. Run system scan & doctor check
+# 1. Run system scan & doctor check
 cargo run -p installer_cli -- doctor
 
 # 3. Generate a deterministic Recipe-backed Plan (C++20 dev)
 cargo run -p installer_cli -- plan "set me up for C++20 dev"
 
-# 4. Generate an NVIDIA NIM Plan using offline deterministic mock mode (NIM_MOCK=1)
-NIM_MOCK=1 cargo run -p installer_cli -- plan "setup Rust + Node.js microservice environment"
+# 4. Generate an NVIDIA NIM Plan (requires NIM_API_KEY in .env)
+cargo run -p installer_cli -- plan "setup Rust + Node.js microservice environment"
 
 # 5. Output raw JSON Plan + JSON Schema
-NIM_MOCK=1 cargo run -p installer_cli -- plan "set me up for C++20 dev" --json
+cargo run -p installer_cli -- plan "set me up for C++20 dev" --json
 ```

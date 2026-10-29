@@ -6,7 +6,6 @@
 import { apiClient } from './client.js';
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
-import { simulation } from '../state/simulation.js';
 import { petVoiceEngine } from '../mascot/voicelines.js';
 import confetti from 'canvas-confetti';
 
@@ -535,53 +534,24 @@ export class BackendBridge {
 
       return result;
     } catch (err) {
-      console.warn("Backend plan execution encountered an issue, falling back to local simulation:", err);
-      simulation.approveAndRunPlan();
-    }
-  }
-
-  async runAttackRadar() {
-    sounds.play('ui.click');
-    store.setMode('hacker');
-    store.setMascotState('scanning', petVoiceEngine.line('diagnosing'));
-
-    if (!this.isBackendOnline) {
-      await this.waitForConnection(3000);
-    }
-
-    try {
-      const data = await apiClient.simulateAttack();
-      const plan = data.plan;
-      const safety = data.safety;
-
-      sounds.play('verdict.red');
-      store.setMascotState('red', petVoiceEngine.line('blocked'));
-
-      const redLogs = [
-        { id: Date.now() + 1, text: '!! ADVERSARIAL ATTACK INTERCEPTED !!', type: 'error' },
-        { id: Date.now() + 2, text: `Untrusted README: "${data.untrusted_readme.slice(0, 75)}..."`, type: 'info' }
-      ];
-
-      (safety.step_reports || []).forEach((r, idx) => {
-        if ((r.rating || '').toLowerCase() === 'red') {
-          redLogs.push({
-            id: Date.now() + 10 + idx,
-            text: `⛔ ZERO-TRUST GATE [${r.step_id}]: ${(r.reasons || []).join(' | ')} (Score: ${r.risk_score}/100)`,
-            type: 'error'
-          });
-        }
-      });
-
+      console.error("Plan execution failed:", err);
+      sounds.play('error');
+      store.setMode('chill');
+      store.setMascotState('error', petVoiceEngine.line('error'));
       store.setState(s => ({
         ...s,
-        terminalLogs: [...s.terminalLogs, ...redLogs]
+        chatMessages: [
+          ...s.chatMessages,
+          {
+            id: 'a_' + Date.now(),
+            sender: 'assistant',
+            text: `**Error:** ${err.message}`,
+            options: [],
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            planAttached: false
+          }
+        ]
       }));
-
-      return data;
-    } catch (err) {
-      console.error("Attack simulation failed:", err);
-      sounds.play('error');
-      store.setMascotState('error', petVoiceEngine.line('error'));
     }
   }
 
@@ -591,31 +561,56 @@ export class BackendBridge {
         await this.waitForConnection(2000);
       }
       const data = await apiClient.getHistory();
-      if (data && data.transactions) {
-        const changes = data.transactions.map((tx, idx) => ({
+      if (data && Array.isArray(data.transactions)) {
+        const rolledBack = new Set(
+          data.transactions.map(tx => tx.rolled_back_tx_id).filter(Boolean)
+        );
+        const transactions = data.transactions.map(tx => ({
           id: tx.tx_id,
-          time: new Date(tx.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          desc: tx.action_summary,
-          reversible: tx.rollback_data ? 'Full' : 'Partial',
-          task: `Step ${tx.step_id}`
+          timestamp: tx.timestamp,
+          goal: tx.goal || '',
+          stepId: tx.step_id,
+          summary: tx.action_summary,
+          dryRun: !!tx.dry_run,
+          changes: tx.changes_made || [],
+          rolledBackTxId: tx.rolled_back_tx_id || null,
+          rollbackAvailable: !!tx.rollback_data && !rolledBack.has(tx.tx_id),
+          step: tx.step
         }));
+
+        const downloads = transactions
+          .filter(tx => !tx.dryRun && !tx.rolledBackTxId && tx.step?.action === 'download_artifact')
+          .map(tx => {
+            const p = tx.step.params || {};
+            const dest = String(p.destination || p.id || '');
+            return {
+              id: tx.id,
+              filename: dest.split(/[\\/]/).pop() || p.id,
+              source: p.adapter || 'unknown',
+              sha256: p.expected_sha256 || '',
+              date: new Date(tx.timestamp).toLocaleString(),
+              rolledBack: rolledBack.has(tx.id)
+            };
+          })
+          .reverse();
 
         store.setState(s => ({
           ...s,
-          history: {
-            ...s.history,
-            changes: changes.length > 0 ? changes : s.history.changes
-          }
+          downloads,
+          history: { transactions, loaded: true, error: null }
         }));
       }
     } catch (err) {
       console.warn("Could not load history from backend:", err);
+      store.setState(s => ({
+        ...s,
+        history: { ...s.history, loaded: true, error: err.message || 'backend unavailable' }
+      }));
     }
   }
 
-  async rewindLastChange() {
+  async rewindLastChange(txId = null) {
     sounds.play('rewind');
-    store.setActivePage('chats');
     store.setMascotState('rewind', petVoiceEngine.line('rewind'));
 
     if (!this.isBackendOnline) {
@@ -623,7 +618,7 @@ export class BackendBridge {
     }
 
     try {
-      const res = await apiClient.undo();
+      const res = await apiClient.undo(txId);
       if (res.status === 'rolled_back') {
         sounds.play('verdict.green');
         store.setMascotState('green', petVoiceEngine.line('done'));

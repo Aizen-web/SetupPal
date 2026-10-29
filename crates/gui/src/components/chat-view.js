@@ -305,11 +305,6 @@ export function renderChatView(container) {
           <button class="suggestion-chip" data-chip="web">Web & TypeScript</button>
           <button class="suggestion-chip" data-chip="cpp">C++ toolchain</button>
           <button class="suggestion-chip" data-chip="python">Python data science</button>
-          <button class="suggestion-chip chip-attack" data-chip="attack">
-            ${icon('alert', 16, 'chip-warn-icon')}
-            <span class="demo-tag">Demo</span>
-            <span>Simulate Attack Radar</span>
-          </button>
         </div>
       </div>
     </div>
@@ -543,9 +538,7 @@ export function renderChatView(container) {
     chip.onclick = () => {
       const type = chip.getAttribute('data-chip');
       sounds.play('ui.click');
-      if (type === 'attack') {
-        bridge.runAttackRadar();
-      } else if (type === 'web') {
+      if (type === 'web') {
         const goal = 'set up fullstack Node.js and TypeScript web environment';
         petVoiceEngine.trigger('prompt_selected', { prompt: goal });
         bridge.submitGoal(goal);

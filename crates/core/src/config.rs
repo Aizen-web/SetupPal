@@ -40,9 +40,7 @@ pub struct CoreConfig {
     pub nim_base_url: String,
     pub nim_model: String,
     pub nim_api_key: Option<String>,
-    pub nim_mock: bool,
     pub tavily_api_key: Option<String>,
-    pub tavily_mock: bool,
     pub recipes_dir: PathBuf,
     pub state_log_path: PathBuf,
 }
@@ -70,25 +68,9 @@ impl CoreConfig {
             .ok()
             .filter(|v| !v.trim().is_empty());
 
-        let nim_mock = match env::var("NIM_MOCK") {
-            Ok(val) => matches!(
-                val.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            ),
-            Err(_) => nim_api_key.is_none(),
-        };
-
         let tavily_api_key = env::var("TAVILY_API_KEY")
             .ok()
             .filter(|v| !v.trim().is_empty());
-
-        let tavily_mock = match env::var("TAVILY_MOCK") {
-            Ok(val) => matches!(
-                val.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            ),
-            Err(_) => tavily_api_key.is_none(),
-        };
 
         let recipes_dir = env::var("ORCHESTRATOR_RECIPES_DIR")
             .map(PathBuf::from)
@@ -102,9 +84,7 @@ impl CoreConfig {
             nim_base_url,
             nim_model,
             nim_api_key,
-            nim_mock,
             tavily_api_key,
-            tavily_mock,
             recipes_dir,
             state_log_path,
         }

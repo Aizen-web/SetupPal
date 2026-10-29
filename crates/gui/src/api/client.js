@@ -120,18 +120,6 @@ class ApiClient {
     return await res.json();
   }
 
-  async simulateAttack() {
-    const res = await fetch(`${API_BASE}/demo-attack`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Demo attack failed (${res.status}): ${text}`);
-    }
-    return await res.json();
-  }
-
   async getHistory() {
     const res = await fetch(`${API_BASE}/history`);
     if (!res.ok) throw new Error(`Fetch history failed: ${res.statusText}`);

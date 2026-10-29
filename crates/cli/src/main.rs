@@ -72,8 +72,6 @@ pub enum Commands {
         #[arg(long)]
         export_html: Option<std::path::PathBuf>,
     },
-    /// Run the scripted prompt-injection + typosquatting interception showcase
-    DemoAttack,
 }
 
 #[tokio::main]

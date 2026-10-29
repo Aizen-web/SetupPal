@@ -106,70 +106,14 @@ class Store {
       })),
 
       // Downloads Data
-      downloads: [
-        {
-          id: 'd1',
-          filename: 'OpenJDK21U-jdk_x64_windows_hotspot_21.0.3_9.msi',
-          source: 'adoptium.net',
-          size: '189.4 MB',
-          sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-          hashStatus: 'matches publisher',
-          verdict: 'GREEN',
-          date: '10 mins ago',
-          status: 'verified'
-        },
-        {
-          id: 'd2',
-          filename: 'fabric-installer-1.0.1.exe',
-          source: 'fabricmc.net',
-          size: '18.0 MB',
-          sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
-          hashStatus: 'downloading (78%)',
-          verdict: 'GREEN',
-          date: 'Just now',
-          status: 'queue',
-          progress: 78,
-          speed: '4.8 MB/s',
-          eta: '2s'
-        },
-        {
-          id: 'd3',
-          filename: 'sodium-fabric-mc1.21-0.5.11.jar',
-          source: 'modrinth.com',
-          size: '1.2 MB',
-          sha256: '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',
-          hashStatus: 'matches publisher',
-          verdict: 'GREEN',
-          date: 'Queued',
-          status: 'queue',
-          progress: 0
-        },
-        {
-          id: 'd4',
-          filename: 'fastlight-pro-v0.1.jar',
-          source: 'modrinth.com',
-          size: '640 KB',
-          sha256: '4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a',
-          hashStatus: 'held for review',
-          verdict: 'YELLOW',
-          date: 'Awaiting call',
-          status: 'quarantine'
-        }
-      ],
+      // Real downloads, derived from the backend transaction log
+      downloads: [],
 
-      // History Data
+      // History Data (filled from the backend transaction log)
       history: {
-        conversations: [
-          { id: 'h1', title: 'Minecraft + mods', date: 'Today, 14:20', type: 'Setup', tasksDone: '2 of 4', verdict: 'YELLOW' },
-          { id: 'h2', title: 'C++ toolchain', date: 'Yesterday, 19:15', type: 'Dev Environment', tasksDone: '4 of 4', verdict: 'GREEN' },
-          { id: 'h3', title: 'Python data science', date: '2 days ago', type: 'Venv Setup', tasksDone: '3 of 3', verdict: 'GREEN' },
-          { id: 'h4', title: 'Typosquat Security Demo', date: '3 days ago', type: 'Audit', tasksDone: '1 blocked', verdict: 'RED' }
-        ],
-        changes: [
-          { id: 'tx-103', time: '14:20:48', desc: 'Installed Adoptium Temurin 21 JDK (winget)', reversible: 'Full', task: 'Install Java 21' },
-          { id: 'tx-102', time: '14:20:12', desc: 'Added JAVA_HOME to HKCU\\Environment', reversible: 'Full', task: 'Install Java 21' },
-          { id: 'tx-101', time: '14:20:05', desc: 'Created Minecraft data folder (%APPDATA%\\.minecraft)', reversible: 'Full', task: 'Install Launcher' }
-        ]
+        transactions: [],
+        loaded: false,
+        error: null
       },
 
       // Settings
