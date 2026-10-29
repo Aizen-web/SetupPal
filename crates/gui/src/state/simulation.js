@@ -5,6 +5,7 @@
 
 import { store } from './store.js';
 import { sounds } from '../audio/sound-engine.js';
+import { petVoiceEngine } from '../mascot/voicelines.js';
 import confetti from 'canvas-confetti';
 
 class SimulationEngine {
@@ -18,13 +19,13 @@ class SimulationEngine {
     this.isRunning = true;
 
     // 1. Initial approval reaction in Chill
-    store.setMascotState('speaking', "Okay, putting on my shades!");
+    store.setMascotState('speaking', petVoiceEngine.line('plan_approve'));
     sounds.play('ui.click');
 
     setTimeout(() => {
       // 2. AUTO-ENTER HACKER MODE
       store.setMode('hacker');
-      store.setMascotState('downloading', "Hashes check out so far. Fabric is next. Hold tight.");
+      store.setMascotState('downloading', petVoiceEngine.line('downloading'));
       
       // Update plan status
       store.setState(s => {
@@ -49,7 +50,7 @@ class SimulationEngine {
         sounds.play('download.done');
         sounds.play('verdict.green');
 
-        store.setMascotState('working', "Checking SHA-256 for Fabric... matches publisher!");
+        store.setMascotState('working', petVoiceEngine.line('working'));
         store.setState(s => {
           const tasks = s.activePlan.tasks.map(t => {
             if (t.id === 3) return { ...t, status: 'done' };
@@ -70,7 +71,7 @@ class SimulationEngine {
         // 4. Sodium installation & verification (1.8s)
         setTimeout(() => {
           sounds.play('task.done');
-          store.setMascotState('green', "Sodium added! Verified against 30M downloads.");
+          store.setMascotState('green', petVoiceEngine.line('done'));
 
           store.setState(s => {
             const tasks = s.activePlan.tasks.map(t => {
@@ -91,13 +92,13 @@ class SimulationEngine {
           // 5. Yellow notice for held task
           setTimeout(() => {
             sounds.play('verdict.yellow');
-            store.setMascotState('held-sign', "FastLight Pro is held. Review it whenever you're ready.");
+            store.setMascotState('held-sign', petVoiceEngine.line('warning'));
 
             // 6. Celebration of approved tasks!
             setTimeout(() => {
               sounds.play('task.all_done');
               sounds.play('celebrate');
-              store.setMascotState('celebrate', "All approved tasks finished and verified! Boo-yah!");
+              store.setMascotState('celebrate', petVoiceEngine.line('done'));
 
               // Confetti burst
               try {
@@ -122,7 +123,7 @@ class SimulationEngine {
               // 7. Auto return to Chill Mode after dwell time (ui.md section 2.3)
               setTimeout(() => {
                 store.setMode('chill');
-                store.setMascotState('idle', "Everything is set up and safe! What should we do next?");
+                store.setMascotState('idle', petVoiceEngine.line('idle'));
                 this.isRunning = false;
               }, 4000);
 
@@ -138,12 +139,12 @@ class SimulationEngine {
     this.isRunning = true;
 
     store.setMode('hacker');
-    store.setMascotState('scanning', "Scanning incoming package request against OSV.dev and typosquat database...");
+    store.setMascotState('scanning', petVoiceEngine.line('diagnosing'));
     sounds.play('ui.click');
 
     setTimeout(() => {
       sounds.play('verdict.red');
-      store.setMascotState('red', "Nope! That is a scary one. Typosquat attack blocked!");
+      store.setMascotState('red', petVoiceEngine.line('blocked'));
 
       store.setState(s => ({
         ...s,
@@ -165,7 +166,7 @@ class SimulationEngine {
   stopRun() {
     this.isRunning = false;
     store.setMode('chill');
-    store.setMascotState('idle', "Stopped the run safely. No changes were made without verification.");
+    store.setMascotState('idle', petVoiceEngine.line('stopped'));
     sounds.play('mode.chill');
   }
 }

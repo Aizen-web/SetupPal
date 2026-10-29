@@ -137,7 +137,7 @@ export function renderChatView(container) {
         </div>
         <div class="speech-bubble ${chatUi.greetingSeen ? '' : 'is-new'}">
           <div class="speech-bubble-tail"></div>
-          <div id="speech-bubble-text" class="speech-bubble-inner-text">${state.mascotSpeech || "Hey there! I'm Setup Pal.\nI'll help you set up your development\ntools and environments safely!"}</div>
+          <div id="speech-bubble-text" class="speech-bubble-inner-text">${state.mascotSpeech || petVoiceEngine.line('welcome')}</div>
         </div>
       </div>
 

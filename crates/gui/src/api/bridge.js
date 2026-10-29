@@ -120,7 +120,7 @@ export class BackendBridge {
       case 'scan_completed':
         if (payload?.profile) {
           const tools = payload.profile.detected_tools || [];
-          store.setMascotState('idle', `Detected ${tools.length} installed dev tools on ${payload.profile.os_type}. All clear!`);
+          store.setMascotState('idle', petVoiceEngine.line('idle'));
         }
         break;
 
@@ -129,7 +129,7 @@ export class BackendBridge {
         break;
 
       case 'recipe_matched':
-        store.setMascotState('speaking', `Found deterministic recipe: ${payload?.recipe_id}. Loading safety gates!`);
+        store.setMascotState('speaking', petVoiceEngine.line('thinking'));
         break;
 
       case 'plan_generated':
@@ -137,7 +137,7 @@ export class BackendBridge {
         break;
 
       case 'safety_check_started':
-        store.setMascotState('scanning', "Scanning all proposed steps against OSV.dev CVEs and typosquat database...");
+        store.setMascotState('scanning', petVoiceEngine.line('diagnosing'));
         break;
 
       case 'safety_check_completed':
@@ -145,12 +145,12 @@ export class BackendBridge {
           const rating = (payload.report.overall_rating || 'green').toLowerCase();
           if (rating === 'green') {
             sounds.play('verdict.green');
-            store.setMascotState('green', "Zero-trust safety review: All proposed steps are strictly VERIFIED GREEN!");
+            store.setMascotState('green', petVoiceEngine.line('done'));
           } else if (rating === 'yellow') {
             petVoiceEngine.trigger('warning_held', { title: 'Held step' });
           } else if (rating === 'red') {
             sounds.play('verdict.red');
-            store.setMascotState('red', "CRITICAL THREAT DETECTED: Step scored RED and execution is BLOCKED.");
+            store.setMascotState('red', petVoiceEngine.line('blocked'));
           }
         }
         break;
@@ -178,7 +178,7 @@ export class BackendBridge {
 
       case 'step_execution_progress':
         if (payload?.bytes_downloaded) {
-          store.setMascotState('downloading', `Downloading artifact... ${(payload.bytes_downloaded / (1024*1024)).toFixed(1)} MB`);
+          store.setMascotState('downloading', petVoiceEngine.line('downloading'));
         }
         store.setState(s => ({
           ...s,
@@ -192,7 +192,7 @@ export class BackendBridge {
       case 'step_execution_completed':
         sounds.play('task.done');
         sounds.play('verdict.green');
-        store.setMascotState('green', `Step ${payload?.step_id} executed and verified!`);
+        store.setMascotState('green', petVoiceEngine.line('done'));
 
         store.setState(s => {
           const tasks = (s.activePlan?.tasks || []).map(t => {
@@ -212,7 +212,7 @@ export class BackendBridge {
 
       case 'step_execution_blocked':
         sounds.play('verdict.red');
-        store.setMascotState('red', `Blocked malicious/unsafe step: ${payload?.reason}`);
+        store.setMascotState('red', petVoiceEngine.line('blocked'));
 
         store.setState(s => {
           const tasks = (s.activePlan?.tasks || []).map(t => {
@@ -231,7 +231,7 @@ export class BackendBridge {
 
       case 'step_approval_required':
         sounds.play('verdict.yellow');
-        store.setMascotState('held-sign', `Step ${payload?.step_id} is HELD for manual user review.`);
+        store.setMascotState('held-sign', petVoiceEngine.line('warning'));
 
         store.setState(s => {
           const tasks = (s.activePlan?.tasks || []).map(t => {
@@ -275,16 +275,16 @@ export class BackendBridge {
 
       case 'rollback_started':
         sounds.play('rewind');
-        store.setMascotState('rewind', `Reverting transaction ${payload?.tx_id}...`);
+        store.setMascotState('rewind', petVoiceEngine.line('rewind'));
         break;
 
       case 'rollback_completed':
         if (payload?.success) {
           sounds.play('verdict.green');
-          store.setMascotState('green', `Rollback completed: ${payload?.message}`);
+          store.setMascotState('green', petVoiceEngine.line('done'));
         } else {
           sounds.play('error');
-          store.setMascotState('error', `Rollback failed: ${payload?.message}`);
+          store.setMascotState('error', petVoiceEngine.line('error'));
         }
         this.refreshHistory();
         break;
@@ -316,7 +316,7 @@ export class BackendBridge {
     }));
 
     if (!this.isBackendOnline) {
-      store.setMascotState('scanning', 'Connecting to Zero-Trust Engine...');
+      store.setMascotState('scanning', petVoiceEngine.line('thinking'));
       const ready = await this.waitForConnection(3500);
       if (!ready) {
         const health = await apiClient.checkHealth(1000);
@@ -345,7 +345,7 @@ export class BackendBridge {
       let data;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          data = await apiClient.sendChat(goal, history);
+          data = await apiClient.sendChat(goal, history, store.getState().activePet || 'ghost');
           break;
         } catch (err) {
           const isTransient = err?.message && (
@@ -457,7 +457,7 @@ export class BackendBridge {
     } catch (err) {
       console.error("Error creating plan or sending chat:", err);
       sounds.play('error');
-      store.setMascotState('error', `Failed to process request: ${err.message}`);
+      store.setMascotState('error', petVoiceEngine.line('error'));
       store.setState(s => ({
         ...s,
         chatMessages: [
@@ -530,7 +530,7 @@ export class BackendBridge {
 
       setTimeout(() => {
         store.setMode('chill');
-        store.setMascotState('idle', "Everything is set up and safe! What should we do next?");
+        store.setMascotState('idle', petVoiceEngine.line('idle'));
       }, 4000);
 
       return result;
@@ -543,7 +543,7 @@ export class BackendBridge {
   async runAttackRadar() {
     sounds.play('ui.click');
     store.setMode('hacker');
-    store.setMascotState('scanning', "Scanning incoming adversarial repository README against OSV.dev & typosquat radar...");
+    store.setMascotState('scanning', petVoiceEngine.line('diagnosing'));
 
     if (!this.isBackendOnline) {
       await this.waitForConnection(3000);
@@ -555,7 +555,7 @@ export class BackendBridge {
       const safety = data.safety;
 
       sounds.play('verdict.red');
-      store.setMascotState('red', "Nope! That is a scary one. Typosquat and pipeline attack BLOCKED!");
+      store.setMascotState('red', petVoiceEngine.line('blocked'));
 
       const redLogs = [
         { id: Date.now() + 1, text: '!! ADVERSARIAL ATTACK INTERCEPTED !!', type: 'error' },
@@ -581,7 +581,7 @@ export class BackendBridge {
     } catch (err) {
       console.error("Attack simulation failed:", err);
       sounds.play('error');
-      store.setMascotState('error', `Attack simulation failed: ${err.message}`);
+      store.setMascotState('error', petVoiceEngine.line('error'));
     }
   }
 
@@ -616,7 +616,7 @@ export class BackendBridge {
   async rewindLastChange() {
     sounds.play('rewind');
     store.setActivePage('chats');
-    store.setMascotState('rewind', "Rewinding last change with deterministic state rollback...");
+    store.setMascotState('rewind', petVoiceEngine.line('rewind'));
 
     if (!this.isBackendOnline) {
       await this.waitForConnection(3000);
@@ -626,17 +626,17 @@ export class BackendBridge {
       const res = await apiClient.undo();
       if (res.status === 'rolled_back') {
         sounds.play('verdict.green');
-        store.setMascotState('green', `Rolled back transaction ${res.tx_id}: ${res.outcome}`);
+        store.setMascotState('green', petVoiceEngine.line('done'));
       } else {
         sounds.play('error');
-        store.setMascotState('error', res.message || "No transaction available to rollback.");
+        store.setMascotState('error', petVoiceEngine.line('error'));
       }
       this.refreshHistory();
       return res;
     } catch (err) {
       console.error("Rewind failed:", err);
       sounds.play('error');
-      store.setMascotState('error', `Rollback error: ${err.message}`);
+      store.setMascotState('error', petVoiceEngine.line('error'));
     }
   }
 }

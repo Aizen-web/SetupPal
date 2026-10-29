@@ -3,6 +3,7 @@
  */
 
 import { store } from '../state/store.js';
+import { petVoiceEngine } from '../mascot/voicelines.js';
 import { sounds } from '../audio/sound-engine.js';
 import { createMascotSvg } from '../mascot/pets.js';
 import { icon } from './icon.js';
@@ -105,7 +106,7 @@ export function renderDownloadsView(container) {
     sounds.play('task.start');
     store.setMode('hacker');
     store.setActivePage('chats');
-    store.setMascotState('downloading', "Carrying your verified packages through the pipeline!");
+    store.setMascotState('downloading', petVoiceEngine.line('downloading'));
   };
 
   container.querySelector('#btn-clean-cache').onclick = () => {

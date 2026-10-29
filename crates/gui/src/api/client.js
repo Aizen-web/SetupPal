@@ -67,7 +67,7 @@ class ApiClient {
     }
   }
 
-  async sendChat(message, history = []) {
+  async sendChat(message, history = [], pet = 'ghost') {
     const apiKey = localStorage.getItem('setuppal_ai_api_key') || null;
 
     const res = await fetch(`${API_BASE}/chat`, {
@@ -76,6 +76,7 @@ class ApiClient {
       body: JSON.stringify({
         message,
         history,
+        pet,
         api_key: apiKey,
       }),
     });

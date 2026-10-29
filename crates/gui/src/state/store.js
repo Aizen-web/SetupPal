@@ -3,6 +3,7 @@
  */
 
 import { sounds } from '../audio/sound-engine.js';
+import { petLine } from '../mascot/pet-lines.js';
 
 const STORAGE_KEY = 'setuppal_local_conversations_v2';
 const ACTIVE_CONV_KEY = 'setuppal_active_conv_id_v2';
@@ -77,7 +78,7 @@ class Store {
       // Mascot & Pets
       activePet: 'ghost', // 'ghost' | 'cat' | 'bunny'
       mascotState: 'idle',
-      mascotSpeech: "Hey there! I'm Setup Pal.\nI'll help you set up your development\ntools and environments safely!",
+      mascotSpeech: petLine('ghost', 'welcome'),
       mascotSpeechSpeed: 25, // ms per char
       isSpeaking: false,
       
@@ -297,7 +298,7 @@ class Store {
     });
 
     sounds.play('ui.click');
-    this.setMascotState('idle', "Started a fresh new setup! Ask me anything in the chat window, and I'll help you set it up safely!");
+    this.setMascotState('idle', petLine(this.state.activePet || 'ghost', 'new_chat'));
   }
 
   switchConversation(id) {
@@ -341,7 +342,7 @@ class Store {
     });
 
     sounds.play('ui.click');
-    this.setMascotState('idle', `Switched back to "${targetConv.title}"! Standing by with zero-trust protection.`);
+    this.setMascotState('idle', petLine(this.state.activePet || 'ghost', 'switch_chat'));
   }
 
   closeConversation(id) {
@@ -467,13 +468,7 @@ class Store {
     sounds.play('ui.click');
     
     // Greet with pet's personality
-    if (pet === 'cat') {
-      this.setMascotState('wave-hello', "Purrr! I'm Byte the Cyber Cat. Ask me anything in the chat window, and I'll keep your machine safe!");
-    } else if (pet === 'bunny') {
-      this.setMascotState('wave-hello', "Binky! I'm Mochi the Bunny. Ask me anything in the chat window and we'll set it up safely!");
-    } else {
-      this.setMascotState('wave-hello', "Boo! I'm Pixel, your zero-trust guardian ghost. Ask me anything in the chat window, and I'll help you set it up safely!");
-    }
+    this.setMascotState('wave-hello', petLine(pet, 'welcome'));
   }
 
   setActivePage(page) {
