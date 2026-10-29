@@ -65,91 +65,36 @@ export function renderSettingsView(container) {
           </div>
         </div>
 
-        <!-- AI Model & Zero-Trust Intelligence Card -->
+        <!-- AI Card -->
         <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px; box-shadow: var(--shadow-card);">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
             <div>
-              <h2 class="font-pixel" style="font-size: 17px; color: var(--ink); margin: 0 0 4px 0;">AI Model & Zero-Trust Intelligence</h2>
-              <div style="font-size: 12px; color: var(--ink-soft);">Powers dynamic mod research, problem scoping, and custom zero-trust plans.</div>
+              <h2 class="font-pixel" style="font-size: 17px; color: var(--ink); margin: 0 0 4px 0;">AI</h2>
+              <div style="font-size: 12px; color: var(--ink-soft);">NVIDIA API key used for chat.</div>
             </div>
-            <div id="ai-key-status-badge">
-              <!-- Dynamically populated badge -->
-            </div>
+            <div id="ai-key-status-badge"></div>
           </div>
 
           <div style="display: flex; flex-direction: column; gap: 14px; margin-top: 14px;">
-            <!-- Provider Selector -->
-            <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
-              <div>
-                <div style="font-weight: 600; font-size: 13px; color: var(--ink);">AI Provider</div>
-                <div style="font-size: 11.5px; color: var(--ink-soft);">Select your preferred OpenAI-compatible engine</div>
-              </div>
-              <select id="select-ai-provider" style="background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px; outline: none;">
-                <option value="nim">NVIDIA NIM (Llama 3.1 70B / Nemotron)</option>
-                <option value="openai">OpenAI (GPT-4o / GPT-4o-mini)</option>
-                <option value="custom">Custom Endpoint</option>
-              </select>
-            </div>
-
-            <!-- API Key Input -->
             <div style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                <div style="font-weight: 600; font-size: 13px; color: var(--ink);">API Key</div>
-                <span id="ai-key-hint" style="font-size: 11px; color: var(--ink-soft); font-family: var(--font-mono);">sk-...</span>
-              </div>
+              <div style="font-weight: 600; font-size: 13px; color: var(--ink); margin-bottom: 6px;">API Key</div>
               <div style="display: flex; gap: 8px;">
-                <input id="input-ai-key" type="password" placeholder="Paste your API key here..." style="flex: 1; background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; font-family: var(--font-mono); outline: none;" />
+                <input id="input-ai-key" type="password" placeholder="nvapi-..." style="flex: 1; background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; font-family: var(--font-mono); outline: none;" />
                 <button id="btn-toggle-key-vis" class="btn-review" style="padding: 6px 10px; font-size: 12px;" title="Show/Hide Key">👁️</button>
               </div>
             </div>
 
-            <!-- Model Name Input & Presets -->
-            <div style="padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
-                <div>
-                  <div style="font-weight: 600; font-size: 13px; color: var(--ink);">Model Identifier</div>
-                  <div style="font-size: 11.5px; color: var(--ink-soft);">Select a preset below or enter any model identifier</div>
-                </div>
-                <input id="input-ai-model" type="text" placeholder="meta/llama-3.3-70b-instruct" style="width: 250px; background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px; font-family: var(--font-mono); outline: none;" />
-              </div>
-              <div id="model-presets-row" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding-top: 4px;">
-                <span style="font-size: 11px; color: var(--ink-soft); font-weight: 500;">Presets:</span>
-                <button type="button" class="btn-model-preset" data-model="meta/llama-3.3-70b-instruct" style="font-size: 11px; padding: 3px 8px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--bg-canvas); color: var(--ink); cursor: pointer;">Llama 3.3 70B ⭐</button>
-                <button type="button" class="btn-model-preset" data-model="meta/llama-3.1-8b-instruct" style="font-size: 11px; padding: 3px 8px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--bg-canvas); color: var(--ink); cursor: pointer;">Llama 3.1 8B ⚡</button>
-                <button type="button" class="btn-model-preset" data-model="nvidia/llama-3.1-nemotron-70b-instruct" style="font-size: 11px; padding: 3px 8px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--bg-canvas); color: var(--ink); cursor: pointer;">Nemotron 70B</button>
-                <button type="button" class="btn-model-preset" data-model="mistralai/mistral-7b-instruct-v0.3" style="font-size: 11px; padding: 3px 8px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--bg-canvas); color: var(--ink); cursor: pointer;">Mistral 7B</button>
-                <button type="button" class="btn-model-preset" data-model="gpt-4o-mini" style="font-size: 11px; padding: 3px 8px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--bg-canvas); color: var(--ink); cursor: pointer;">gpt-4o-mini</button>
-              </div>
-            </div>
-
-            <!-- Endpoint URL Input -->
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0;">
-              <div>
-                <div style="font-weight: 600; font-size: 13px; color: var(--ink);">API Endpoint URL</div>
-                <div style="font-size: 11.5px; color: var(--ink-soft);">Leave default or specify custom proxy</div>
-              </div>
-              <input id="input-ai-endpoint" type="text" placeholder="https://api.openai.com/v1/chat/completions" style="width: 260px; background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px; font-family: var(--font-mono); outline: none;" />
+              <div style="font-weight: 600; font-size: 13px; color: var(--ink);">Model</div>
+              <code class="font-mono" style="font-size: 12px; color: var(--ink);">nvidia/nemotron-3.5-bolt-e4b</code>
             </div>
 
-            <!-- Token Optimization Features Callout -->
-            <div style="background: rgba(34, 197, 94, 0.06); border: 1px solid rgba(34, 197, 94, 0.2); border-radius: var(--radius-md); padding: 10px 14px; font-size: 11.5px; line-height: 1.5; color: var(--ink);">
-              <div style="font-weight: 600; color: #16a34a; margin-bottom: 3px; display: flex; align-items: center; gap: 6px;">
-                <span>⚡ Zero-Waste Token Engine Active</span>
-              </div>
-              <div style="color: var(--ink-soft);">
-                • <strong>Prompt Caching Prefix</strong>: Immutable system prompts trigger OpenAI/NIM cache discounts (up to 50%).<br/>
-                • <strong>Compact Context & History Distillation</strong>: XML attribute serialization and sliding window prevent quadratic token inflation.<br/>
-                • <strong>Session Deduplication Cache</strong>: Repeat queries consume 0 remote API tokens.
-              </div>
-            </div>
-
-            <!-- Action Buttons and Feedback -->
             <div style="display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px dashed var(--border-subtle);">
-              <div id="ai-save-msg" style="font-size: 12px; font-weight: 500;"></div>
+              <div id="ai-save-msg" style="font-size: 12px; font-weight: 500; max-width: 340px; word-break: break-word;"></div>
               <div style="display: flex; gap: 8px;">
                 <button id="btn-test-ai-key" class="btn-review" style="padding: 6px 14px; font-size: 12px;">Test Connection</button>
                 <button id="btn-clear-ai-key" class="btn-review" style="padding: 6px 14px; font-size: 12px;">Clear Key</button>
-                <button id="btn-save-ai-key" class="btn-approve" style="padding: 6px 16px; font-size: 12px;">Save Configuration</button>
+                <button id="btn-save-ai-key" class="btn-approve" style="padding: 6px 16px; font-size: 12px;">Save</button>
               </div>
             </div>
           </div>
@@ -262,99 +207,35 @@ export function renderSettingsView(container) {
     };
   }
 
-  // AI Configuration Management
+  // AI Configuration (single fixed NVIDIA model; only the key is configurable)
   const badgeEl = container.querySelector('#ai-key-status-badge');
-  const providerSelect = container.querySelector('#select-ai-provider');
   const keyInput = container.querySelector('#input-ai-key');
-  const keyHint = container.querySelector('#ai-key-hint');
-  const modelInput = container.querySelector('#input-ai-model');
-  const endpointInput = container.querySelector('#input-ai-endpoint');
   const btnToggleVis = container.querySelector('#btn-toggle-key-vis');
   const btnSaveKey = container.querySelector('#btn-save-ai-key');
   const btnClearKey = container.querySelector('#btn-clear-ai-key');
+  const btnTestKey = container.querySelector('#btn-test-ai-key');
   const msgEl = container.querySelector('#ai-save-msg');
+
+  const escapeHtml = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const setMsg = (text, color) => {
+    if (msgEl) msgEl.innerHTML = `<span style="color: ${color};">${escapeHtml(text)}</span>`;
+  };
 
   const updateAiBadge = () => {
     const key = localStorage.getItem('setuppal_ai_api_key') || '';
     if (key.trim()) {
       const masked = key.length > 10 ? `${key.slice(0, 6)}...${key.slice(-4)}` : '••••••';
-      badgeEl.innerHTML = `<span style="background: rgba(34, 197, 94, 0.15); color: #16a34a; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid rgba(34, 197, 94, 0.3);">● Connected (${masked})</span>`;
+      badgeEl.innerHTML = `<span style="background: rgba(34, 197, 94, 0.15); color: #16a34a; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid rgba(34, 197, 94, 0.3);">● Key saved (${masked})</span>`;
     } else {
-      badgeEl.innerHTML = `<span style="background: rgba(239, 68, 68, 0.1); color: var(--v-red); font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid rgba(239, 68, 68, 0.25);">○ Missing Key (Offline Recipes Only)</span>`;
+      badgeEl.innerHTML = `<span style="background: rgba(239, 68, 68, 0.1); color: var(--v-red); font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid rgba(239, 68, 68, 0.25);">○ No key</span>`;
     }
   };
 
-  // Populate saved values (defaulting to NVIDIA NIM for nvapi keys)
-  const savedKey = localStorage.getItem('setuppal_ai_api_key') || '';
-  const savedProvider = localStorage.getItem('setuppal_ai_provider') || (savedKey.startsWith('sk-') ? 'openai' : 'nim');
-  const savedModel = localStorage.getItem('setuppal_ai_model') || (savedProvider === 'nim' ? 'meta/llama-3.3-70b-instruct' : 'gpt-4o-mini');
-  const savedEndpoint = localStorage.getItem('setuppal_ai_endpoint') || (savedProvider === 'nim' ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions');
+  // Drop settings left over from the old provider/model/endpoint selectors
+  ['setuppal_ai_provider', 'setuppal_ai_model', 'setuppal_ai_endpoint'].forEach(k => localStorage.removeItem(k));
 
-  if (providerSelect) providerSelect.value = savedProvider;
-  if (keyInput) keyInput.value = savedKey;
-  if (modelInput) modelInput.value = savedModel;
-  if (endpointInput) endpointInput.value = savedEndpoint;
-  if (keyHint) keyHint.textContent = savedProvider === 'nim' ? 'nvapi-...' : 'sk-...';
+  if (keyInput) keyInput.value = localStorage.getItem('setuppal_ai_api_key') || '';
   updateAiBadge();
-
-  // Wire model preset buttons
-  container.querySelectorAll('.btn-model-preset').forEach(btn => {
-    const targetModel = btn.getAttribute('data-model');
-    if (modelInput && modelInput.value === targetModel) {
-      btn.style.borderColor = 'var(--accent, #387EB8)';
-      btn.style.fontWeight = '600';
-    }
-    btn.onclick = () => {
-      if (modelInput) {
-        modelInput.value = targetModel;
-        sounds.play('ui.click');
-        container.querySelectorAll('.btn-model-preset').forEach(b => {
-          b.style.borderColor = 'var(--border)';
-          b.style.fontWeight = 'normal';
-        });
-        btn.style.borderColor = 'var(--accent, #387EB8)';
-        btn.style.fontWeight = '600';
-      }
-    };
-  });
-
-  if (keyInput) {
-    keyInput.oninput = (e) => {
-      const val = e.target.value.trim();
-      if (val.startsWith('nvapi-')) {
-        if (providerSelect) providerSelect.value = 'nim';
-        if (modelInput && (!modelInput.value || modelInput.value.includes('gpt-'))) {
-          modelInput.value = 'meta/llama-3.3-70b-instruct';
-        }
-        if (endpointInput) endpointInput.value = 'https://integrate.api.nvidia.com/v1/chat/completions';
-        if (keyHint) keyHint.textContent = 'nvapi-...';
-      } else if (val.startsWith('sk-')) {
-        if (providerSelect) providerSelect.value = 'openai';
-        if (modelInput && (!modelInput.value || modelInput.value.includes('llama') || modelInput.value.includes('nemotron') || modelInput.value.includes('mistral'))) {
-          modelInput.value = 'gpt-4o-mini';
-        }
-        if (endpointInput && (!endpointInput.value || endpointInput.value.includes('nvidia'))) endpointInput.value = 'https://api.openai.com/v1/chat/completions';
-        if (keyHint) keyHint.textContent = 'sk-...';
-      }
-    };
-  }
-
-  if (providerSelect) {
-    providerSelect.onchange = (e) => {
-      const prov = e.target.value;
-      if (prov === 'nim') {
-        if (!modelInput.value || modelInput.value.includes('gpt-')) modelInput.value = 'meta/llama-3.3-70b-instruct';
-        if (!endpointInput.value || endpointInput.value.includes('openai.com')) endpointInput.value = 'https://integrate.api.nvidia.com/v1/chat/completions';
-        if (keyHint) keyHint.textContent = 'nvapi-...';
-      } else if (prov === 'openai') {
-        if (!modelInput.value || modelInput.value.includes('llama') || modelInput.value.includes('nemotron')) modelInput.value = 'gpt-4o-mini';
-        if (!endpointInput.value || endpointInput.value.includes('nvidia.com')) endpointInput.value = 'https://api.openai.com/v1/chat/completions';
-        if (keyHint) keyHint.textContent = 'sk-...';
-      } else {
-        if (keyHint) keyHint.textContent = 'api-key';
-      }
-    };
-  }
 
   if (btnToggleVis && keyInput) {
     btnToggleVis.onclick = () => {
@@ -366,71 +247,31 @@ export function renderSettingsView(container) {
   if (btnSaveKey) {
     btnSaveKey.onclick = () => {
       const keyVal = (keyInput?.value || '').trim();
-      const provVal = providerSelect?.value || 'openai';
-      const modelVal = (modelInput?.value || '').trim();
-      const endpointVal = (endpointInput?.value || '').trim();
-
-      let finalProv = provVal;
-      let finalModel = modelVal;
-      let finalEndpoint = endpointVal;
-
-      if (keyVal.startsWith('nvapi-')) {
-        finalProv = 'nim';
-        if (!finalEndpoint || finalEndpoint.includes('openai.com')) finalEndpoint = 'https://integrate.api.nvidia.com/v1/chat/completions';
-        if (!finalModel || finalModel.includes('gpt-')) finalModel = 'meta/llama-3.3-70b-instruct';
-      }
-
-      if (keyVal) {
-        localStorage.setItem('setuppal_ai_api_key', keyVal);
-      } else {
-        localStorage.removeItem('setuppal_ai_api_key');
-      }
-      localStorage.setItem('setuppal_ai_provider', finalProv);
-      if (finalModel) localStorage.setItem('setuppal_ai_model', finalModel);
-      if (finalEndpoint) localStorage.setItem('setuppal_ai_endpoint', finalEndpoint);
-
+      if (keyVal) localStorage.setItem('setuppal_ai_api_key', keyVal);
+      else localStorage.removeItem('setuppal_ai_api_key');
       sounds.play('task.done');
       updateAiBadge();
-      if (msgEl) {
-        msgEl.innerHTML = `<span style="color: #16a34a;">✓ AI configuration saved!</span>`;
-        setTimeout(() => { if (msgEl) msgEl.innerHTML = ''; }, 3000);
-      }
+      setMsg('Saved.', '#16a34a');
+      setTimeout(() => { if (msgEl) msgEl.innerHTML = ''; }, 3000);
     };
   }
 
-  const btnTestKey = container.querySelector('#btn-test-ai-key');
   if (btnTestKey) {
     btnTestKey.onclick = async () => {
       const keyVal = (keyInput?.value || '').trim() || localStorage.getItem('setuppal_ai_api_key') || '';
       if (!keyVal) {
-        if (msgEl) msgEl.innerHTML = `<span style="color: var(--v-red);">Please enter an API key first.</span>`;
+        setMsg('Enter an API key first.', 'var(--v-red)');
         return;
       }
-      const provVal = providerSelect?.value || (keyVal.startsWith('nvapi-') ? 'nim' : 'openai');
-      const modelVal = (modelInput?.value || '').trim();
-      const endpointVal = (endpointInput?.value || '').trim();
-
-      if (msgEl) msgEl.innerHTML = `<span style="color: var(--accent);">⟳ Testing key with ${provVal === 'nim' ? 'NVIDIA NIM' : 'AI provider'}...</span>`;
+      setMsg('Testing...', 'var(--accent)');
       sounds.play('ui.click');
-
       try {
-        const res = await apiClient.validateKey({
-          apiKey: keyVal,
-          provider: provVal,
-          model: modelVal || undefined,
-          endpoint: endpointVal || undefined,
-        });
-
-        if (res.valid) {
-          sounds.play('verdict.green');
-          if (msgEl) msgEl.innerHTML = `<span style="color: #16a34a;">✓ ${res.message}</span>`;
-        } else {
-          sounds.play('verdict.red');
-          if (msgEl) msgEl.innerHTML = `<span style="color: var(--v-red);">✗ ${res.message}</span>`;
-        }
+        const res = await apiClient.validateKey({ apiKey: keyVal });
+        sounds.play(res.valid ? 'verdict.green' : 'verdict.red');
+        setMsg(res.message, res.valid ? '#16a34a' : 'var(--v-red)');
       } catch (err) {
         sounds.play('error');
-        if (msgEl) msgEl.innerHTML = `<span style="color: var(--v-red);">Error: ${err.message}</span>`;
+        setMsg(`Error: ${err.message}`, 'var(--v-red)');
       }
     };
   }
@@ -441,10 +282,8 @@ export function renderSettingsView(container) {
       if (keyInput) keyInput.value = '';
       sounds.play('ui.click');
       updateAiBadge();
-      if (msgEl) {
-        msgEl.innerHTML = `<span style="color: var(--ink-soft);">API key cleared. Offline recipes active.</span>`;
-        setTimeout(() => { if (msgEl) msgEl.innerHTML = ''; }, 3000);
-      }
+      setMsg('Key cleared.', 'var(--ink-soft)');
+      setTimeout(() => { if (msgEl) msgEl.innerHTML = ''; }, 3000);
     };
   }
 }

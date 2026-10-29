@@ -115,14 +115,16 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn read_dotenv_nim_key() -> Option<String> {
-    if let Ok(content) = std::fs::read_to_string(".env") {
-        for line in content.lines() {
-            let line = line.trim();
-            if let Some(val) = line.strip_prefix("NIM_API_KEY=") {
-                let clean = val.trim().trim_matches('"').trim_matches('\'').trim();
-                if !clean.is_empty() && clean != "nvapi-REPLACE_WITH_YOUR_KEY" {
-                    return Some(clean.to_string());
-                }
+    let content = std::fs::read_to_string(".env").ok()?;
+    for line in content.lines() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim();
+        if let Some(val) = line.strip_prefix("NIM_API_KEY=") {
+            if let Some(clean) = normalize_api_key(val) {
+                return Some(clean);
             }
         }
     }
@@ -154,7 +156,7 @@ async fn health_handler(
         "has_env_key": has_key,
         "env_key_masked": masked_key,
         "provider": "nim",
-        "model": "nvidia/llama-3.1-nemotron-70b-instruct"
+        "model": AI_MODEL
     }))
 }
 
@@ -649,6 +651,10 @@ fn create_deterministic_demo_plan(
     (plan, safety_report, step_metadata)
 }
 
+/// Single NVIDIA NIM endpoint + model used for chat. Model must be enabled on the key's account.
+pub const AI_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
+pub const AI_MODEL: &str = "nvidia/nemotron-3.5-bolt-e4b";
+
 #[derive(Debug, Clone)]
 pub struct ResolvedAiConfig {
     pub api_key: String,
@@ -656,67 +662,38 @@ pub struct ResolvedAiConfig {
     pub model: String,
 }
 
+fn normalize_api_key(raw: &str) -> Option<String> {
+    let clean = raw
+        .trim()
+        .trim_start_matches('\u{feff}')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim();
+    if clean.is_empty() || clean == "nvapi-REPLACE_WITH_YOUR_KEY" {
+        None
+    } else {
+        Some(clean.to_string())
+    }
+}
+
 fn resolve_ai_config(req: &ChatRequest, state_config: &installer_core::CoreConfig) -> Option<ResolvedAiConfig> {
-    // 1. Check req.api_key passed from GUI localStorage
-    let key = req.api_key.as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        // 2. Check process environment variables
-        .or_else(|| std::env::var("NIM_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
-        .or_else(|| std::env::var("OPENAI_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
-        .or_else(|| std::env::var("AI_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
-        // 3. Check state_config.nim_api_key (from .env at startup)
-        .or_else(|| state_config.nim_api_key.clone().filter(|s| !s.trim().is_empty()))
-        // 4. Dynamically check .env file on disk
-        .or_else(read_dotenv_nim_key);
-
-    let api_key = key?;
-
-    let is_nim = api_key.starts_with("nvapi-")
-        || req.provider.as_deref() == Some("nim")
-        || req.endpoint.as_deref().map(|e| e.contains("nvidia.com")).unwrap_or(false);
-
-    let (default_endpoint, default_model) = if is_nim {
-        ("https://integrate.api.nvidia.com/v1/chat/completions", "nvidia/llama-3.1-nemotron-70b-instruct")
-    } else {
-        ("https://api.openai.com/v1/chat/completions", "gpt-4o-mini")
-    };
-
-    // Auto-correct: If it's an nvapi / nim key, never send to OpenAI endpoint
-    let endpoint = if is_nim && req.endpoint.as_deref().map(|e| e.contains("openai.com")).unwrap_or(false) {
-        default_endpoint.to_string()
-    } else {
-        req.endpoint.as_ref()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| default_endpoint.to_string())
-    };
-
-    // Auto-correct: If it's an nvapi / nim key, fix sunset or mismatched models
-    let raw_model = req.model.as_deref().unwrap_or(default_model);
-    let model = if is_nim {
-        if raw_model.contains("gpt-") || raw_model.contains("llama-3.1-70b") || raw_model.contains("llama-3.3-70b") {
-            default_model.to_string()
-        } else {
-            raw_model.to_string()
-        }
-    } else {
-        raw_model.to_string()
-    };
+    // Prefer a live `.env` read so rotating the key does not require a backend restart,
+    // then process env / startup config, then a key saved in the GUI.
+    let api_key = read_dotenv_nim_key()
+        .or_else(|| std::env::var("NIM_API_KEY").ok().and_then(|s| normalize_api_key(&s)))
+        .or_else(|| state_config.nim_api_key.as_deref().and_then(normalize_api_key))
+        .or_else(|| req.api_key.as_deref().and_then(normalize_api_key))?;
 
     Some(ResolvedAiConfig {
         api_key,
-        endpoint,
-        model,
+        endpoint: AI_ENDPOINT.to_string(),
+        model: AI_MODEL.to_string(),
     })
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TestKeyRequest {
     pub api_key: String,
-    pub provider: Option<String>,
-    pub model: Option<String>,
-    pub endpoint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -730,6 +707,9 @@ pub struct TestKeyResponse {
 async fn test_key_handler(
     Json(req): Json<TestKeyRequest>,
 ) -> Json<TestKeyResponse> {
+    let provider = "NVIDIA NIM".to_string();
+    let model = AI_MODEL.to_string();
+
     let key = if req.api_key.trim().is_empty() {
         read_dotenv_nim_key().unwrap_or_default()
     } else {
@@ -740,36 +720,13 @@ async fn test_key_handler(
         return Json(TestKeyResponse {
             valid: false,
             message: "No API key found in request or .env file.".to_string(),
-            model_tested: String::new(),
-            provider: String::new(),
+            model_tested: model,
+            provider,
         });
     }
 
-    let is_nim = key.starts_with("nvapi-")
-        || req.provider.as_deref() == Some("nim")
-        || req.endpoint.as_deref().map(|e| e.contains("nvidia.com")).unwrap_or(false);
-
-    let (default_endpoint, default_model, provider_name) = if is_nim {
-        ("https://integrate.api.nvidia.com/v1/chat/completions", "nvidia/llama-3.1-nemotron-70b-instruct", "NVIDIA NIM")
-    } else {
-        ("https://api.openai.com/v1/chat/completions", "gpt-4o-mini", "OpenAI")
-    };
-
-    let endpoint = if is_nim && req.endpoint.as_deref().map(|e| e.contains("openai.com")).unwrap_or(false) {
-        default_endpoint.to_string()
-    } else {
-        req.endpoint.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| default_endpoint.to_string())
-    };
-
-    let raw_model = req.model.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| default_model.to_string());
-    let model = if is_nim && (raw_model.contains("gpt-") || raw_model.contains("llama-3.1-70b") || raw_model.contains("llama-3.3-70b")) {
-        default_model.to_string()
-    } else {
-        raw_model
-    };
-
     let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(20))
         .build() {
         Ok(c) => c,
         Err(e) => {
@@ -777,82 +734,50 @@ async fn test_key_handler(
                 valid: false,
                 message: format!("HTTP client initialization failed: {e}"),
                 model_tested: model,
-                provider: provider_name.to_string(),
+                provider,
             });
         }
     };
 
-    let request_body = serde_json::json!({
-        "model": model,
-        "messages": [
-            { "role": "user", "content": "ping" }
-        ],
-        "max_tokens": 5,
-        "temperature": 0.0
-    });
-
     let res = client
-        .post(&endpoint)
+        .post(AI_ENDPOINT)
         .header("Authorization", format!("Bearer {key}"))
         .header("Content-Type", "application/json")
-        .json(&request_body)
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "ping" }],
+            "max_tokens": 5,
+            "temperature": 0.0
+        }))
         .send()
         .await;
 
     match res {
         Ok(response) => {
             let status = response.status();
+            let body = response.text().await.unwrap_or_default();
             if status.is_success() {
                 Json(TestKeyResponse {
                     valid: true,
-                    message: format!("Successfully verified with {provider_name}! Model '{model}' responded."),
+                    message: format!("Key works. Model '{model}' responded."),
                     model_tested: model,
-                    provider: provider_name.to_string(),
+                    provider,
                 })
             } else {
-                if (status == StatusCode::FORBIDDEN || status == StatusCode::GONE) && is_nim {
-                    // Check if GET /v1/models succeeds to verify authentication
-                    let check_client = reqwest::Client::new();
-                    let models_res = check_client
-                        .get("https://integrate.api.nvidia.com/v1/models")
-                        .header("Authorization", format!("Bearer {key}"))
-                        .send()
-                        .await;
-
-                    if let Ok(m_resp) = models_res {
-                        if m_resp.status().is_success() {
-                            return Json(TestKeyResponse {
-                                valid: true,
-                                message: "✓ Verified with NVIDIA API! Key is authentic (Developer Program). SetupPal zero-trust engine active.".to_string(),
-                                model_tested: model,
-                                provider: provider_name.to_string(),
-                            });
-                        }
-                    }
-                }
-
-                let err_text = response.text().await.unwrap_or_default();
-                let err_short = if err_text.len() > 200 {
-                    format!("{}...", &err_text[..err_text.floor_char_boundary(200)])
-                } else {
-                    err_text
-                };
                 Json(TestKeyResponse {
                     valid: false,
-                    message: format!("Provider error (HTTP {status}): {err_short}"),
+                    message: format_nvidia_http_error(status, &body, &model),
                     model_tested: model,
-                    provider: provider_name.to_string(),
+                    provider,
                 })
             }
         }
-        Err(err) => {
-            Json(TestKeyResponse {
-                valid: false,
-                message: format!("Network request failed: {err}"),
-                model_tested: model,
-                provider: provider_name.to_string(),
-            })
-        }
+        Err(err) => Json(TestKeyResponse {
+            valid: false,
+            message: format!("Network request failed: {err}"),
+            model_tested: model,
+            provider,
+        }),
     }
 }
 
@@ -1020,73 +945,76 @@ async fn call_ai_chat(
     if !res.status().is_success() {
         let status = res.status();
         let error_body = res.text().await.unwrap_or_default();
-        return Err(format!("AI Provider returned HTTP {status}: {error_body}"));
+        return Err(format_nvidia_http_error(status, &error_body, &ai_config.model));
     }
 
     let completion: serde_json::Value = res.json().await
         .map_err(|e| format!("Failed to parse AI response JSON: {e}"))?;
 
-    let reply = completion
+    let content = completion
         .get("choices")
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("message"))
         .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
         .ok_or_else(|| "AI response missing content".to_string())?;
 
-    Ok(reply.to_string())
+    extract_message_content(content)
 }
 
-/// Major version of a `java -version` string ("25.0.1" -> 25, "1.8.0_292" -> 8).
-fn java_major(ver: &str) -> Option<u32> {
-    let mut parts = ver.trim().split(|c: char| !c.is_ascii_digit());
-    let first: u32 = parts.next()?.parse().ok()?;
-    if first == 1 {
-        parts.next()?.parse().ok()
+fn extract_message_content(content: &serde_json::Value) -> Result<String, String> {
+    if let Some(text) = content.as_str() {
+        return Ok(text.to_string());
+    }
+    // Some NVIDIA models return content as an array of text parts.
+    if let Some(parts) = content.as_array() {
+        let joined = parts
+            .iter()
+            .filter_map(|p| {
+                p.as_str()
+                    .map(|s| s.to_string())
+                    .or_else(|| p.get("text").and_then(|t| t.as_str()).map(|s| s.to_string()))
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        if !joined.is_empty() {
+            return Ok(joined);
+        }
+    }
+    Err(format!("AI response content had unexpected shape: {content}"))
+}
+
+fn format_nvidia_http_error(status: StatusCode, body: &str, model: &str) -> String {
+    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let short = if flat.len() > 320 {
+        format!("{}...", &flat[..flat.floor_char_boundary(320)])
     } else {
-        Some(first)
-    }
-}
+        flat
+    };
 
-/// Java runtime row for the "System check" block, judged against the Java a Minecraft release needs.
-fn java_check_row(mc_info: &MinecraftInspection, min_java: u32) -> String {
-    match mc_info.java_runtime_version.as_deref() {
-        Some(ver) => match java_major(ver) {
-            Some(major) if major >= min_java => format!(
-                "- **Java runtime**: `{ver}` (Status: Verified) — meets the Java {min_java}+ this version needs\n"
-            ),
-            Some(_) => format!(
-                "- **Java runtime**: `{ver}` (Status: Attention) — this version needs Java {min_java}+\n"
-            ),
-            None => format!("- **Java runtime**: `{ver}` (Status: Verified)\n"),
-        },
-        None => format!(
-            "- **Java runtime**: `Not found on PATH` (Status: Missing) — this version needs Java {min_java}+\n"
-        ),
+    if status == StatusCode::NOT_FOUND && short.contains("Not found for account") {
+        return format!(
+            "HTTP 404: model `{model}` is not enabled for this API key. \
+On build.nvidia.com open that model and click Get API Key / enable it, \
+or set NIM_MODEL in .env to a model your key can call. Detail: {short}"
+        );
     }
-}
-
-/// Only rows that change the user's decision; Bedrock is always muted because these mods target Java.
-fn minecraft_system_check(mc_info: &MinecraftInspection, gpu_status: &str) -> String {
-    let mut out = String::from("### System check\n");
-    match (&mc_info.java_edition_installed, mc_info.java_edition_path.as_deref()) {
-        (true, Some(path)) => out.push_str(&format!("- **Minecraft Java**: `{path}` (Status: Verified)\n")),
-        (true, None) => out.push_str("- **Minecraft Java**: `Installed` (Status: Verified)\n"),
-        _ => out.push_str(
-            "- **Minecraft Java**: `Not found` (Status: Missing) — mods can still be staged in a sandbox profile\n",
-        ),
+    if status == StatusCode::FORBIDDEN {
+        return format!(
+            "HTTP 403 Forbidden: NVIDIA rejected this API key for chat inference. \
+Confirm it is a build.nvidia.com inference key (nvapi-...), not an expired NGC download key. Detail: {short}"
+        );
     }
-    out.push_str(&java_check_row(mc_info, 21));
-    if mc_info.gpu_detected.is_some() {
-        out.push_str(&format!("- **Graphics**: `{gpu_status}` (Status: Detected)\n"));
-    } else {
-        out.push_str(&format!("- **Graphics**: `{gpu_status}`\n"));
+    if status == StatusCode::GONE || status.as_u16() == 410 {
+        return format!(
+            "HTTP 410 Gone: model `{model}` has been retired by NVIDIA. Update NIM_MODEL / AI_MODEL. Detail: {short}"
+        );
     }
-    let bedrock = if mc_info.bedrock_edition_installed { "Installed" } else { "Not installed" };
-    out.push_str(&format!(
-        "- **Minecraft Bedrock**: {bedrock} (Status: Skipped) — these mods are for Java Edition\n"
-    ));
-    out
+    if status == StatusCode::UNAUTHORIZED {
+        return format!(
+            "HTTP 401 Unauthorized: API key was rejected. Check NIM_API_KEY in .env. Detail: {short}"
+        );
+    }
+    format!("AI Provider returned HTTP {status}: {short}")
 }
 
 async fn chat_handler(
@@ -1094,7 +1022,6 @@ async fn chat_handler(
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
     let raw_msg = req.message.trim();
-    let lower_msg = raw_msg.to_ascii_lowercase();
 
     info!("Received chat message: {:?}", raw_msg);
 
@@ -1106,216 +1033,79 @@ async fn chat_handler(
 
     let mc_info = inspect_minecraft_system(&profile);
 
-    let gpu_status = mc_info.gpu_detected.as_deref().unwrap_or("Standard GPU detected");
+    let error_response = |reply: String, with_settings: bool| ChatResponse {
+        reply,
+        options: if with_settings {
+            vec![ChatOption {
+                label: "Open Settings".to_string(),
+                value: "open_settings".to_string(),
+            }]
+        } else {
+            vec![]
+        },
+        plan: None,
+        safety: None,
+        step_metadata: None,
+        ready_to_execute: false,
+        token_metrics: None,
+    };
 
-    // Check for explicit built-in deterministic demo recipes
-    let has_mc_version = lower_msg.contains("1.21") || lower_msg.contains("1.20") || lower_msg.contains("1.19") || lower_msg.contains("1.18");
-    let has_mc_mod_choice = lower_msg.contains("optifine") || lower_msg.contains("iris") || lower_msg.contains("sodium");
-    let is_optifine_answer = (has_mc_version && has_mc_mod_choice)
-        || lower_msg.starts_with("java 1.")
-        || lower_msg.starts_with("1.21")
-        || lower_msg.starts_with("1.20")
-        || lower_msg.starts_with("1.19")
-        || lower_msg.contains("optifine hd u");
+    let Some(ai_config) = resolve_ai_config(&req, &state.config) else {
+        return Ok(Json(error_response(
+            "**Error: no API key set.** Add your NVIDIA API key in **Settings** (or `NIM_API_KEY` in `.env`).".to_string(),
+            true,
+        )));
+    };
 
-    let is_explicit_optifine_demo = !is_optifine_answer && (
-        lower_msg == "i want to download minecraft mods like optifine."
-        || lower_msg == "minecraft + mods"
-        || lower_msg.contains("like optifine")
-    );
+    // Include a lightweight history signature so multi-turn short answers don't collide
+    let hist_sig = req.history.as_deref().map(|h| {
+        h.iter().map(|i| format!("{}:{}", i.role, i.content.chars().take(20).collect::<String>())).collect::<Vec<_>>().join(";")
+    }).unwrap_or_default();
+    let cache_key = format!("{}:{}:{}:{}", ai_config.model, ai_config.endpoint, hist_sig, raw_msg.to_ascii_lowercase());
 
-    let is_cpp_demo = lower_msg == "c++ toolchain" || lower_msg.contains("c++20 development environment");
-    let is_python_demo = lower_msg == "python data science" || lower_msg.contains("python pytorch & jupyter environment");
-    let is_attack_demo = lower_msg.contains("simulate attack") || lower_msg.contains("attack radar");
-
-    // 1. Explicit OptiFine / Iris demo recipe clarification
-    if is_explicit_optifine_demo {
-        state.events.emit(installer_core::AgentEvent::PlanningStarted {
-            goal: raw_msg.to_string(),
-        });
-
-        // One place for the decision: the choices form in the message. No duplicate quick-action pills.
-        let reply = format!(
-            "**Setting up shaders and performance mods for Minecraft Java Edition.** Nothing has been changed yet.\n\n\
-            {}\n\
-            ### Your choices\n\
-            1. **Minecraft version**: `1.21.1` (Latest) | `1.20.4` | `1.19.4`\n\
-            2. **Mod engine**: `Iris Shaders + Sodium (Fabric)` (Recommended) — Usually the biggest FPS gain, modern shader packs, needs Fabric | `OptiFine (Classic)` — One-file install, simpler, but slower and fewer mod integrations\n\
-            3. **Install into**: `Isolated sandbox` (Recommended) — Staged in a separate profile, your .minecraft stays untouched | `Direct to .minecraft\\mods` — Writes straight into your live game folder\n\n\
-            Sources I'll check: modrinth.com · fabricmc.net · optifine.net\n\n\
-            Next: Pick your options and continue. I'll build a plan for you to approve.",
-            minecraft_system_check(&mc_info, gpu_status)
-        );
-
-        let options: Vec<ChatOption> = vec![];
-
-        return Ok(Json(ChatResponse {
-            reply,
-            options,
-            plan: None,
-            safety: None,
-            step_metadata: None,
-            ready_to_execute: false,
-            token_metrics: Some(TokenOptimizationMetrics {
-                prompt_cache_hit: false,
-                history_messages_compacted: 0,
-                estimated_tokens_saved: 750,
-                optimization_strategy: "deterministic_zero_token_recipe".to_string(),
-            }),
-        }));
+    // Session cache of real AI replies only
+    {
+        let cache = state.ai_cache.read().await;
+        if let Some((cached_reply, timestamp)) = cache.get(&cache_key) {
+            if timestamp.elapsed() < std::time::Duration::from_secs(600) {
+                info!("Serving AI response from session cache");
+                return Ok(Json(ChatResponse {
+                    reply: cached_reply.clone(),
+                    options: vec![],
+                    plan: None,
+                    safety: None,
+                    step_metadata: None,
+                    ready_to_execute: false,
+                    token_metrics: None,
+                }));
+            }
+        }
     }
 
-    // 2. Explicit OptiFine plan execution trigger
-    if is_optifine_answer {
-        let target_version = if lower_msg.contains("1.20") {
-            "1.20.4"
-        } else if lower_msg.contains("1.19") {
-            "1.19.4"
-        } else {
-            "1.21.1"
-        };
+    state.events.emit(installer_core::AgentEvent::PlanningStarted {
+        goal: raw_msg.to_string(),
+    });
 
-        let mod_type = if lower_msg.contains("iris") || lower_msg.contains("sodium") || lower_msg.contains("fabric") {
-            "Iris Shaders + Sodium (Fabric)"
-        } else {
-            "OptiFine"
-        };
+    let compact_host_xml = format_compact_host_context(&mc_info, &profile);
+    let raw_hist = req.history.as_deref().unwrap_or(&[]);
+    let (distilled_history, _) = distill_history(raw_hist);
 
-        let sandbox = lower_msg.contains("sandbox") || !lower_msg.contains("direct");
-
-        let plan = create_minecraft_plan(target_version, mod_type, sandbox);
-        let safety_report = state
-            .safety_engine
-            .evaluate_plan(&plan)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-        let step_metadata = create_metadata_for_plan(&plan, &safety_report);
-
-        *state.current_plan.write().await = Some((plan.clone(), safety_report.clone()));
-
-        state.events.emit(installer_core::AgentEvent::PlanGenerated {
-            plan: Box::new(plan.clone()),
-        });
-
-        let active_path = if sandbox {
-            ".\\.orchestrator-env\\minecraft-profile"
-        } else {
-            "%APPDATA%\\.minecraft\\mods"
-        };
-
-        let step_count = plan.steps.len();
-        let install_mode = if sandbox { "Isolated sandbox" } else { "Direct to .minecraft\\mods" };
-        let sources = if mod_type.contains("Iris") {
-            "modrinth.com · fabricmc.net"
-        } else {
-            "optifine.net"
-        };
-
-        let reply = format!(
-            "**Plan ready: {mod_type} for Minecraft {target_version}.** {step_count} steps are listed below. Nothing has been changed yet.\n\n\
-            ### Your setup\n\
-            - **Minecraft version**: `{target_version}`\n\
-            - **Mod engine**: `{mod_type}`\n\
-            - **Install into**: `{install_mode}` — `{active_path}`\n\
-            {}\n\
-            Sources I'll check: {sources}\n\n\
-            Next: Review the steps, then choose **Approve safe steps**.",
-            java_check_row(&mc_info, 21)
-        );
-
-        return Ok(Json(ChatResponse {
-            reply,
-            options: vec![],
-            plan: Some(plan),
-            safety: Some(safety_report),
-            step_metadata: Some(step_metadata),
-            ready_to_execute: true,
-            token_metrics: Some(TokenOptimizationMetrics {
-                prompt_cache_hit: false,
-                history_messages_compacted: 0,
-                estimated_tokens_saved: 920,
-                optimization_strategy: "deterministic_zero_token_recipe".to_string(),
-            }),
-        }));
-    }
-
-    // 3. Explicit C++, Python, or Attack Radar offline recipes
-    if is_cpp_demo || is_python_demo || is_attack_demo {
-        state.events.emit(installer_core::AgentEvent::PlanningStarted {
-            goal: raw_msg.to_string(),
-        });
-
-        let (plan, safety_report, step_metadata) = create_deterministic_demo_plan(raw_msg);
-        *state.current_plan.write().await = Some((plan.clone(), safety_report.clone()));
-
-        let task_desc = if is_cpp_demo {
-            "C++20 development toolchain and compiler suite"
-        } else if is_python_demo {
-            "Python data science, PyTorch, and Jupyter virtualenv"
-        } else {
-            "Adversarial attack radar simulation against untrusted repository"
-        };
-
-        let reply = format!(
-            "**Plan ready: {} on {}.** The steps are listed below. Nothing has been changed yet.\n\n\
-            ### Your setup\n\
-            - **Graphics**: `{gpu_status}`\n\
-            - **Install into**: `Isolated sandbox` — `.\\.orchestrator-env\\sandbox`\n\n\
-            Next: Review the steps, then choose **Approve safe steps**.",
-            task_desc, profile.os_name
-        );
-
-        return Ok(Json(ChatResponse {
-            reply,
-            options: vec![],
-            plan: Some(plan),
-            safety: Some(safety_report),
-            step_metadata: Some(step_metadata),
-            ready_to_execute: true,
-            token_metrics: Some(TokenOptimizationMetrics {
-                prompt_cache_hit: false,
-                history_messages_compacted: 0,
-                estimated_tokens_saved: 850,
-                optimization_strategy: "deterministic_zero_token_recipe".to_string(),
-            }),
-        }));
-    }
-
-    // 4. CUSTOM USER REQUEST -> Check for AI configuration
-    let ai_config_opt = resolve_ai_config(&req, &state.config);
-
-    match ai_config_opt {
-        None => {
-            // No AI API key found! Explicitly notify the user.
-            let reply = format!(
-                "⚠️ **No AI key set up yet**\n\n\
-                I can't write a custom plan for \"{}\" without an AI model. Add a key in **Settings**, or start from one of the offline recipes below.",
-                raw_msg
-            );
-
-            let options = vec![
-                ChatOption {
-                    label: "Open Settings".to_string(),
-                    value: "open_settings".to_string(),
-                },
-                ChatOption {
-                    label: "Minecraft shaders and mods".to_string(),
-                    value: "I want to download minecraft mods like optifine.".to_string(),
-                },
-                ChatOption {
-                    label: "Python data science".to_string(),
-                    value: "Python PyTorch & Jupyter environment".to_string(),
-                },
-                ChatOption {
-                    label: "C++ toolchain".to_string(),
-                    value: "C++ toolchain".to_string(),
-                },
-            ];
+    match call_ai_chat(&ai_config, raw_msg, &distilled_history, &compact_host_xml).await {
+        Ok(ai_reply) => {
+            {
+                let mut cache = state.ai_cache.write().await;
+                cache.retain(|_, (_, time)| time.elapsed() < std::time::Duration::from_secs(600));
+                if cache.len() >= 100 {
+                    if let Some(oldest) = cache.iter().min_by_key(|(_, (_, t))| *t).map(|(k, _)| k.clone()) {
+                        cache.remove(&oldest);
+                    }
+                }
+                cache.insert(cache_key, (ai_reply.clone(), std::time::Instant::now()));
+            }
 
             Ok(Json(ChatResponse {
-                reply,
-                options,
+                reply: ai_reply,
+                options: vec![],
                 plan: None,
                 safety: None,
                 step_metadata: None,
@@ -1323,171 +1113,17 @@ async fn chat_handler(
                 token_metrics: None,
             }))
         }
-        Some(ai_config) => {
-            // Include lightweight history signature so multi-turn short answers (e.g. "1.21.1", "yes") don't collide
-            let hist_sig = req.history.as_deref().map(|h| {
-                h.iter().map(|i| format!("{}:{}", i.role, i.content.chars().take(20).collect::<String>())).collect::<Vec<_>>().join(";")
-            }).unwrap_or_default();
-            let cache_key = format!("{}:{}:{}:{}", ai_config.model, ai_config.endpoint, hist_sig, raw_msg.to_ascii_lowercase());
-
-            // Check in-memory session deduplication cache (saves 100% tokens on repeat queries)
-            {
-                let cache = state.ai_cache.read().await;
-                if let Some((cached_reply, timestamp)) = cache.get(&cache_key) {
-                    if timestamp.elapsed() < std::time::Duration::from_secs(600) {
-                        info!("⚡ Serving AI response from session cache (100% tokens saved)");
-                        return Ok(Json(ChatResponse {
-                            reply: cached_reply.clone(),
-                            options: vec![],
-                            plan: None,
-                            safety: None,
-                            step_metadata: None,
-                            ready_to_execute: false,
-                            token_metrics: Some(TokenOptimizationMetrics {
-                                prompt_cache_hit: true,
-                                history_messages_compacted: 0,
-                                estimated_tokens_saved: 520,
-                                optimization_strategy: "session_query_cache (100% token savings)".to_string(),
-                            }),
-                        }));
-                    }
-                }
-            }
-
-            // AI API key detected! Call real AI endpoint with token optimization pipeline.
-            state.events.emit(installer_core::AgentEvent::PlanningStarted {
-                goal: raw_msg.to_string(),
-            });
-
-            // 1. Compact host context XML serialization (~86% token footprint reduction)
-            let compact_host_xml = format_compact_host_context(&mc_info, &profile);
-
-            // 2. Sliding window + assistant history distillation (prevents O(N^2) token growth)
-            let raw_hist = req.history.as_deref().unwrap_or(&[]);
-            let (distilled_history, compacted_count) = distill_history(raw_hist);
-
-            match call_ai_chat(&ai_config, raw_msg, &distilled_history, &compact_host_xml).await {
-                Ok(ai_reply) => {
-                    // Cache the successful response with bounded capacity & TTL sweep (prevents memory leak)
-                    {
-                        let mut cache = state.ai_cache.write().await;
-                        // Prune entries older than 10 minutes
-                        cache.retain(|_, (_, time)| time.elapsed() < std::time::Duration::from_secs(600));
-                        // Enforce max capacity of 100 entries
-                        if cache.len() >= 100 {
-                            if let Some(oldest) = cache.iter().min_by_key(|(_, (_, t))| *t).map(|(k, _)| k.clone()) {
-                                cache.remove(&oldest);
-                            }
-                        }
-                        cache.insert(cache_key, (ai_reply.clone(), std::time::Instant::now()));
-                    }
-
-                    let tokens_saved = 380 + (compacted_count * 120);
-
-                    Ok(Json(ChatResponse {
-                        reply: ai_reply,
-                        options: vec![],
-                        plan: None,
-                        safety: None,
-                        step_metadata: None,
-                        ready_to_execute: false,
-                        token_metrics: Some(TokenOptimizationMetrics {
-                            prompt_cache_hit: false,
-                            history_messages_compacted: compacted_count,
-                            estimated_tokens_saved: tokens_saved,
-                            optimization_strategy: "static_prefix_caching + history_compaction + compact_host_xml".to_string(),
-                        }),
-                    }))
-                }
-                Err(err) => {
-                    // Keep the error readable: collapse whitespace and cap its length.
-                    let err_flat = err.split_whitespace().collect::<Vec<_>>().join(" ");
-                    let err_short = if err_flat.len() > 240 {
-                        format!("{}...", &err_flat[..err_flat.floor_char_boundary(240)])
-                    } else {
-                        err_flat
-                    };
-                    let is_403 = err_short.contains("403") || err_short.contains("Forbidden");
-                    let is_nim = ai_config.api_key.starts_with("nvapi-") || ai_config.endpoint.contains("nvidia.com");
-
-                    // Synthesize fallback plan using deterministic zero-trust engine so the user can immediately use the app
-                    if let Ok(plan) = installer_core::generate_mock_plan(raw_msg, &profile, None) {
-                        if let Ok(safety) = state.safety_engine.evaluate_plan(&plan).await {
-                            let meta = create_metadata_for_plan(&plan, &safety);
-                            *state.current_plan.write().await = Some((plan.clone(), safety.clone()));
-
-                            state.events.emit(installer_core::AgentEvent::PlanGenerated {
-                                plan: Box::new(plan.clone()),
-                            });
-
-                            let note = if is_403 && is_nim {
-                                "\n\n*(Note: NVIDIA cloud inference returned `403 Forbidden` for this Dev key — activated deterministic zero-trust engine to build your plan).* \n\nReview the verified tasks in the right panel and approve execution when ready."
-                            } else {
-                                "\n\nReview the verified tasks in the right panel and approve execution when ready."
-                            };
-
-                            let reply = format!(
-                                "**Zero-Trust Plan Synthesized for \"{}\".**{}",
-                                raw_msg, note
-                            );
-
-                            return Ok(Json(ChatResponse {
-                                reply,
-                                options: vec![],
-                                plan: Some(plan),
-                                safety: Some(safety),
-                                step_metadata: Some(meta),
-                                ready_to_execute: true,
-                                token_metrics: Some(TokenOptimizationMetrics {
-                                    prompt_cache_hit: false,
-                                    history_messages_compacted: 0,
-                                    estimated_tokens_saved: 650,
-                                    optimization_strategy: "deterministic_zero_trust_fallback".to_string(),
-                                }),
-                            }));
-                        }
-                    }
-
-                    let note = if is_403 && is_nim {
-                        "\n\n💡 **NVIDIA API Key Note**:\n\
-                        Keys from the **NVIDIA Developer Program / NGC** (`ngc.nvidia.com`) are for container/model downloads and return `403 Forbidden` for cloud inference.\n\n\
-                        **To fix:**\n\
-                        1. Visit **build.nvidia.com** (NVIDIA API Catalog) and sign in.\n\
-                        2. Select any model (e.g. `meta/llama-3.3-70b-instruct` or `meta/llama-3.1-8b-instruct`) and click **Get API Key** (comes with 1,000 free credits).\n\
-                        3. You can also pick a different model in **Settings** using the quick preset buttons."
-                    } else {
-                        "\n\nCheck your API key and connection in **Settings**, or use an offline recipe."
-                    };
-
-                    let reply = format!(
-                        "⚠️ **Couldn't reach the AI model**\n\n\
-                        I tried `{}` and got this error. Nothing has been changed.\n\n\
-                        > `{}`{}",
-                        ai_config.model, err_short, note
-                    );
-
-                    let options = vec![
-                        ChatOption {
-                            label: "Open Settings".to_string(),
-                            value: "open_settings".to_string(),
-                        },
-                        ChatOption {
-                            label: "Minecraft shaders and mods".to_string(),
-                            value: "I want to download minecraft mods like optifine.".to_string(),
-                        },
-                    ];
-
-                    Ok(Json(ChatResponse {
-                        reply,
-                        options,
-                        plan: None,
-                        safety: None,
-                        step_metadata: None,
-                        ready_to_execute: false,
-                        token_metrics: None,
-                    }))
-                }
-            }
+        Err(err) => {
+            let err_flat = err.split_whitespace().collect::<Vec<_>>().join(" ");
+            let err_short = if err_flat.len() > 400 {
+                format!("{}...", &err_flat[..err_flat.floor_char_boundary(400)])
+            } else {
+                err_flat
+            };
+            Ok(Json(error_response(
+                format!("**Error from `{}`:**\n\n> `{}`", ai_config.model, err_short),
+                true,
+            )))
         }
     }
 }

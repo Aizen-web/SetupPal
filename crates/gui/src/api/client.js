@@ -42,7 +42,7 @@ class ApiClient {
     return await res.json();
   }
 
-  async validateKey({ apiKey = null, provider = 'nim', model = null, endpoint = null } = {}) {
+  async validateKey({ apiKey = null } = {}) {
     const key = apiKey || localStorage.getItem('setuppal_ai_api_key');
     if (!key || !key.trim()) {
       return { valid: false, message: 'No API key provided.' };
@@ -54,9 +54,6 @@ class ApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           api_key: key.trim(),
-          provider,
-          model,
-          endpoint,
         }),
       });
 
@@ -72,19 +69,6 @@ class ApiClient {
 
   async sendChat(message, history = []) {
     const apiKey = localStorage.getItem('setuppal_ai_api_key') || null;
-    let provider = localStorage.getItem('setuppal_ai_provider') || (apiKey && apiKey.startsWith('nvapi-') ? 'nim' : 'nim');
-    if (apiKey && apiKey.startsWith('nvapi-')) {
-      provider = 'nim';
-    }
-    let model = localStorage.getItem('setuppal_ai_model') || (provider === 'nim' ? 'meta/llama-3.3-70b-instruct' : 'gpt-4o-mini');
-    let endpoint = localStorage.getItem('setuppal_ai_endpoint') || (provider === 'nim' ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions');
-
-    if ((provider === 'nim' || (apiKey && apiKey.startsWith('nvapi-'))) && endpoint.includes('openai.com')) {
-      endpoint = 'https://integrate.api.nvidia.com/v1/chat/completions';
-      if (!model || model.includes('gpt-')) {
-        model = 'meta/llama-3.3-70b-instruct';
-      }
-    }
 
     const res = await fetch(`${API_BASE}/chat`, {
       method: 'POST',
@@ -93,9 +77,6 @@ class ApiClient {
         message,
         history,
         api_key: apiKey,
-        provider,
-        model,
-        endpoint,
       }),
     });
     if (!res.ok) {

@@ -458,7 +458,21 @@ export class BackendBridge {
       console.error("Error creating plan or sending chat:", err);
       sounds.play('error');
       store.setMascotState('error', `Failed to process request: ${err.message}`);
-      throw err;
+      store.setState(s => ({
+        ...s,
+        chatMessages: [
+          ...s.chatMessages,
+          {
+            id: 'a_' + Date.now(),
+            sender: 'assistant',
+            text: `**Error:** ${err.message}`,
+            options: [],
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            planAttached: false
+          }
+        ]
+      }));
+      return null;
     }
   }
 

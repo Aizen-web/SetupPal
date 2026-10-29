@@ -16,9 +16,6 @@ export function renderAccountsView(container) {
   const activePet = state.activePet || 'ghost';
 
   const savedKey = localStorage.getItem('setuppal_ai_api_key') || '';
-  const savedProvider = localStorage.getItem('setuppal_ai_provider') || (savedKey.startsWith('sk-') ? 'openai' : 'nim');
-  const savedModel = localStorage.getItem('setuppal_ai_model') || (savedProvider === 'nim' ? 'nvidia/llama-3.1-nemotron-70b-instruct' : 'gpt-4o-mini');
-  const savedEndpoint = localStorage.getItem('setuppal_ai_endpoint') || (savedProvider === 'nim' ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions');
 
   const savedGhUser = localStorage.getItem('setuppal_github_user') || '';
   const savedTavilyKey = localStorage.getItem('setuppal_tavily_key') || '';
@@ -84,7 +81,7 @@ export function renderAccountsView(container) {
             </div>
             
             <div style="font-size: 12.5px; color: var(--ink-soft); margin-bottom: 14px; line-height: 1.5;">
-              Powers zero-trust planning, question analysis, and toolchain reasoning via Meta Llama 3.1 70B & Nemotron.
+              Powers zero-trust planning, question analysis, and toolchain reasoning via NVIDIA NIM (nvidia/nemotron-3.5-bolt-e4b).
             </div>
 
             <!-- Key display or input field -->
@@ -96,7 +93,7 @@ export function renderAccountsView(container) {
                   <span style="font-size: 11px; color: #16a34a; font-weight: 600;">${hasEnvKey ? '✓ Loaded (.env)' : '✓ Ready'}</span>
                 </div>
                 <div style="font-size: 11px; color: var(--ink-soft); margin-top: 6px;">
-                  Model: <code class="font-mono">${savedModel}</code>
+                  Model: <code class="font-mono">nvidia/nemotron-3.5-bolt-e4b</code>
                 </div>
               ` : `
                 <div style="margin-bottom: 8px;">
@@ -268,14 +265,6 @@ export function renderAccountsView(container) {
       }
 
       localStorage.setItem('setuppal_ai_api_key', val);
-      const isNim = val.startsWith('nvapi-');
-      localStorage.setItem('setuppal_ai_provider', isNim ? 'nim' : 'openai');
-      if (isNim) {
-        const currentModel = localStorage.getItem('setuppal_ai_model');
-        const targetModel = (currentModel && !currentModel.includes('gpt-')) ? currentModel : 'nvidia/llama-3.1-nemotron-70b-instruct';
-        localStorage.setItem('setuppal_ai_model', targetModel);
-        localStorage.setItem('setuppal_ai_endpoint', 'https://integrate.api.nvidia.com/v1/chat/completions');
-      }
 
       sounds.play('task.done');
       isNimEditing = false;
@@ -325,9 +314,6 @@ export function renderAccountsView(container) {
       try {
         const res = await apiClient.validateKey({
           apiKey: savedKey,
-          provider: savedProvider,
-          model: savedModel,
-          endpoint: savedEndpoint,
         });
 
         if (res.valid) {
@@ -359,14 +345,8 @@ export function renderAccountsView(container) {
       if (nimMsg) nimMsg.innerHTML = `<span style="color: var(--accent);">⟳ Testing key with NVIDIA NIM...</span>`;
       btnTestNimDraft.disabled = true;
 
-      const isNim = val.startsWith('nvapi-');
       try {
-        const res = await apiClient.validateKey({
-          apiKey: val,
-          provider: isNim ? 'nim' : 'openai',
-          model: isNim ? (localStorage.getItem('setuppal_ai_model') || 'nvidia/llama-3.1-nemotron-70b-instruct') : 'gpt-4o-mini',
-          endpoint: isNim ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions',
-        });
+        const res = await apiClient.validateKey({ apiKey: val });
 
         if (res.valid) {
           sounds.play('verdict.green');
