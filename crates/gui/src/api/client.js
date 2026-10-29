@@ -11,16 +11,19 @@ class ApiClient {
     this.isConnected = false;
   }
 
-  async checkHealth() {
+  async checkHealth(timeoutMs = 1500) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(`${API_BASE}/health`);
+      const res = await fetch(`${API_BASE}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       this.isConnected = true;
       return data;
     } catch (err) {
+      clearTimeout(timeout);
       this.isConnected = false;
-      console.warn("Backend not reachable yet:", err);
       return null;
     }
   }
