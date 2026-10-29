@@ -45,19 +45,12 @@ class ApiClient {
   }
 
   async validateKey({ apiKey = null, provider = 'nim' } = {}) {
-    const key = apiKey || '';
-    if (!key || !key.trim()) {
-      if (provider === 'nim' && localStorage.getItem('setuppal_ai_api_key')) {
-        return this.validateKey({ apiKey: localStorage.getItem('setuppal_ai_api_key'), provider });
-      }
-    }
-
     try {
       const res = await fetch(`${API_BASE}/test-key`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          api_key: key.trim(),
+          api_key: (apiKey || '').trim(),
           provider,
         }),
       });
@@ -73,38 +66,9 @@ class ApiClient {
     }
   }
 
-  async getModels(provider = 'nebius') {
-    const res = await fetch(`${API_BASE}/models?provider=${encodeURIComponent(provider)}`);
-    if (!res.ok) {
-      const message = await res.text();
-      throw new Error(message || `Model lookup failed (${res.status}).`);
-    }
-    return await res.json();
-  }
-
-  async sendChat(message, history = [], pet = 'ghost') {
-    const apiKey = localStorage.getItem('setuppal_ai_api_key') || null;
-
-    const res = await fetch(`${API_BASE}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message,
-        history,
-        pet,
-        api_key: apiKey,
-        ...chatPrefsPayload(),
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Chat failed (${res.status}): ${text}`);
-    }
-    return await res.json();
-  }
-
-  async sendChatStream(message, history = [], pet = 'ghost', { signal, onEvent } = {}) {
-    const apiKey = localStorage.getItem('setuppal_ai_api_key') || null;
+  async sendChatStream(message, history = [], ...rest) {
+    // Callers may still pass the retired pet name before the options object.
+    const { signal, onEvent } = rest.find(arg => arg && typeof arg === 'object') || {};
     const response = await fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -112,9 +76,6 @@ class ApiClient {
       body: JSON.stringify({
         message,
         history,
-        pet,
-        api_key: apiKey,
-        provider: 'auto',
         ...chatPrefsPayload(),
       }),
     });

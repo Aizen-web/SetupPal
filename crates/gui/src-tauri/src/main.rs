@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::{header, Method, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
@@ -21,9 +21,10 @@ use tokio_stream::{Stream, StreamExt};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
 
+use installer_core::llm::{ConfigKeyStore, KeyStore, ProviderClient, ProviderKind, ResolvedProvider};
 use installer_core::{
     AllowedBinary, CoreConfig, EventBus,
-    NimClient, PlanSafetyReport, Planner, PlatformOsProvider, RecipeStore,
+    PlanSafetyReport, Planner, PlatformOsProvider, RecipeStore,
     SafetyEngine, StateLogger, SystemProfile, SystemScanner, OsProvider, Plan,
 };
 
@@ -35,11 +36,26 @@ pub struct AppState {
     pub scanner: Arc<SystemScanner>,
     pub safety_engine: Arc<SafetyEngine>,
     pub recipes: RecipeStore,
-    pub llm: Arc<NimClient>,
+    /// Shared by chat and the planner so both always use the same provider and pinned model.
+    pub llm: Arc<ProviderClient>,
     pub planner: Arc<Planner>,
     pub state_logger: StateLogger,
     pub current_plan: Arc<RwLock<Option<(Plan, PlanSafetyReport)>>>,
-    pub ai_cache: Arc<RwLock<std::collections::HashMap<String, (String, std::time::Instant)>>>,
+}
+
+/// Reads provider keys per request (local `.env`, then process environment, then startup config)
+/// so a key added to `.env` works without a restart.
+struct LocalKeyStore {
+    startup: ConfigKeyStore,
+}
+
+impl KeyStore for LocalKeyStore {
+    fn api_key(&self, kind: ProviderKind) -> Option<String> {
+        kind.key_env_names()
+            .iter()
+            .find_map(|name| resolve_env_key(name, None))
+            .or_else(|| self.startup.api_key(kind).as_deref().and_then(normalize_api_key))
+    }
 }
 
 #[tokio::main]
@@ -59,7 +75,8 @@ async fn main() -> anyhow::Result<()> {
     let scanner = Arc::new(SystemScanner::new(os_provider.clone(), events.clone()));
     let safety_engine = Arc::new(SafetyEngine::with_system_defaults(os_provider.clone(), config.tavily_api_key.clone(), events.clone()));
     let recipes = RecipeStore::load_from_dir_or_embedded(&config.recipes_dir)?;
-    let llm = Arc::new(NimClient::new(config.clone())?);
+    let keys = Arc::new(LocalKeyStore { startup: ConfigKeyStore::from_config(&config) });
+    let llm = Arc::new(ProviderClient::with_key_store(config.clone(), keys)?);
     let planner = Arc::new(Planner::new(recipes.clone(), llm.clone(), events.clone()));
     let state_logger = StateLogger::new(config.state_log_path.clone(), events.clone());
 
@@ -74,7 +91,6 @@ async fn main() -> anyhow::Result<()> {
         planner,
         state_logger,
         current_plan: Arc::new(RwLock::new(None)),
-        ai_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
     };
 
     let cors = CorsLayer::new()
@@ -86,7 +102,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/health", get(health_handler))
         .route("/api/doctor", get(doctor_handler))
         .route("/api/recipes", get(recipes_handler))
-        .route("/api/chat", post(chat_handler))
         .route("/api/chat/stream", post(chat_stream_handler))
         .route("/api/plan", post(plan_handler))
         .route("/api/execute", post(execute_handler))
@@ -95,7 +110,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/undo", post(undo_handler))
         .route("/api/events", get(events_handler))
         .route("/api/test-key", post(test_provider_key_handler))
-        .route("/api/models", get(models_handler))
         .layer(cors)
         .with_state(app_state);
 
@@ -132,31 +146,46 @@ fn read_dotenv_value(name: &str) -> Option<String> {
     None
 }
 
-fn read_dotenv_nim_key() -> Option<String> {
-    read_dotenv_value("NIM_API_KEY").or_else(|| read_dotenv_value("NVIDIA_API_KEY"))
+/// Provider fields for `/api/health`, from the same resolver chat and planning use.
+fn provider_status(llm: &ProviderClient) -> serde_json::Value {
+    let keys = llm.key_store();
+    let (provider, model, error) = match llm.selected() {
+        Ok(kind) => {
+            let error = llm.resolve().err().map(|e| e.to_string());
+            (Some(kind.id()), Some(kind.model()), error)
+        }
+        Err(e) => (None, None, Some(e.to_string())),
+    };
+    serde_json::json!({
+        "provider": provider,
+        "model": model,
+        "provider_ready": error.is_none(),
+        "provider_error": error,
+        "has_nebius_key": keys.api_key(ProviderKind::Nebius).is_some(),
+        "has_nim_key": keys.api_key(ProviderKind::Nim).is_some(),
+    })
 }
 
 async fn health_handler(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
-    let has_key = resolve_nim_api_key(state.config.nim_api_key.as_deref()).is_some();
-    let has_nebius_key =
-        resolve_env_key("NEBIUS_API_KEY", state.config.nebius_api_key.as_deref()).is_some();
     let has_tavily_key =
         resolve_env_key("TAVILY_API_KEY", state.config.tavily_api_key.as_deref()).is_some();
 
-    Json(serde_json::json!({
+    let mut health = serde_json::json!({
         "status": "ok",
         "app": "SetupPal Zero-Trust Backend",
         "version": "0.1.0",
         "safety_level": "strict",
         "deterministic_gates": true,
-        "has_env_key": has_key,
-        "has_nebius_key": has_nebius_key,
         "has_tavily_key": has_tavily_key,
-        "provider": if has_nebius_key { "nebius" } else { "nim" },
-        "model": state.config.nebius_model.as_deref().unwrap_or(&state.config.nim_model)
-    }))
+    });
+    if let (Some(target), serde_json::Value::Object(fields)) =
+        (health.as_object_mut(), provider_status(&state.llm))
+    {
+        target.extend(fields);
+    }
+    Json(health)
 }
 
 async fn doctor_handler(
@@ -186,51 +215,17 @@ pub struct ChatMessageItem {
     pub content: String,
 }
 
+/// Provider, model, and key are never taken from the client; unknown fields are ignored.
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
     pub message: String,
     pub history: Option<Vec<ChatMessageItem>>,
-    pub api_key: Option<String>,
-    /// Active mascot: "ghost" | "cat" | "bunny". Drives the assistant's personality.
-    pub pet: Option<String>,
     /// How many recent messages are sent word for word (older ones are compacted into notes).
     pub memory_turns: Option<usize>,
     /// Max tokens for the reply.
     pub max_reply_tokens: Option<u32>,
     /// Whether to attach PC facts to the message.
     pub include_pc_facts: Option<bool>,
-    pub provider: Option<String>,
-    pub model: Option<String>,
-    pub endpoint: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ChatOption {
-    pub label: String,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TokenOptimizationMetrics {
-    pub prompt_cache_hit: bool,
-    pub history_messages_compacted: usize,
-    pub estimated_tokens_saved: usize,
-    pub optimization_strategy: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ChatResponse {
-    pub reply: String,
-    pub options: Vec<ChatOption>,
-    pub plan: Option<Plan>,
-    pub safety: Option<PlanSafetyReport>,
-    pub step_metadata: Option<Vec<serde_json::Value>>,
-    pub ready_to_execute: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_metrics: Option<TokenOptimizationMetrics>,
-    /// What was sent to the model this turn (powers the context viewer).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -325,17 +320,6 @@ pub fn create_metadata_for_plan(plan: &Plan, safety_report: &PlanSafetyReport) -
     }).collect()
 }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedAiConfig {
-    pub api_key: String,
-    pub endpoint: String,
-    pub model: String,
-    pub provider: String,
-}
-
-pub const AI_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
-pub const AI_MODEL: &str = "nvidia/nemotron-3.5-bolt-e4b";
-
 fn normalize_api_key(raw: &str) -> Option<String> {
     let clean = raw
         .trim()
@@ -356,62 +340,12 @@ fn resolve_env_key(name: &str, configured: Option<&str>) -> Option<String> {
         .or_else(|| configured.and_then(normalize_api_key))
 }
 
-fn resolve_nim_api_key(configured: Option<&str>) -> Option<String> {
-    resolve_env_key("NIM_API_KEY", configured)
-        .or_else(|| resolve_env_key("NVIDIA_API_KEY", None))
-}
-
-fn prefers_nebius(requested_provider: Option<&str>, has_nebius_key: bool) -> bool {
-    match requested_provider {
-        Some("nebius") => true,
-        Some("nim") => false,
-        _ => has_nebius_key,
-    }
-}
-
-fn resolve_ai_config(
-    req: &ChatRequest,
-    state_config: &installer_core::CoreConfig,
-) -> Option<ResolvedAiConfig> {
-    let has_nebius_key =
-        resolve_env_key("NEBIUS_API_KEY", state_config.nebius_api_key.as_deref()).is_some();
-    let use_nebius = prefers_nebius(req.provider.as_deref(), has_nebius_key);
-
-    let (api_key, base_url, model, provider) = if use_nebius {
-        (
-            resolve_env_key("NEBIUS_API_KEY", state_config.nebius_api_key.as_deref())?,
-            req.endpoint
-                .clone()
-                .unwrap_or_else(|| state_config.nebius_base_url.clone()),
-            req.model
-                .clone()
-                .or_else(|| state_config.nebius_model.clone())
-                .unwrap_or_default(),
-            "nebius",
-        )
-    } else {
-        (
-            resolve_nim_api_key(state_config.nim_api_key.as_deref())
-                .or_else(|| req.api_key.as_deref().and_then(normalize_api_key))?,
-            req.endpoint
-                .clone()
-                .unwrap_or_else(|| state_config.nim_base_url.clone()),
-            req.model.clone().unwrap_or_else(|| state_config.nim_model.clone()),
-            "nim",
-        )
-    };
-
-    Some(ResolvedAiConfig {
-        api_key,
-        endpoint: format!("{}/chat/completions", base_url.trim_end_matches('/')),
-        model,
-        provider: provider.to_string(),
-    })
-}
-
 #[derive(Debug, Deserialize)]
 pub struct TestKeyRequest {
+    /// A pasted key to test once; empty means "test the configured key".
+    #[serde(default)]
     pub api_key: String,
+    /// `nebius` or `nim`; defaults to the provider chat currently uses.
     pub provider: Option<String>,
 }
 
@@ -423,248 +357,121 @@ pub struct TestKeyResponse {
     pub provider: String,
 }
 
-async fn test_key_handler(
-    Json(req): Json<TestKeyRequest>,
-) -> Json<TestKeyResponse> {
-    let provider = "NVIDIA NIM".to_string();
-    let model = AI_MODEL.to_string();
-
-    let key = if req.api_key.trim().is_empty() {
-        read_dotenv_nim_key().unwrap_or_default()
-    } else {
-        req.api_key.trim().to_string()
-    };
-
-    if key.is_empty() {
-        return Json(TestKeyResponse {
-            valid: false,
-            message: "No API key found in request or .env file.".to_string(),
-            model_tested: model,
-            provider,
-        });
-    }
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build() {
-        Ok(c) => c,
-        Err(e) => {
-            return Json(TestKeyResponse {
-                valid: false,
-                message: format!("HTTP client initialization failed: {e}"),
-                model_tested: model,
-                provider,
-            });
-        }
-    };
-
-    let res = client
-        .post(AI_ENDPOINT)
-        .header("Authorization", format!("Bearer {key}"))
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": [{ "role": "user", "content": "ping" }],
-            "max_tokens": 5,
-            "temperature": 0.0
-        }))
-        .send()
-        .await;
-
-    match res {
-        Ok(response) => {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            if status.is_success() {
-                Json(TestKeyResponse {
-                    valid: true,
-                    message: format!("Key works. Model '{model}' responded."),
-                    model_tested: model,
-                    provider,
-                })
-            } else {
-                Json(TestKeyResponse {
-                    valid: false,
-                    message: format_nvidia_http_error(status, &body, &model),
-                    model_tested: model,
-                    provider,
-                })
-            }
-        }
-        Err(err) => Json(TestKeyResponse {
-            valid: false,
-            message: format!("Network request failed: {err}"),
-            model_tested: model,
-            provider,
-        }),
-    }
-}
-
+/// Tests a key with a one-token request to the provider's pinned model, so a pass means
+/// chat will work with that key. Provider response bodies are never echoed.
 async fn test_provider_key_handler(
     State(state): State<AppState>,
     Json(req): Json<TestKeyRequest>,
 ) -> Json<TestKeyResponse> {
-    let use_nebius = req.provider.as_deref() == Some("nebius");
-    let provider = if use_nebius { "Nebius" } else { "NVIDIA NIM" }.to_string();
-    let base_url = if use_nebius {
-        &state.config.nebius_base_url
-    } else {
-        &state.config.nim_base_url
+    let kind = match req.provider.as_deref() {
+        Some(value) => ProviderKind::parse(value),
+        None => state.llm.selected().ok(),
     };
-    let model = if use_nebius {
-        state.config.nebius_model.clone().unwrap_or_default()
-    } else {
-        state.config.nim_model.clone()
-    };
-    let key = if req.api_key.trim().is_empty() {
-        let (name, configured) = if use_nebius {
-            ("NEBIUS_API_KEY", state.config.nebius_api_key.as_deref())
-        } else {
-            ("NIM_API_KEY", state.config.nim_api_key.as_deref())
-        };
-        if use_nebius {
-            resolve_env_key(name, configured).unwrap_or_default()
-        } else {
-            resolve_nim_api_key(configured).unwrap_or_default()
-        }
-    } else {
-        normalize_api_key(&req.api_key).unwrap_or_default()
-    };
-    if key.is_empty() {
+    let Some(kind) = kind else {
         return Json(TestKeyResponse {
             valid: false,
-            message: "No API key found in the request or environment.".to_string(),
-            model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
-            provider,
+            message: "Unknown provider. Use `nebius` or `nim`.".to_string(),
+            model_tested: String::new(),
+            provider: String::new(),
         });
-    }
+    };
+    let provider = kind.display_name().to_string();
+    let model = kind.model();
+    let respond = |valid: bool, message: String| {
+        Json(TestKeyResponse {
+            valid,
+            message,
+            model_tested: model.to_string(),
+            provider: provider.clone(),
+        })
+    };
+
+    let key = normalize_api_key(&req.api_key).or_else(|| state.llm.key_store().api_key(kind));
+    let Some(key) = key else {
+        return respond(
+            false,
+            format!(
+                "No key to test. Paste one, or add {} to your local environment.",
+                kind.key_env_names().join(" or ")
+            ),
+        );
+    };
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()
     {
         Ok(client) => client,
-        Err(_) => {
-            return Json(TestKeyResponse {
-                valid: false,
-                message: "HTTP client initialization failed.".to_string(),
-                model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
-                provider,
-            });
-        }
+        Err(_) => return respond(false, "HTTP client initialization failed.".to_string()),
     };
 
-    match client
-        .get(format!("{}/models", base_url.trim_end_matches('/')))
+    let endpoint = format!(
+        "{}/chat/completions",
+        kind.base_url(&state.config).trim_end_matches('/')
+    );
+    let result = client
+        .post(endpoint)
         .bearer_auth(&key)
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "ping" }],
+            "max_tokens": 1,
+            "temperature": 0.0
+        }))
         .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => Json(TestKeyResponse {
-            valid: true,
-            message: "Key works. Model list is available.".to_string(),
-            model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
-            provider,
-        }),
-        Ok(response) => Json(TestKeyResponse {
-            valid: false,
-            message: format!("Provider returned HTTP {}. Check the key and endpoint.", response.status()),
-            model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
-            provider,
-        }),
-        Err(error) => Json(TestKeyResponse {
-            valid: false,
-            message: format!("Network request failed: {}", error.without_url()),
-            model_tested: if model.is_empty() { "Live model list".to_string() } else { model },
-            provider,
-        }),
+        .await;
+
+    match result {
+        Ok(response) if response.status().is_success() => {
+            respond(true, format!("Key works. Model `{model}` responded."))
+        }
+        Ok(response) => respond(false, describe_provider_status(response.status(), model)),
+        Err(error) => respond(
+            false,
+            format!("Network request failed: {}", error.without_url()),
+        ),
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ModelsQuery {
-    provider: Option<String>,
-}
-
-async fn models_handler(
-    State(state): State<AppState>,
-    Query(query): Query<ModelsQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let use_nebius = query.provider.as_deref() == Some("nebius");
-    let (provider, base_url, configured_key) = if use_nebius {
-        ("nebius", &state.config.nebius_base_url, state.config.nebius_api_key.as_deref())
-    } else {
-        ("nim", &state.config.nim_base_url, state.config.nim_api_key.as_deref())
-    };
-    let key_name = if use_nebius { "NEBIUS_API_KEY" } else { "NIM_API_KEY" };
-    let key = if use_nebius {
-        resolve_env_key(key_name, configured_key)
-    } else {
-        resolve_nim_api_key(configured_key)
+fn describe_provider_status(status: StatusCode, model: &str) -> String {
+    match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+            format!("HTTP {status}: the provider rejected this key.")
+        }
+        StatusCode::NOT_FOUND => {
+            format!("HTTP {status}: model `{model}` is not available for this key.")
+        }
+        StatusCode::GONE => format!("HTTP {status}: model `{model}` has been retired."),
+        StatusCode::TOO_MANY_REQUESTS => {
+            format!("HTTP {status}: rate limited. Wait a moment and try again.")
+        }
+        _ => format!("HTTP {status} from the provider."),
     }
-    .ok_or((StatusCode::UNAUTHORIZED, "No provider key is configured.".to_string()))?;
-    let models = fetch_model_ids(base_url, &key).await
-        .map_err(|message| (StatusCode::BAD_GATEWAY, message))?;
-    Ok(Json(serde_json::json!({ "provider": provider, "models": models })))
 }
 
-async fn fetch_model_ids(base_url: &str, api_key: &str) -> Result<Vec<String>, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|_| "Could not initialize the model-list client.".to_string())?;
-    let response = client
-        .get(format!("{}/models", base_url.trim_end_matches('/')))
-        .bearer_auth(api_key)
-        .send()
-        .await
-        .map_err(|error| format!("Could not retrieve models: {}", error.without_url()))?;
-    if !response.status().is_success() {
-        return Err(format!("Model service returned HTTP {}.", response.status()));
-    }
-    let payload: serde_json::Value = response.json().await
-        .map_err(|_| "Model service returned an invalid response.".to_string())?;
-    let models = payload.get("data")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
-        .map(str::to_string)
-        .collect();
-    Ok(models)
-}
-
-/// Bump when the prompt or host-facts format changes so the session cache never serves old-style replies.
-const PROMPT_VERSION: &str = "v20-mascot-personalities";
+/// Reported in the context viewer so a reply can be traced to the prompt that produced it.
+const PROMPT_VERSION: &str = "v21-pixel-broad-scope";
 
 const STATIC_SYSTEM_PROMPT: &str = "\
-You are SetupPal's chat assistant on the user's Windows PC. The active mascot identity and speaking style are provided separately. Help the user plan developer software: programming languages, runtimes, compilers, SDKs, package managers, web stacks, and dev tools.\n\
+Role\n\
+You are Pixel, SetupPal's assistant: a friendly little ghost who helps people set up software on their Windows PC. Be playful, curious, and warm, with a light spooky joke now and then.\n\
 \n\
-Scope: you only install things that can be set up unattended from the command line (winget, npm, pip, cargo, etc.) and checked with a CLI command like `node -v`. Apps that need a GUI launcher, store login, or DRM (Steam, Epic, Minecraft Bedrock, and similar) are out of scope. If asked, say so briefly and suggest a CLI or developer alternative.\n\
+Scope\n\
+SetupPal can set up anything that installs unattended from the command line (silent winget, npm, pip, cargo, or CLI installers like Fabric for Minecraft Java), can be verified with a command such as `node -v`, and passes SetupPal's safety checks. That includes everyday apps, not just coding tools (for example Git, VS Code, 7-Zip, VLC, OBS Studio).\n\
+Apps that need a GUI launcher, store login, or DRM (Steam, Epic Games, Riot, Battle.net, Roblox, Minecraft Bedrock, and similar) are out of scope.\n\
 \n\
-How to work:\n\
-- Read the whole conversation and answer what the user actually said. Their latest message is the priority. Short replies like `php` or `the second one` continue the topic you were already on.\n\
-- You receive facts about this PC. Use them and never invent facts. If a tool is already installed, say so and give its version.\n\
-- Your job is to get to a concrete install plan quickly. Work out what is needed, what is already present, and what is missing. Ask a question only when a real decision changes the plan (for example which version, or which of several tools). If the request is clear, skip questions and state the plan.\n\
-- If the request is vague, suggest 2 to 4 specific things you can set up and recommend one.\n\
-- When you have enough information, give the plan as a short numbered list of install steps, each with the tool name and how it will be verified. Then say the user can approve it to begin. Nothing is installed until they approve.\n\
-- If the user greets you, reply with a brief greeting in your mascot's voice and ask what they would like to set up. Never return an empty answer. Do not introduce yourself unless asked, and never repeat a question that was already answered.\n\
+How to work\n\
+- Answer the user's latest message, using the whole conversation. Short replies like `php` or `the second one` continue the current topic.\n\
+- Each message comes with facts about this PC. Use them and never invent facts. If something is already installed, say so and give its version.\n\
+- Greeting or broad request (like \"set up my PC\"): ask what they want set up, and offer 2 to 4 concrete options that fit this PC, recommending one.\n\
+- Clear request: give the plan right away. Ask only when the answer changes the plan (for example, which version).\n\
+- A plan is a short numbered list: what gets installed, its source (winget, npm, pip, ...), and the command that checks it. Then say nothing is installed until they approve.\n\
 \n\
-Style: plain language, short, markdown allowed, bold the key point. Keep the mascot voice in the wording, but keep technical facts and safety decisions accurate. The grumpy mascot may be dry or playfully blunt, but must never demean, threaten, or harass the user.";
-
-fn pet_persona(pet: Option<&str>) -> &'static str {
-    match pet {
-        Some("cat") => {
-            "Mascot: Byte the cat. Personality: nonchalant, dry, mildly grumpy, and clever. Use concise deadpan humor and occasional playful bluntness; never insult or demean the user."
-        }
-        Some("bunny") => {
-            "Mascot: Mochi the bunny. Personality: timid, gentle, and earnest. Speak softly, sometimes a little hesitant, while staying clear, useful, and confident about safety."
-        }
-        _ => {
-            "Mascot: Pixel the ghost. Personality: playful, curious, and warm. Add light, slightly spooky humor without letting it obscure the answer."
-        }
-    }
-}
+Manual setup guide\n\
+If the request is out of scope, start with **Manual setup guide**. In one line, say SetupPal only does unattended terminal setup and why this app needs a manual install. Give short numbered steps using the official source. End with \"SetupPal can install instead:\" and 2 to 4 related options.\n\
+\n\
+Style\n\
+Plain words, short replies, markdown allowed, bold the key point. Don't introduce yourself unless asked. Never claim you installed or checked anything; SetupPal does that after approval. Never send an empty reply.";
 
 /// Plain-text facts about this PC. Minecraft details are only added when the chat is about Minecraft.
 fn format_host_facts(
@@ -696,7 +503,7 @@ fn format_host_facts(
         .join(", ");
 
     let mut out = format!(
-        "- OS: {} {} ({})\n- GPU: {}\n- Free disk: {} GB\n- CLI support: winget, user-scope PATH available\n- Supported scope: Unattended CLI setups only (web, coding languages, compilers, dev tools)\n- Installed dev tools: {}",
+        "- OS: {} {} ({})\n- GPU: {}\n- Free disk: {} GB\n- CLI support: winget, user-scope PATH available\n- SetupPal can set up: anything with an unattended command-line install that a command can verify\n- Detected tools: {}",
         profile.os_name,
         profile.os_version,
         profile.arch,
@@ -718,7 +525,7 @@ fn format_host_facts(
         .any(|k| blob.contains(k));
 
     if launcher_requested {
-        out.push_str("\n- Note on requested software: The requested application uses a proprietary GUI launcher, store DRM, or interactive account authentication. SetupPal CANNOT install launcher-based apps or store games; remind the user that SetupPal is strictly designed for unattended CLI software, coding languages, web runtimes, and developer toolchains.");
+        out.push_str("\n- Note: the user mentioned software that may need a GUI launcher, store login, or DRM. If it does, reply with a Manual setup guide. Parts that install from the command line (for example Java or Fabric for Minecraft Java) can still be set up.");
     }
 
     out
@@ -780,7 +587,7 @@ fn build_context(raw: &[ChatMessageItem], user_prompt: &str, keep_recent: usize)
         let line = if m.role == "user" {
             format!("- User: {}", clip(&m.content, 220))
         } else {
-            format!("- Pixel: {}", gist(&m.content, 140))
+            format!("- Assistant: {}", gist(&m.content, 140))
         };
         if used + line.len() > MEMORY_NOTE_CHARS {
             trimmed_any = true;
@@ -808,326 +615,6 @@ fn build_context(raw: &[ChatMessageItem], user_prompt: &str, keep_recent: usize)
     PromptContext { memory_note, recent, compacted: older.len() }
 }
 
-async fn call_ai_chat(
-    ai_config: &ResolvedAiConfig,
-    user_prompt: &str,
-    ctx: &PromptContext,
-    host_facts: &str,
-    pet: Option<&str>,
-    max_tokens: u32,
-) -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(45))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let mut messages: Vec<serde_json::Value> = Vec::new();
-
-    // 1. Invariant Static System Prompt (matches OpenAI / Anthropic / vLLM Prompt Cache Prefix)
-    messages.push(serde_json::json!({
-        "role": "system",
-        "content": format!("{}\n\n{}", STATIC_SYSTEM_PROMPT, pet_persona(pet))
-    }));
-
-    // 2. Compact notes for older turns, then the most recent turns as written
-    if let Some(note) = &ctx.memory_note {
-        messages.push(serde_json::json!({
-            "role": "system",
-            "content": format!("Earlier in this chat (compacted notes, oldest first). Treat what the user said here as still true:\n{}", note)
-        }));
-    }
-    for item in ctx.recent.iter() {
-        messages.push(serde_json::json!({
-            "role": item.role,
-            "content": item.content
-        }));
-    }
-
-    // 3. Current user message, with the PC facts attached
-    let formatted_user_turn = format!(
-        "Facts about this PC:\n{}\n\nUser message:\n{}",
-        host_facts,
-        user_prompt
-    );
-
-    messages.push(serde_json::json!({
-        "role": "user",
-        "content": formatted_user_turn
-    }));
-
-    // Explicit max_tokens bounds to prevent runaway output generation
-    let request_body = serde_json::json!({
-        "model": ai_config.model,
-        "messages": messages,
-        "temperature": 0.5,
-        "max_tokens": max_tokens
-    });
-
-    // NVIDIA's hosted endpoint occasionally returns a transient empty 404/429/5xx; retry a couple of times.
-    let mut attempt = 0;
-    let res = loop {
-        attempt += 1;
-        let res = client
-            .post(&ai_config.endpoint)
-            .header("Authorization", format!("Bearer {}", ai_config.api_key))
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| format!("Network request to AI endpoint failed: {e}"))?;
-
-        if res.status().is_success() {
-            break res;
-        }
-
-        let status = res.status();
-        let error_body = res.text().await.unwrap_or_default();
-        let transient = status.as_u16() == 429
-            || status.is_server_error()
-            || (status == StatusCode::NOT_FOUND && error_body.trim().is_empty());
-        if transient && attempt < 3 {
-            tokio::time::sleep(std::time::Duration::from_millis(600 * attempt as u64)).await;
-            continue;
-        }
-        return Err(format_nvidia_http_error(status, &error_body, &ai_config.model));
-    };
-
-    let completion: serde_json::Value = res.json().await
-        .map_err(|e| format!("Failed to parse AI response JSON: {e}"))?;
-
-    let content = completion
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .ok_or_else(|| "AI response missing content".to_string())?;
-
-    extract_message_content(content)
-}
-
-fn extract_message_content(content: &serde_json::Value) -> Result<String, String> {
-    if let Some(text) = content.as_str() {
-        return Ok(text.to_string());
-    }
-    // Some NVIDIA models return content as an array of text parts.
-    if let Some(parts) = content.as_array() {
-        let joined = parts
-            .iter()
-            .filter_map(|p| {
-                p.as_str()
-                    .map(|s| s.to_string())
-                    .or_else(|| p.get("text").and_then(|t| t.as_str()).map(|s| s.to_string()))
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        if !joined.is_empty() {
-            return Ok(joined);
-        }
-    }
-    Err(format!("AI response content had unexpected shape: {content}"))
-}
-
-fn format_nvidia_http_error(status: StatusCode, body: &str, model: &str) -> String {
-    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    let short = if flat.len() > 320 {
-        format!("{}...", &flat[..flat.floor_char_boundary(320)])
-    } else {
-        flat
-    };
-
-    if status == StatusCode::NOT_FOUND && short.contains("Not found for account") {
-        return format!(
-            "HTTP 404: model `{model}` is not enabled for this API key. \
-On build.nvidia.com open that model and click Get API Key / enable it, \
-or set NIM_MODEL in .env to a model your key can call. Detail: {short}"
-        );
-    }
-    if status == StatusCode::FORBIDDEN {
-        return format!(
-            "HTTP 403 Forbidden: NVIDIA rejected this API key for chat inference. \
-Confirm it is a build.nvidia.com inference key (nvapi-...), not an expired NGC download key. Detail: {short}"
-        );
-    }
-    if status == StatusCode::GONE || status.as_u16() == 410 {
-        return format!(
-            "HTTP 410 Gone: model `{model}` has been retired by NVIDIA. Update NIM_MODEL / AI_MODEL. Detail: {short}"
-        );
-    }
-    if status == StatusCode::UNAUTHORIZED {
-        return format!(
-            "HTTP 401 Unauthorized: API key was rejected. Check NIM_API_KEY or NVIDIA_API_KEY in .env. Detail: {short}"
-        );
-    }
-    format!("AI Provider returned HTTP {status}: {short}")
-}
-
-async fn chat_handler(
-    State(state): State<AppState>,
-    Json(req): Json<ChatRequest>,
-) -> Result<Json<ChatResponse>, (StatusCode, String)> {
-    let raw_msg = req.message.trim();
-
-    let profile = state
-        .scanner
-        .scan()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let mc_info = inspect_minecraft_system(&profile);
-
-    let error_response = |reply: String, with_settings: bool| ChatResponse {
-        reply,
-        options: if with_settings {
-            vec![ChatOption {
-                label: "Open Settings".to_string(),
-                value: "open_settings".to_string(),
-            }]
-        } else {
-            vec![]
-        },
-        plan: None,
-        safety: None,
-        step_metadata: None,
-        ready_to_execute: false,
-        token_metrics: None,
-        context: None,
-    };
-
-    let Some(mut ai_config) = resolve_ai_config(&req, &state.config) else {
-        return Ok(Json(error_response(
-            "**No AI provider is configured.** Add either `NEBIUS_API_KEY` or an NVIDIA key (`NIM_API_KEY` / `NVIDIA_API_KEY`) to your local `.env` file.".to_string(),
-            true,
-        )));
-    };
-    if ai_config.model.is_empty() {
-        let models = fetch_model_ids(
-            ai_config.endpoint.trim_end_matches("/chat/completions"),
-            &ai_config.api_key,
-        )
-        .await
-        .map_err(|message| (StatusCode::BAD_GATEWAY, message))?;
-        ai_config.model = models
-            .into_iter()
-            .find(|model| model.to_ascii_lowercase().contains("nemotron"))
-            .ok_or((
-                StatusCode::BAD_GATEWAY,
-                "No Nemotron model is available for this Nebius account.".to_string(),
-            ))?;
-    }
-
-    let raw_hist = req.history.as_deref().unwrap_or(&[]);
-    let keep_recent = req.memory_turns.unwrap_or(6);
-    let max_tokens = req.max_reply_tokens.unwrap_or(800).clamp(200, 2000);
-    let include_facts = req.include_pc_facts.unwrap_or(true);
-    let ctx = build_context(raw_hist, raw_msg, keep_recent);
-    let host_facts = if include_facts {
-        format_host_facts(&profile, &mc_info, raw_msg, raw_hist)
-    } else {
-        "(PC facts are turned off by the user. Do not claim to know what is installed.)".to_string()
-    };
-    let system_tokens = est_tokens(STATIC_SYSTEM_PROMPT) + est_tokens(pet_persona(req.pet.as_deref()));
-    let memory_tokens = ctx.memory_note.as_deref().map(est_tokens).unwrap_or(0);
-    let recent_tokens: usize = ctx.recent.iter().map(|m| est_tokens(&m.content)).sum();
-    let facts_tokens = est_tokens(&host_facts);
-    let user_tokens = est_tokens(raw_msg);
-    let context_json = serde_json::json!({
-        "model": ai_config.model,
-        "system_tokens": system_tokens,
-        "memory_tokens": memory_tokens,
-        "recent_tokens": recent_tokens,
-        "facts_tokens": facts_tokens,
-        "user_tokens": user_tokens,
-        "total_tokens": system_tokens + memory_tokens + recent_tokens + facts_tokens + user_tokens,
-        "reply_budget": max_tokens,
-        "total_messages": raw_hist.len(),
-        "recent_messages": ctx.recent.len(),
-        "compacted_messages": ctx.compacted,
-        "memory_note": ctx.memory_note,
-        "recent": ctx.recent,
-        "facts": host_facts,
-    });
-
-    // Include a lightweight history signature so multi-turn short answers don't collide
-    let hist_sig = req.history.as_deref().map(|h| {
-        h.iter().map(|i| format!("{}:{}", i.role, i.content.chars().take(20).collect::<String>())).collect::<Vec<_>>().join(";")
-    }).unwrap_or_default();
-    let cache_key = format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}:{}",
-        PROMPT_VERSION,
-        keep_recent,
-        max_tokens,
-        include_facts,
-        req.pet.as_deref().unwrap_or("ghost"),
-        ai_config.model,
-        ai_config.endpoint,
-        hist_sig,
-        raw_msg.to_ascii_lowercase()
-    );
-
-    // Session cache of real AI replies only
-    {
-        let cache = state.ai_cache.read().await;
-        if let Some((cached_reply, timestamp)) = cache.get(&cache_key) {
-            if timestamp.elapsed() < std::time::Duration::from_secs(600) {
-                info!("Serving AI response from session cache");
-                return Ok(Json(ChatResponse {
-                    reply: cached_reply.clone(),
-                    options: vec![],
-                    plan: None,
-                    safety: None,
-                    step_metadata: None,
-                    ready_to_execute: false,
-                    token_metrics: None,
-                    context: Some(context_json.clone()),
-                }));
-            }
-        }
-    }
-
-    state.events.emit(installer_core::AgentEvent::PlanningStarted {
-        goal: raw_msg.to_string(),
-    });
-
-
-    match call_ai_chat(&ai_config, raw_msg, &ctx, &host_facts, req.pet.as_deref(), max_tokens).await {
-        Ok(ai_reply) => {
-            {
-                let mut cache = state.ai_cache.write().await;
-                cache.retain(|_, (_, time)| time.elapsed() < std::time::Duration::from_secs(600));
-                if cache.len() >= 100 {
-                    if let Some(oldest) = cache.iter().min_by_key(|(_, (_, t))| *t).map(|(k, _)| k.clone()) {
-                        cache.remove(&oldest);
-                    }
-                }
-                cache.insert(cache_key, (ai_reply.clone(), std::time::Instant::now()));
-            }
-
-            Ok(Json(ChatResponse {
-                reply: ai_reply,
-                options: vec![],
-                plan: None,
-                safety: None,
-                step_metadata: None,
-                ready_to_execute: false,
-                token_metrics: None,
-                context: Some(context_json.clone()),
-            }))
-        }
-        Err(err) => {
-            let err_flat = err.split_whitespace().collect::<Vec<_>>().join(" ");
-            let err_short = if err_flat.len() > 400 {
-                format!("{}...", &err_flat[..err_flat.floor_char_boundary(400)])
-            } else {
-                err_flat
-            };
-            Ok(Json(error_response(
-                format!("**Error from `{}`:**\n\n> `{}`", ai_config.model, err_short),
-                true,
-            )))
-        }
-    }
-}
-
 type ChatSseSender = mpsc::Sender<Result<Event, Infallible>>;
 
 async fn chat_stream_handler(
@@ -1139,30 +626,16 @@ async fn chat_stream_handler(
         return Err((StatusCode::BAD_REQUEST, "Message cannot be empty.".to_string()));
     }
 
+    let provider = state
+        .llm
+        .resolve()
+        .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error.to_string()))?;
     let profile = state
         .scanner
         .scan()
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     let mc_info = inspect_minecraft_system(&profile);
-    req.endpoint = None;
-    let mut ai_config = resolve_ai_config(&req, &state.config)
-        .ok_or((StatusCode::UNAUTHORIZED, "Add a provider key in the local environment to start chat.".to_string()))?;
-    if ai_config.model.is_empty() {
-        let models = fetch_model_ids(
-            ai_config.endpoint.trim_end_matches("/chat/completions"),
-            &ai_config.api_key,
-        )
-        .await
-        .map_err(|message| (StatusCode::BAD_GATEWAY, message))?;
-        ai_config.model = models
-            .into_iter()
-            .find(|model| model.to_ascii_lowercase().contains("nemotron"))
-            .ok_or((
-                StatusCode::BAD_GATEWAY,
-                "No Nemotron model is available for this Nebius account.".to_string(),
-            ))?;
-    }
 
     let history = req.history.take().unwrap_or_default();
     let context = build_context(&history, &raw_msg, req.memory_turns.unwrap_or(6));
@@ -1172,8 +645,7 @@ async fn chat_stream_handler(
         "(PC facts are turned off by the user. Do not claim to know what is installed.)".to_string()
     };
     let max_tokens = req.max_reply_tokens.unwrap_or(800).clamp(200, 2000);
-    let system_tokens = est_tokens(STATIC_SYSTEM_PROMPT)
-        + est_tokens(pet_persona(req.pet.as_deref()));
+    let system_tokens = est_tokens(STATIC_SYSTEM_PROMPT);
     let memory_tokens = context.memory_note.as_deref().map(est_tokens).unwrap_or(0);
     let recent_tokens: usize = context
         .recent
@@ -1183,7 +655,9 @@ async fn chat_stream_handler(
     let facts_tokens = est_tokens(&host_facts);
     let user_tokens = est_tokens(&raw_msg);
     let context_payload = serde_json::json!({
-        "model": ai_config.model,
+        "provider": provider.kind.id(),
+        "model": provider.model,
+        "prompt_version": PROMPT_VERSION,
         "system_tokens": system_tokens,
         "memory_tokens": memory_tokens,
         "recent_tokens": recent_tokens,
@@ -1204,7 +678,7 @@ async fn chat_stream_handler(
         if send_chat_event(
             &sender,
             "message.start",
-            serde_json::json!({ "model": ai_config.model, "provider": ai_config.provider }),
+            serde_json::json!({ "model": provider.model, "provider": provider.kind.id() }),
         )
         .await
         .is_err()
@@ -1213,11 +687,10 @@ async fn chat_stream_handler(
         }
 
         match call_ai_chat_stream(
-            &ai_config,
+            &provider,
             &raw_msg,
             &context,
             &host_facts,
-            req.pet.as_deref(),
             max_tokens,
             &sender,
         )
@@ -1257,24 +730,14 @@ async fn send_chat_event(
         .map_err(|_| "Chat stream was cancelled.".to_string())
 }
 
-async fn call_ai_chat_stream(
-    ai_config: &ResolvedAiConfig,
+fn build_chat_messages(
     user_prompt: &str,
     context: &PromptContext,
     host_facts: &str,
-    pet: Option<&str>,
-    max_tokens: u32,
-    sender: &ChatSseSender,
-) -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|_| "Could not initialize the AI connection.".to_string())?;
-
+) -> Vec<serde_json::Value> {
     let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
         "role": "system",
-        "content": format!("{}\n\n{}", STATIC_SYSTEM_PROMPT, pet_persona(pet))
+        "content": STATIC_SYSTEM_PROMPT
     })];
     if let Some(note) = &context.memory_note {
         messages.push(serde_json::json!({
@@ -1289,9 +752,26 @@ async fn call_ai_chat_stream(
         "role": "user",
         "content": format!("Facts about this PC:\n{host_facts}\n\nUser message:\n{user_prompt}")
     }));
+    messages
+}
 
+async fn call_ai_chat_stream(
+    provider: &ResolvedProvider,
+    user_prompt: &str,
+    context: &PromptContext,
+    host_facts: &str,
+    max_tokens: u32,
+    sender: &ChatSseSender,
+) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|_| "Could not initialize the AI connection.".to_string())?;
+
+    let messages = build_chat_messages(user_prompt, context, host_facts);
     let request_body = serde_json::json!({
-        "model": ai_config.model,
+        "model": provider.model,
         "messages": messages,
         "temperature": 0.5,
         "max_tokens": max_tokens,
@@ -1302,8 +782,8 @@ async fn call_ai_chat_stream(
         loop {
             attempt += 1;
             let request = client
-                .post(&ai_config.endpoint)
-                .bearer_auth(&ai_config.api_key)
+                .post(provider.chat_completions_url())
+                .bearer_auth(provider.api_key())
                 .json(&request_body)
                 .send();
             let result = tokio::select! {
@@ -1317,7 +797,11 @@ async fn call_ai_chat_stream(
                     let retryable = status == StatusCode::TOO_MANY_REQUESTS
                         || status.is_server_error();
                     if !retryable || attempt >= 3 {
-                        return Err(format!("AI provider returned HTTP {status}."));
+                        return Err(format!(
+                            "{}: {}",
+                            provider.kind.display_name(),
+                            describe_provider_status(status, provider.model)
+                        ));
                     }
                 }
                 Err(error) if attempt >= 3 => {
@@ -1433,10 +917,6 @@ async fn plan_handler(
         .scan()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    state.events.emit(installer_core::AgentEvent::PlanningStarted {
-        goal: req.goal.clone(),
-    });
 
     let plan = state
         .planner
@@ -1653,21 +1133,125 @@ async fn events_handler(
 
 #[cfg(test)]
 mod provider_selection_tests {
-    use super::prefers_nebius;
+    use super::*;
 
-    #[test]
-    fn auto_prefers_nebius_when_a_nebius_key_is_configured() {
-        assert!(prefers_nebius(Some("auto"), true));
+    struct FixedKeys {
+        nebius: bool,
+        nim: bool,
+    }
+
+    impl KeyStore for FixedKeys {
+        fn api_key(&self, kind: ProviderKind) -> Option<String> {
+            let present = match kind {
+                ProviderKind::Nebius => self.nebius,
+                ProviderKind::Nim => self.nim,
+            };
+            present.then(|| format!("test-{}-secret", kind.id()))
+        }
+    }
+
+    fn client(provider: Option<&str>, nebius: bool, nim: bool) -> ProviderClient {
+        let config = CoreConfig {
+            provider: provider.map(str::to_string),
+            nim_base_url: CoreConfig::DEFAULT_NIM_BASE_URL.to_string(),
+            nim_api_key: None,
+            nebius_base_url: CoreConfig::DEFAULT_NEBIUS_BASE_URL.to_string(),
+            nebius_api_key: None,
+            tavily_api_key: None,
+            recipes_dir: PathBuf::from("recipes"),
+            state_log_path: PathBuf::from(".orchestrator_state.jsonl"),
+        };
+        ProviderClient::with_key_store(config, Arc::new(FixedKeys { nebius, nim }))
+            .expect("client builds")
     }
 
     #[test]
-    fn auto_falls_back_to_nvidia_without_a_nebius_key() {
-        assert!(!prefers_nebius(Some("auto"), false));
+    fn explicit_nim_is_used_by_health_chat_and_planner_with_both_keys() {
+        use installer_core::LlmClient;
+        let llm = client(Some("nim"), true, true);
+        let status = provider_status(&llm);
+        assert_eq!(status["provider"], "nim");
+        assert_eq!(status["model"], CoreConfig::NIM_MODEL);
+        assert_eq!(status["provider_ready"], true);
+        assert_eq!(llm.resolve().expect("resolves").model, CoreConfig::NIM_MODEL);
+        assert_eq!(llm.model_name(), CoreConfig::NIM_MODEL);
     }
 
     #[test]
-    fn explicit_provider_choice_is_preserved() {
-        assert!(!prefers_nebius(Some("nim"), true));
-        assert!(prefers_nebius(Some("nebius"), false));
+    fn unset_provider_defaults_to_nebius_when_its_key_exists() {
+        let status = provider_status(&client(None, true, true));
+        assert_eq!(status["provider"], "nebius");
+        assert_eq!(status["model"], CoreConfig::NEBIUS_MODEL);
+    }
+
+    #[test]
+    fn unset_provider_falls_back_to_nim_without_a_nebius_key() {
+        let status = provider_status(&client(None, false, true));
+        assert_eq!(status["provider"], "nim");
+        assert_eq!(status["has_nebius_key"], false);
+        assert_eq!(status["has_nim_key"], true);
+    }
+
+    #[test]
+    fn missing_key_is_reported_without_leaking_values() {
+        let status = provider_status(&client(Some("nebius"), false, true));
+        assert_eq!(status["provider"], "nebius");
+        assert_eq!(status["provider_ready"], false);
+        let text = status.to_string();
+        assert!(text.contains("NEBIUS_API_KEY"));
+        assert!(!text.contains("secret"));
+    }
+
+    #[test]
+    fn invalid_provider_value_is_reported() {
+        let status = provider_status(&client(Some("openai"), true, true));
+        assert!(status["provider"].is_null());
+        assert_eq!(status["provider_ready"], false);
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    fn message(role: &str, content: &str) -> ChatMessageItem {
+        ChatMessageItem { role: role.to_string(), content: content.to_string() }
+    }
+
+    #[test]
+    fn system_prompt_is_pixel_only_and_short() {
+        assert!(STATIC_SYSTEM_PROMPT.contains("You are Pixel"));
+        assert!(!STATIC_SYSTEM_PROMPT.contains("Byte"));
+        assert!(!STATIC_SYSTEM_PROMPT.contains("Mochi"));
+        assert!(STATIC_SYSTEM_PROMPT.contains("Manual setup guide"));
+        assert!(STATIC_SYSTEM_PROMPT.split_whitespace().count() <= 350);
+    }
+
+    #[test]
+    fn compacted_notes_label_assistant_turns_neutrally() {
+        let history: Vec<ChatMessageItem> = (0..10)
+            .flat_map(|i| {
+                [
+                    message("user", &format!("question {i}")),
+                    message("assistant", &format!("answer {i}")),
+                ]
+            })
+            .collect();
+        let context = build_context(&history, "latest", 2);
+        let note = context.memory_note.expect("older turns are compacted");
+        assert!(note.contains("- User: question 0"));
+        assert!(note.contains("- Assistant: answer 0"));
+        assert!(!note.contains("- Pixel:"));
+        assert_eq!(context.recent.len(), 2);
+    }
+
+    #[test]
+    fn chat_messages_start_with_the_static_prompt_and_end_with_facts_and_message() {
+        let context = build_context(&[], "hi", 6);
+        let messages = build_chat_messages("hi", &context, "- OS: test");
+        assert_eq!(messages[0]["content"], STATIC_SYSTEM_PROMPT);
+        let last = messages.last().expect("user turn");
+        assert_eq!(last["role"], "user");
+        assert!(last["content"].as_str().unwrap_or_default().ends_with("User message:\nhi"));
     }
 }

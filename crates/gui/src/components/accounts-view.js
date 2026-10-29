@@ -1,6 +1,6 @@
 /**
  * SetupPal: Accounts View
- * Just a simple place to paste API keys. Keys stay on this device (local storage).
+ * Provider keys come from the local environment; Tavily and GitHub values stay on this device.
  */
 
 import { store } from '../state/store.js';
@@ -13,20 +13,21 @@ const KEYS = [
     id: 'nebius',
     storage: null,
     name: 'Nebius Token Factory',
-    badge: 'Provider option',
-    hint: 'Use NEBIUS_API_KEY in your local .env file. The key is never saved in browser storage.',
+    badge: 'Production',
+    hint: 'Set NEBIUS_API_KEY in your local .env file. Pasting a key here only tests it once.',
     placeholder: 'Paste a key to test it once',
     testable: true,
     environmentOnly: true,
   },
   {
     id: 'nim',
-    storage: 'setuppal_ai_api_key',
-    name: 'NVIDIA API key',
-    badge: 'Provider option',
-    hint: 'Powers the chat. Use NIM_API_KEY or NVIDIA_API_KEY in .env, or save the key here.',
-    placeholder: 'nvapi-...',
+    storage: null,
+    name: 'NVIDIA NIM',
+    badge: 'Testing',
+    hint: 'Set NIM_API_KEY or NVIDIA_API_KEY in your local .env file. Pasting a key here only tests it once.',
+    placeholder: 'Paste a key to test it once',
     testable: true,
+    environmentOnly: true,
   },
   {
     id: 'tavily',
@@ -61,14 +62,18 @@ export function renderAccountsView(container) {
 
   const rows = KEYS.map(k => {
     const saved = k.storage ? (localStorage.getItem(k.storage) || '').trim() : '';
-    const envConfigured = k.id === 'nim' ? health?.has_env_key
+    const envConfigured = k.id === 'nim' ? health?.has_nim_key
       : k.id === 'nebius' ? health?.has_nebius_key
         : k.id === 'tavily' ? health?.has_tavily_key : false;
+    const isActive = Boolean(health?.provider) && health.provider === k.id;
     const status = saved
       ? `<span style="color: #16a34a; font-weight: 600;">● Saved (${esc(mask(saved))})</span>`
       : envConfigured
         ? `<span style="color: #16a34a; font-weight: 600;">● Using environment key</span>`
         : `<span style="color: var(--ink-soft);">○ Not set</span>`;
+    const activeLine = isActive
+      ? `<div style="font-size: 12px; color: var(--ink); margin-top: 4px;">Chat and planning use this provider · Model: <code>${esc(health.model)}</code>${health.provider_ready ? '' : ` · <span style="color: var(--v-red);">${esc(health.provider_error)}</span>`}</div>`
+      : '';
     return `
       <div class="acc-key-card" data-key="${k.id}" style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 22px; box-shadow: var(--shadow-card);">
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
@@ -77,6 +82,7 @@ export function renderAccountsView(container) {
           </div>
           <div style="font-size: 12px;">${status}</div>
         </div>
+        ${activeLine}
         <div style="font-size: 12px; color: var(--ink-soft); margin: 4px 0 12px;">${k.hint}</div>
         <div style="display: flex; gap: 8px;">
           <input data-input type="password" autocomplete="off" placeholder="${k.placeholder}" style="flex: 1; background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; font-family: var(--font-mono); outline: none;" />
@@ -87,7 +93,6 @@ export function renderAccountsView(container) {
           <div data-msg style="font-size: 12px; word-break: break-word; max-width: 70%;"></div>
           <div style="display: flex; gap: 8px;">
             ${k.testable ? '<button data-test class="btn-review" type="button" style="padding: 5px 12px; font-size: 12px;">Test</button>' : ''}
-            ${k.id === 'nebius' ? '<button data-models class="btn-review" type="button" style="padding: 5px 12px; font-size: 12px;">List models</button>' : ''}
             ${saved ? '<button data-remove class="btn-review" type="button" style="padding: 5px 12px; font-size: 12px; color: var(--v-red);">Remove</button>' : ''}
           </div>
         </div>
@@ -99,7 +104,7 @@ export function renderAccountsView(container) {
       <div style="margin-bottom: 20px;">
         <h1 class="font-pixel" style="font-size: 24px; color: var(--ink);">Accounts</h1>
         <div style="font-size: 13px; color: var(--ink-soft); margin-top: 4px;">
-          Chat needs either a Nebius or NVIDIA key, not both. Nebius can use a key from .env; keys entered here stay in this browser's local storage.
+          Chat needs a Nebius or NVIDIA NIM key in your local .env file. Nebius is used when its key is set, unless SETUPPAL_PROVIDER says otherwise.
         </div>
       </div>
       <div style="display: flex; flex-direction: column; gap: 16px; max-width: 680px;">${rows}</div>
@@ -146,7 +151,7 @@ export function renderAccountsView(container) {
     const testBtn = card.querySelector('[data-test]');
     if (testBtn) {
       testBtn.onclick = async () => {
-        const val = input.value.trim() || (k.storage ? localStorage.getItem(k.storage) : '') || '';
+        const val = input.value.trim();
         sounds.play('ui.click');
         setMsg('Testing...', 'var(--accent)');
         testBtn.disabled = true;
@@ -159,23 +164,6 @@ export function renderAccountsView(container) {
           setMsg(`Error: ${err.message}`, 'var(--v-red)');
         } finally {
           testBtn.disabled = false;
-        }
-      };
-    }
-
-    const modelsBtn = card.querySelector('[data-models]');
-    if (modelsBtn) {
-      modelsBtn.onclick = async () => {
-        modelsBtn.disabled = true;
-        setMsg('Loading the live Nebius model list...', 'var(--accent)');
-        try {
-          const result = await apiClient.getModels('nebius');
-          const models = Array.isArray(result.models) ? result.models : [];
-          setMsg(models.length ? models.join(' · ') : 'No models were returned.', models.length ? 'var(--ink-soft)' : 'var(--v-red)');
-        } catch (error) {
-          setMsg(error.message, 'var(--v-red)');
-        } finally {
-          modelsBtn.disabled = false;
         }
       };
     }

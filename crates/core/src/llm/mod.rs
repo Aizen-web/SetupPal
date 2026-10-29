@@ -1,4 +1,7 @@
+pub mod provider;
 pub mod sanitizer;
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use schemars::schema_for;
@@ -7,6 +10,11 @@ use serde_json::Value;
 
 use crate::config::{CoreConfig, CoreError};
 use crate::types::{Plan, SystemProfile};
+
+pub use provider::{
+    resolve_provider, select_provider, selected_provider, ConfigKeyStore, KeyStore, ProviderKind,
+    ResolvedProvider,
+};
 
 #[async_trait]
 pub trait LlmClient: Send + Sync {
@@ -29,13 +37,25 @@ pub trait LlmClient: Send + Sync {
     ) -> Result<Plan, CoreError>;
 }
 
-/// OpenAI-compatible inference client for NVIDIA NIM or Nebius
-/// speaking `/v1/chat/completions`
-/// with `schemars` JSON Schema enforcement and an offline deterministic mock mode (`NIM_MOCK=1`).
-#[derive(Debug, Clone)]
-pub struct NimClient {
+/// OpenAI-compatible `/v1/chat/completions` client for the provider chosen by
+/// [`resolve_provider`], with `schemars` JSON Schema enforcement for plans.
+#[derive(Clone)]
+pub struct ProviderClient {
     config: CoreConfig,
+    keys: Arc<dyn KeyStore>,
     http: reqwest::Client,
+}
+
+/// Former name, still re-exported by `lib.rs` and used by the CLI.
+pub type NimClient = ProviderClient;
+
+impl std::fmt::Debug for ProviderClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderClient")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -78,12 +98,18 @@ struct ChatChoice {
     message: ChatMessage,
 }
 
-impl NimClient {
+impl ProviderClient {
+    /// Uses the keys captured in `config` at startup.
     pub fn new(config: CoreConfig) -> Result<Self, CoreError> {
+        let keys = Arc::new(ConfigKeyStore::from_config(&config));
+        Self::with_key_store(config, keys)
+    }
+
+    pub fn with_key_store(config: CoreConfig, keys: Arc<dyn KeyStore>) -> Result<Self, CoreError> {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(45))
             .build()?;
-        Ok(Self { config, http })
+        Ok(Self { config, keys, http })
     }
 
     /// Generates the canonical JSON Schema for `Plan` using `schemars`.
@@ -92,109 +118,31 @@ impl NimClient {
         Ok(serde_json::to_value(&root_schema)?)
     }
 
-    async fn provider_settings(&self) -> Result<(String, String, String), CoreError> {
-        if let Some(api_key) = self
-            .config
-            .nebius_api_key
-            .as_deref()
-            .filter(|key| !key.trim().is_empty())
-        {
-            let model = if let Some(model) = self.config.nebius_model.as_deref() {
-                model.to_string()
-            } else {
-                let response = self
-                    .http
-                    .get(format!(
-                        "{}/models",
-                        self.config.nebius_base_url.trim_end_matches('/')
-                    ))
-                    .bearer_auth(api_key)
-                    .send()
-                    .await
-                    .map_err(|error| {
-                        CoreError::Llm(format!(
-                            "Could not retrieve Nebius models: {}",
-                            error.without_url()
-                        ))
-                    })?;
-                if !response.status().is_success() {
-                    return Err(CoreError::Llm(format!(
-                        "Nebius model lookup returned HTTP {}.",
-                        response.status()
-                    )));
-                }
-                let payload: Value = response.json().await?;
-                payload
-                    .get("data")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|item| item.get("id").and_then(Value::as_str))
-                    .find(|model| model.to_ascii_lowercase().contains("nemotron"))
-                    .ok_or_else(|| {
-                        CoreError::Llm(
-                            "No Nemotron model is available for this Nebius account.".to_string(),
-                        )
-                    })?
-                    .to_string()
-            };
-            return Ok((
-                api_key.to_string(),
-                self.config.nebius_base_url.clone(),
-                model,
-            ));
-        }
-
-        let api_key = self
-            .config
-            .nim_api_key
-            .as_deref()
-            .filter(|key| !key.trim().is_empty())
-            .ok_or_else(|| {
-                CoreError::Config(
-                    "Set NEBIUS_API_KEY or NIM_API_KEY in your local .env file.".to_string(),
-                )
-            })?;
-        Ok((
-            api_key.to_string(),
-            self.config.nim_base_url.clone(),
-            self.config.nim_model.clone(),
-        ))
-    }
-}
-
-#[async_trait]
-impl LlmClient for NimClient {
-    fn model_name(&self) -> &str {
-        if self.config.nebius_api_key.is_some() {
-            self.config
-                .nebius_model
-                .as_deref()
-                .unwrap_or("Nemotron selected from live model list")
-        } else {
-            &self.config.nim_model
-        }
+    pub fn config(&self) -> &CoreConfig {
+        &self.config
     }
 
-    async fn propose_plan(
-        &self,
-        goal: &str,
-        profile: &SystemProfile,
-        untrusted_context: Option<&str>,
-    ) -> Result<Plan, CoreError> {
-        let (api_key, base_url, model) = self.provider_settings().await?;
+    pub fn key_store(&self) -> &dyn KeyStore {
+        self.keys.as_ref()
+    }
 
+    /// The provider, model, and key every AI call uses right now.
+    pub fn resolve(&self) -> Result<ResolvedProvider, CoreError> {
+        resolve_provider(&self.config, self.keys.as_ref())
+    }
+
+    /// The selected provider even when its key is missing (for status display).
+    pub fn selected(&self) -> Result<ProviderKind, CoreError> {
+        selected_provider(&self.config, self.keys.as_ref())
+    }
+
+    async fn request_plan(&self, user_prompt: String) -> Result<Plan, CoreError> {
+        let provider = self.resolve()?;
         let schema_value = Self::plan_json_schema()?;
         let system_prompt = sanitizer::build_hardened_system_prompt(&schema_value)?;
-        let user_prompt = sanitizer::build_user_prompt(goal, profile, untrusted_context)?;
-
-        let endpoint = format!(
-            "{}/chat/completions",
-            base_url.trim_end_matches('/')
-        );
 
         let request_body = ChatCompletionRequest {
-            model,
+            model: provider.model.to_string(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -219,34 +167,71 @@ impl LlmClient for NimClient {
 
         let response = self
             .http
-            .post(&endpoint)
-            .bearer_auth(&api_key)
+            .post(provider.chat_completions_url())
+            .bearer_auth(provider.api_key())
             .json(&request_body)
             .send()
-            .await?;
+            .await
+            .map_err(|error| {
+                CoreError::Llm(format!(
+                    "Could not reach {}: {}",
+                    provider.kind.display_name(),
+                    error.without_url()
+                ))
+            })?;
 
         if !response.status().is_success() {
-            let status = response.status();
             return Err(CoreError::Llm(format!(
-                "AI provider returned HTTP {status}."
+                "{} returned HTTP {} for model `{}`.",
+                provider.kind.display_name(),
+                response.status(),
+                provider.model
             )));
         }
 
-        let completion: ChatCompletionResponse = response.json().await?;
+        let completion: ChatCompletionResponse = response.json().await.map_err(|error| {
+            CoreError::Llm(format!(
+                "{} sent an unreadable response: {}",
+                provider.kind.display_name(),
+                error.without_url()
+            ))
+        })?;
         let raw_content = completion
             .choices
             .first()
             .map(|c| c.message.content.trim())
-            .ok_or_else(|| CoreError::Llm("NVIDIA NIM returned empty choices".to_string()))?;
+            .ok_or_else(|| {
+                CoreError::Llm(format!(
+                    "{} returned no choices.",
+                    provider.kind.display_name()
+                ))
+            })?;
 
         let cleaned = sanitizer::strip_markdown_code_fences(raw_content);
-        let plan: Plan = serde_json::from_str(cleaned).map_err(|e| {
+        serde_json::from_str(cleaned).map_err(|e| {
             CoreError::Llm(format!(
                 "LLM response did not conform to Plan JSON Schema: {e}. Raw: {cleaned}"
             ))
-        })?;
+        })
+    }
+}
 
-        Ok(plan)
+#[async_trait]
+impl LlmClient for ProviderClient {
+    fn model_name(&self) -> &str {
+        self.selected()
+            .map(ProviderKind::model)
+            .unwrap_or("no provider selected")
+    }
+
+    async fn propose_plan(
+        &self,
+        goal: &str,
+        profile: &SystemProfile,
+        untrusted_context: Option<&str>,
+    ) -> Result<Plan, CoreError> {
+        let user_prompt = sanitizer::build_user_prompt(goal, profile, untrusted_context)?;
+        self.request_plan(user_prompt).await
     }
 
     async fn propose_remediation_plan(
@@ -257,10 +242,6 @@ impl LlmClient for NimClient {
         diagnostic: &str,
         attempt: u8,
     ) -> Result<Plan, CoreError> {
-        let (api_key, base_url, model) = self.provider_settings().await?;
-
-        let schema_value = Self::plan_json_schema()?;
-        let system_prompt = sanitizer::build_hardened_system_prompt(&schema_value)?;
         let user_prompt = sanitizer::build_remediation_user_prompt(
             goal,
             profile,
@@ -268,70 +249,11 @@ impl LlmClient for NimClient {
             diagnostic,
             attempt,
         )?;
-
-        let endpoint = format!(
-            "{}/chat/completions",
-            base_url.trim_end_matches('/')
-        );
-
-        let request_body = ChatCompletionRequest {
-            model,
-            messages: vec![
-                ChatMessage {
-                    role: "system".to_string(),
-                    content: system_prompt,
-                },
-                ChatMessage {
-                    role: "user".to_string(),
-                    content: user_prompt,
-                },
-            ],
-            temperature: 0.0,
-            max_tokens: Some(1500),
-            response_format: ResponseFormat {
-                kind: "json_schema".to_string(),
-                json_schema: JsonSchemaPayload {
-                    name: "zero_trust_execution_plan".to_string(),
-                    strict: true,
-                    schema: schema_value,
-                },
-            },
-        };
-
-        let response = self
-            .http
-            .post(&endpoint)
-            .bearer_auth(&api_key)
-            .json(&request_body)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            return Err(CoreError::Llm(format!(
-                "AI provider returned HTTP {status}."
-            )));
-        }
-
-        let completion: ChatCompletionResponse = response.json().await?;
-        let raw_content = completion
-            .choices
-            .first()
-            .map(|c| c.message.content.trim())
-            .ok_or_else(|| CoreError::Llm("NVIDIA NIM returned empty choices".to_string()))?;
-
-        let cleaned = sanitizer::strip_markdown_code_fences(raw_content);
-        let mut plan: Plan = serde_json::from_str(cleaned).map_err(|e| {
-            CoreError::Llm(format!(
-                "LLM response did not conform to Plan JSON Schema: {e}. Raw: {cleaned}"
-            ))
-        })?;
-
+        let mut plan = self.request_plan(user_prompt).await?;
         plan.source = crate::types::PlanSource::Healer {
             failed_step_id: failed_step_id.to_string(),
             attempt,
         };
-
         Ok(plan)
     }
 }

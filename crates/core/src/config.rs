@@ -37,11 +37,11 @@ pub enum CoreError {
 /// Runtime configuration loaded from environment variables (with safe defaults).
 #[derive(Clone)]
 pub struct CoreConfig {
+    /// Raw `SETUPPAL_PROVIDER` value (`nebius` or `nim`); validated by `llm::provider::select_provider`.
+    pub provider: Option<String>,
     pub nim_base_url: String,
-    pub nim_model: String,
     pub nim_api_key: Option<String>,
     pub nebius_base_url: String,
-    pub nebius_model: Option<String>,
     pub nebius_api_key: Option<String>,
     pub tavily_api_key: Option<String>,
     pub recipes_dir: PathBuf,
@@ -52,11 +52,10 @@ impl std::fmt::Debug for CoreConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CoreConfig")
+            .field("provider", &self.provider)
             .field("nim_base_url", &self.nim_base_url)
-            .field("nim_model", &self.nim_model)
             .field("has_nim_api_key", &self.nim_api_key.is_some())
             .field("nebius_base_url", &self.nebius_base_url)
-            .field("nebius_model", &self.nebius_model)
             .field("has_nebius_api_key", &self.nebius_api_key.is_some())
             .field("has_tavily_api_key", &self.tavily_api_key.is_some())
             .field("recipes_dir", &self.recipes_dir)
@@ -67,23 +66,26 @@ impl std::fmt::Debug for CoreConfig {
 
 impl CoreConfig {
     pub const DEFAULT_NIM_BASE_URL: &'static str = "https://integrate.api.nvidia.com/v1";
-    pub const DEFAULT_NIM_MODEL: &'static str = "nvidia/nemotron-3.5-bolt-e4b";
+    /// Pinned NVIDIA NIM model (testing provider). Not configurable.
+    pub const NIM_MODEL: &'static str = "nvidia/nemotron-3.5-bolt-e4b";
     pub const DEFAULT_NEBIUS_BASE_URL: &'static str = "https://api.tokenfactory.nebius.com/v1";
+    /// Pinned Nebius Token Factory model (production provider). Not configurable.
+    pub const NEBIUS_MODEL: &'static str = "nvidia/Nemotron-3_5-Lightning";
 
     /// Loads configuration from process environment variables.
     /// Automatically loads a `.env` file if present in the current directory.
     pub fn from_env() -> Self {
         Self::load_dotenv_file(PathBuf::from(".env"));
 
+        let provider = env::var("SETUPPAL_PROVIDER")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+
         let nim_base_url = env::var("NIM_BASE_URL")
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| Self::DEFAULT_NIM_BASE_URL.to_string());
-
-        let nim_model = env::var("NIM_MODEL")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| Self::DEFAULT_NIM_MODEL.to_string());
 
         let nim_api_key = ["NIM_API_KEY", "NVIDIA_API_KEY"]
             .iter()
@@ -93,10 +95,6 @@ impl CoreConfig {
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| Self::DEFAULT_NEBIUS_BASE_URL.to_string());
-
-        let nebius_model = env::var("NEBIUS_MODEL")
-            .ok()
-            .filter(|v| !v.trim().is_empty());
 
         let nebius_api_key = env::var("NEBIUS_API_KEY")
             .ok()
@@ -115,11 +113,10 @@ impl CoreConfig {
             .unwrap_or_else(|_| PathBuf::from(".orchestrator_state.jsonl"));
 
         Self {
+            provider,
             nim_base_url,
-            nim_model,
             nim_api_key,
             nebius_base_url,
-            nebius_model,
             nebius_api_key,
             tavily_api_key,
             recipes_dir,
@@ -155,11 +152,10 @@ mod tests {
     #[test]
     fn debug_output_redacts_provider_keys() {
         let config = CoreConfig {
+            provider: None,
             nim_base_url: CoreConfig::DEFAULT_NIM_BASE_URL.to_string(),
-            nim_model: CoreConfig::DEFAULT_NIM_MODEL.to_string(),
             nim_api_key: Some("test-nim-secret".to_string()),
             nebius_base_url: CoreConfig::DEFAULT_NEBIUS_BASE_URL.to_string(),
-            nebius_model: None,
             nebius_api_key: Some("test-nebius-secret".to_string()),
             tavily_api_key: Some("test-tavily-secret".to_string()),
             recipes_dir: PathBuf::from("recipes"),
