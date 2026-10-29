@@ -343,16 +343,24 @@ export class BackendBridge {
       });
 
       let data;
-      try {
-        data = await apiClient.sendChat(goal, history);
-      } catch (firstErr) {
-        // If network request failed during initial startup handshake, retry once after 350ms
-        if (firstErr?.message && (firstErr.message.includes('fetch') || firstErr.message.includes('500') || firstErr.message.includes('502'))) {
-          console.warn("Initial sendChat encountered network hiccup, retrying in 350ms...", firstErr);
-          await new Promise(r => setTimeout(r, 350));
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
           data = await apiClient.sendChat(goal, history);
-        } else {
-          throw firstErr;
+          break;
+        } catch (err) {
+          const isTransient = err?.message && (
+            err.message.includes('fetch') ||
+            err.message.includes('500') ||
+            err.message.includes('502') ||
+            err.message.includes('503') ||
+            err.message.includes('ECONNREFUSED')
+          );
+          if (isTransient && attempt < 2) {
+            console.warn(`sendChat transient error (attempt ${attempt + 1}), retrying in 500ms...`, err);
+            await new Promise(r => setTimeout(r, 500));
+          } else {
+            throw err;
+          }
         }
       }
 

@@ -17,19 +17,22 @@ export function renderAccountsView(container) {
 
   const savedKey = localStorage.getItem('setuppal_ai_api_key') || '';
   const savedProvider = localStorage.getItem('setuppal_ai_provider') || (savedKey.startsWith('sk-') ? 'openai' : 'nim');
-  const savedModel = localStorage.getItem('setuppal_ai_model') || (savedProvider === 'nim' ? 'meta/llama-3.3-70b-instruct' : 'gpt-4o-mini');
+  const savedModel = localStorage.getItem('setuppal_ai_model') || (savedProvider === 'nim' ? 'nvidia/llama-3.1-nemotron-70b-instruct' : 'gpt-4o-mini');
   const savedEndpoint = localStorage.getItem('setuppal_ai_endpoint') || (savedProvider === 'nim' ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions');
 
   const savedGhUser = localStorage.getItem('setuppal_github_user') || '';
   const savedTavilyKey = localStorage.getItem('setuppal_tavily_key') || '';
   const displayName = localStorage.getItem('setuppal_display_name') || 'Local User';
 
-  const hasNimKey = Boolean(savedKey.trim());
-  const showNimInput = !hasNimKey || isNimEditing;
+  const backendHealth = apiClient.lastHealth;
+  const envKeyMasked = backendHealth?.has_env_key ? backendHealth.env_key_masked : '';
+  const hasEnvKey = !savedKey.trim() && Boolean(envKeyMasked);
+  const hasNimKey = Boolean(savedKey.trim()) || hasEnvKey;
+  const showNimInput = (!hasNimKey && !hasEnvKey) || isNimEditing;
 
-  const maskedNimKey = hasNimKey
+  const maskedNimKey = savedKey.trim()
     ? (savedKey.length > 10 ? `${savedKey.slice(0, 6)}••••••••${savedKey.slice(-4)}` : '••••••••')
-    : '';
+    : (envKeyMasked || '');
 
   const isGhActive = Boolean(savedGhUser.trim());
   const isTavilyActive = Boolean(savedTavilyKey.trim());
@@ -90,7 +93,7 @@ export function renderAccountsView(container) {
                 <div style="font-size: 12px; color: var(--ink-soft); margin-bottom: 4px;">Configured Key:</div>
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
                   <code class="font-mono" style="font-size: 13px; font-weight: 600; color: var(--ink);">${maskedNimKey}</code>
-                  <span style="font-size: 11px; color: #16a34a; font-weight: 600;">✓ Ready</span>
+                  <span style="font-size: 11px; color: #16a34a; font-weight: 600;">${hasEnvKey ? '✓ Loaded (.env)' : '✓ Ready'}</span>
                 </div>
                 <div style="font-size: 11px; color: var(--ink-soft); margin-top: 6px;">
                   Model: <code class="font-mono">${savedModel}</code>
@@ -269,7 +272,7 @@ export function renderAccountsView(container) {
       localStorage.setItem('setuppal_ai_provider', isNim ? 'nim' : 'openai');
       if (isNim) {
         const currentModel = localStorage.getItem('setuppal_ai_model');
-        const targetModel = (currentModel && !currentModel.includes('gpt-')) ? currentModel : 'meta/llama-3.3-70b-instruct';
+        const targetModel = (currentModel && !currentModel.includes('gpt-')) ? currentModel : 'nvidia/llama-3.1-nemotron-70b-instruct';
         localStorage.setItem('setuppal_ai_model', targetModel);
         localStorage.setItem('setuppal_ai_endpoint', 'https://integrate.api.nvidia.com/v1/chat/completions');
       }
@@ -361,7 +364,7 @@ export function renderAccountsView(container) {
         const res = await apiClient.validateKey({
           apiKey: val,
           provider: isNim ? 'nim' : 'openai',
-          model: isNim ? (localStorage.getItem('setuppal_ai_model') || 'meta/llama-3.3-70b-instruct') : 'gpt-4o-mini',
+          model: isNim ? (localStorage.getItem('setuppal_ai_model') || 'nvidia/llama-3.1-nemotron-70b-instruct') : 'gpt-4o-mini',
           endpoint: isNim ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions',
         });
 

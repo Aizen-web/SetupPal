@@ -9,6 +9,7 @@ class ApiClient {
   constructor() {
     this.eventSource = null;
     this.isConnected = false;
+    this.lastHealth = null;
   }
 
   async checkHealth(timeoutMs = 1500) {
@@ -20,6 +21,7 @@ class ApiClient {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       this.isConnected = true;
+      this.lastHealth = data;
       return data;
     } catch (err) {
       clearTimeout(timeout);
