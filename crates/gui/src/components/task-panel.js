@@ -1,12 +1,10 @@
 /**
  * SetupPal: Task & Progress Panel (Right Sidebar)
- * Matching the exact artwork and copy of the screenshot,
- * fully styled for both Chill and Hacker modes.
+ * Shown only when a plan exists. Pixel stays the sole pet in the empty chat.
  */
 
 import { store } from '../state/store.js';
-import { sounds } from '../audio/sound-engine.js';
-import { createClipboardTaskArtSvg, createSleepingMascotOnBooksSvg } from '../mascot/mascot-art.js';
+import { createSleepingMascotOnBooksSvg } from '../mascot/mascot-art.js';
 import { icon } from './icon.js';
 
 export function renderTaskPanel(container) {
@@ -15,65 +13,47 @@ export function renderTaskPanel(container) {
   const plan = state.activePlan;
   const tasks = plan?.tasks || [];
 
-  // Calculate done tasks count out of approved tasks
+  if (tasks.length === 0) {
+    container.innerHTML = '';
+    container.classList.add('task-panel-collapsed');
+    return;
+  }
+
+  container.classList.remove('task-panel-collapsed');
+
   const approvedTasks = tasks.filter(t => t.status !== 'held' && t.status !== 'blocked');
   const doneCount = approvedTasks.filter(t => t.status === 'done').length;
   const totalApproved = approvedTasks.length;
   const progressPct = totalApproved > 0 ? Math.round((doneCount / totalApproved) * 100) : 0;
   const heldCount = tasks.filter(t => t.status === 'held').length;
+  const isRunning = tasks.some(t => t.status === 'running');
 
   container.innerHTML = `
     <div class="task-panel">
-      <!-- Top Action Bar (Search & Settings icons) -->
-      <div class="task-panel-top-actions">
-        <button class="task-icon-btn" id="btn-task-search" title="Search setups & packages">
-          ${icon('search')}
-        </button>
-        <button class="task-icon-btn" id="btn-task-settings" title="Settings">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </button>
-      </div>
-
-      <!-- Header Row: [Clipboard icon] Tasks -->
       <div class="task-panel-header">
         <div class="task-panel-title-row">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
             <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
           </svg>
           <span class="task-panel-title">${isHacker ? 'Progress' : 'Tasks'}</span>
         </div>
-        <div class="task-panel-subhead">${totalApproved > 0 ? `${doneCount} of ${totalApproved} done` : 'No active tasks'}</div>
-        
+        <div class="task-panel-subhead">${doneCount} of ${totalApproved} done</div>
+
         ${totalApproved > 0 ? `
           <div class="progress-track" style="margin-top: 10px;">
             <div class="progress-fill" style="width: ${progressPct}%;"></div>
           </div>
           ${heldCount > 0 ? `
-            <div class="progress-subline">${heldCount} held · 0 blocked</div>
+            <div class="progress-subline">${heldCount} held</div>
           ` : ''}
         ` : ''}
       </div>
 
       <div class="task-panel-divider"></div>
 
-      <!-- Main Body: Empty State or Active Steps -->
       <div class="task-list">
-        ${tasks.length === 0 ? `
-          <!-- Screenshot Empty State: Clipboard Art + Copy -->
-          <div class="task-empty-state">
-            <div class="task-empty-art-wrap">
-              ${createClipboardTaskArtSvg(92)}
-            </div>
-            <div class="task-empty-title">No active plan yet.</div>
-            <div class="task-empty-desc">
-              Type in the chat to define a goal and<br/>formulate verified steps.
-            </div>
-          </div>
-        ` : tasks.map(t => {
+        ${tasks.map(t => {
           let iconHtml = '';
           let chipClass = '';
 
@@ -100,10 +80,10 @@ export function renderTaskPanel(container) {
                 ${iconHtml}
                 <div>
                   <div class="task-item-title">${t.title.replace('Install ', '').replace('Add ', '')}</div>
-                  <div style="font-size: 10px; color: var(--ink-soft); display: flex; align-items: center; gap: 4px; margin-top: 1px;">
+                  <div class="task-item-meta">
                     <span>${t.sourceDomain ? t.sourceDomain : t.source}</span>
-                    ${t.verdict === 'YELLOW' ? '<span style="color: #b26a00;">· Caution</span>' : ''}
-                    ${t.verdict === 'RED' ? '<span style="color: #c62828;">· Blocked</span>' : ''}
+                    ${t.verdict === 'YELLOW' ? '<span class="task-meta-caution">· Caution</span>' : ''}
+                    ${t.verdict === 'RED' ? '<span class="task-meta-blocked">· Blocked</span>' : ''}
                   </div>
                 </div>
               </div>
@@ -115,27 +95,17 @@ export function renderTaskPanel(container) {
         }).join('')}
       </div>
 
-      <!-- Bottom Mascot Art: Sleeping Chubby Mascot on Books in Chill mode / Clean status in Hacker mode -->
-      <div class="task-panel-bottom-art">
-        ${!isHacker ? createSleepingMascotOnBooksSvg(155, 125) : `
-          <div style="padding: 14px 10px; font-family: var(--font-mono); font-size: 11px; color: var(--accent); opacity: 0.7; text-align: center; letter-spacing: 0.05em;">
-            <span>[ZERO-TRUST ACTIVE]</span>
-          </div>
-        `}
-      </div>
+      ${isRunning && !isHacker ? `
+        <div class="task-panel-bottom-art">
+          ${createSleepingMascotOnBooksSvg(120, 100)}
+        </div>
+      ` : ''}
+
+      ${isHacker ? `
+        <div class="task-panel-bottom-art">
+          <div class="task-panel-zt-tag">[ZERO-TRUST ACTIVE]</div>
+        </div>
+      ` : ''}
     </div>
   `;
-
-  container.querySelector('#btn-task-settings')?.remove();
-
-  const btnSearch = container.querySelector('#btn-task-search');
-  if (btnSearch) {
-    btnSearch.onclick = () => {
-      const chatInput = document.querySelector('#chat-input');
-      if (chatInput) {
-        chatInput.focus();
-        chatInput.placeholder = "Search packages or describe an environment...";
-      }
-    };
-  }
 }

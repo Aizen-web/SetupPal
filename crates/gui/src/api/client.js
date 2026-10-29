@@ -3,6 +3,8 @@
  * Connects modern UI frontend to installer_core Axum backend & SSE event stream.
  */
 
+import { chatPrefsPayload } from '../state/prefs.js';
+
 const API_BASE = '/api';
 
 class ApiClient {
@@ -78,6 +80,7 @@ class ApiClient {
         history,
         pet,
         api_key: apiKey,
+        ...chatPrefsPayload(),
       }),
     });
     if (!res.ok) {

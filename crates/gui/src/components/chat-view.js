@@ -1,7 +1,7 @@
 /**
  * SetupPal: Chat & Execution Workspace View
- * Matching the exact artwork, layout, and copy of the screenshot,
- * with previous animated pets (Pixel the Ghost, Byte the Cat, Mochi the Bunny) restored!
+ * Calm empty state (Pixel + headline + starters + composer),
+ * slim active chat, and a quiet plan card.
  */
 
 import { store } from '../state/store.js';
@@ -12,17 +12,44 @@ import { petVoiceEngine } from '../mascot/voicelines.js';
 import { createMascotSvg } from '../mascot/pets.js';
 import { renderMessage } from './chat-message.js';
 import { icon } from './icon.js';
+import { contextButtonHtml, contextModalHtml, bindContextPanel, isContextOpen } from './context-panel.js';
 
 /**
  * UI state that must survive full re-renders (the view rebuilds its DOM on every store update):
- * radio selections, collapsed sections, and which messages have already animated in.
+ * radio selections, collapsed sections, which messages have already animated in,
+ * and which plan-step "Why?" rows are expanded.
  */
 const chatUi = {
   selections: {},
   collapsed: new Set(),
   seen: new Set(),
   greetingSeen: false,
+  whyOpen: new Set(),
 };
+
+const STARTERS = [
+  {
+    key: 'web',
+    title: 'Web',
+    hint: 'Node, TypeScript, Vite',
+    prompt: 'set up fullstack Node.js and TypeScript web environment',
+    iconName: 'code',
+  },
+  {
+    key: 'python',
+    title: 'Python',
+    hint: 'venv, PyTorch, Jupyter',
+    prompt: 'setup Python AI data science venv',
+    iconName: 'package',
+  },
+  {
+    key: 'cpp',
+    title: 'C++',
+    hint: 'Compilers, CMake',
+    prompt: 'set me up for C++20 dev',
+    iconName: 'bolt',
+  },
+];
 
 function updateChoiceSummary(container, formId) {
   const form = container.querySelector(`.chat-choice-form[data-form="${formId}"]`);
@@ -43,12 +70,110 @@ function flashCopied(btn) {
   }, 1500);
 }
 
+function leafSvg() {
+  return `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"></path>
+      <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"></path>
+    </svg>
+  `;
+}
+
+function termPromptSvg() {
+  return `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="4 17 10 11 4 5"></polyline>
+      <line x1="12" y1="19" x2="20" y2="19"></line>
+    </svg>
+  `;
+}
+
+function renderEmptyState() {
+  return `
+    <div class="welcome-block">
+      <h2 class="welcome-title">What should we set up?</h2>
+      <p class="welcome-sub">Web stacks, runtimes, and coding tools — quiet and unattended.</p>
+
+      <div class="starter-pills" role="list">
+        ${STARTERS.map(s => `
+          <button type="button" class="starter-pill" data-prompt="${s.prompt}" role="listitem">
+            <span class="starter-pill-icon" aria-hidden="true">${icon(s.iconName, 16)}</span>
+            <span class="starter-pill-copy">
+              <span class="starter-pill-title">${s.title}</span>
+              <span class="starter-pill-hint">${s.hint}</span>
+            </span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderPlanCard(plan) {
+  if (!plan?.tasks?.length) return '';
+
+  const hasWarnings = plan.tasks.some(t => t.verdict === 'YELLOW' || t.verdict === 'RED');
+
+  return `
+    <div class="plan-card">
+      <div class="plan-title">${plan.title}</div>
+      <div class="plan-subtitle">${plan.subtitle}</div>
+
+      <div class="plan-steps-list">
+        ${plan.tasks.map(t => {
+          const badgeClass = t.verdict === 'GREEN' ? 'badge-green'
+            : t.verdict === 'YELLOW' ? 'badge-yellow' : 'badge-red';
+          const source = t.sourceDomain || t.source || '';
+          const showWhy = t.verdict === 'YELLOW' || t.verdict === 'RED';
+          const whyOpen = chatUi.whyOpen.has(t.id);
+          const reasons = (t.reasons && t.reasons.length > 0)
+            ? t.reasons
+            : (t.verdictDesc ? [t.verdictDesc] : ['Needs a closer look before we install.']);
+
+          return `
+            <div class="step-row" data-task-id="${t.id}">
+              <div class="step-left">
+                <div class="step-number">${t.num}</div>
+                <div class="step-info">
+                  <div class="step-title">${t.title}</div>
+                  <div class="step-source">${source}</div>
+                  ${showWhy ? `
+                    <button type="button" class="step-why-btn" data-why="${t.id}" aria-expanded="${whyOpen}">
+                      Why?
+                    </button>
+                    <div class="step-why-detail ${whyOpen ? 'is-open' : ''}" data-why-detail="${t.id}">
+                      <strong>${t.verdictTitle || t.verdict}</strong>
+                      <ul>${reasons.map(r => `<li>${r}</li>`).join('')}</ul>
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+              <div class="badge ${badgeClass}">${t.verdict}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div class="plan-actions-row">
+        <button id="btn-approve-plan" class="btn-approve" type="button">Approve safe steps</button>
+        ${hasWarnings ? `<button id="btn-review-yellow" class="btn-review-link" type="button">Review warnings</button>` : ''}
+      </div>
+
+      <label class="plan-trust-row" for="trust-winget-checkbox">
+        <input type="checkbox" id="trust-winget-checkbox" />
+        <span>Don't ask again about verified winget packages</span>
+      </label>
+    </div>
+  `;
+}
+
 export function renderChatView(container) {
   const state = store.getState();
   const plan = state.activePlan;
   const isHacker = state.mode === 'hacker';
   const activePet = 'ghost';
   const isWorking = Boolean(plan?.tasks?.some((task) => task.status === 'running'));
+  const hasMessages = Boolean(state.chatMessages && state.chatMessages.length > 0);
 
   // Preserve scroll position (the DOM is rebuilt below)
   const prevScrollEl = container.querySelector('.workspace-scroll-area');
@@ -57,79 +182,52 @@ export function renderChatView(container) {
     ? prevScrollEl.scrollHeight - prevScrollEl.scrollTop - prevScrollEl.clientHeight < 80
     : true;
 
-  // Which messages are new this render (only those animate in / drive scrolling)
   const messages = state.chatMessages || [];
   const lastMsg = messages[messages.length - 1];
   const firstRender = chatUi.seen.size === 0;
   const newMsgIds = messages.filter(m => !chatUi.seen.has(m.id)).map(m => m.id);
   messages.forEach(m => chatUi.seen.add(m.id));
 
-  // Preserve chat input state if user was typing
   const prevInput = container.querySelector('#chat-input');
   const hadFocus = prevInput && document.activeElement === prevInput;
   const prevValue = prevInput ? prevInput.value : '';
   const selStart = prevInput ? prevInput.selectionStart : 0;
   const selEnd = prevInput ? prevInput.selectionEnd : 0;
 
-  // Python Logo SVG
-  const pythonLogoSvg = `
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M11.9 2C8.6 2 8.7 3.4 8.7 3.4L8.7 4.9L12.1 4.9L12.1 5.4L5.4 5.4C5.4 5.4 2 5 2 9.5C2 14 5 13.8 5 13.8L6.5 13.8L6.5 11.8C6.5 9.4 8.6 9.5 8.6 9.5L12 9.5C14.4 9.5 14.4 7.6 14.4 7.6L14.4 3.9C14.4 3.9 14.8 2 11.9 2ZM10.2 3.3C10.6 3.3 11 3.6 11 4.1C11 4.5 10.6 4.9 10.2 4.9C9.7 4.9 9.3 4.5 9.3 4.1C9.3 3.6 9.7 3.3 10.2 3.3Z" fill="#387EB8"/>
-      <path d="M12.1 22C15.4 22 15.3 20.6 15.3 20.6L15.3 19.1L11.9 19.1L11.9 18.6L18.6 18.6C18.6 18.6 22 19 22 14.5C22 10 19 10.2 19 10.2L17.5 10.2L17.5 12.2C17.5 14.6 15.4 14.5 15.4 14.5L12 14.5C9.6 14.5 9.6 16.4 9.6 16.4L9.6 20.1C9.6 20.1 9.2 22 12.1 22ZM13.8 20.7C13.4 20.7 13 20.4 13 19.9C13 19.5 13.4 19.1 13.8 19.1C14.3 19.1 14.7 19.5 14.7 19.9C14.7 20.4 14.3 20.7 13.8 20.7Z" fill="#FFE052"/>
-    </svg>
-  `;
-
-  // Leaf SVG
-  const leafSvg = `
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"></path>
-      <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"></path>
-    </svg>
-  `;
-
-  // Terminal >_ SVG
-  const termPromptSvg = `
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="4 17 10 11 4 5"></polyline>
-      <line x1="12" y1="19" x2="20" y2="19"></line>
-    </svg>
-  `;
+  const petSize = hasMessages ? 40 : 140;
+  const petPrefix = hasMessages ? 'header' : 'hero';
 
   container.innerHTML = `
-    <div class="main-content ${messages.length > 0 ? 'has-messages' : ''}">
-      <!-- Top Navigation Bar matching screenshot -->
+    <div class="main-content ${hasMessages ? 'has-messages' : ''}">
       <div class="top-nav-bar">
-
-        <div style="flex: 1;"></div>
-
-        <!-- Mode Toggle Group: [Chill] [Hacker] -->
-        <div class="mode-toggle-group">
-          <button id="toggle-chill" class="mode-btn ${!isHacker ? 'active' : ''}">
-            ${leafSvg}
-            <span>Chill</span>
+        ${contextButtonHtml()}
+        <div class="top-nav-spacer" aria-hidden="true"></div>
+        <div class="mode-toggle-group" title="Switch Chill / Hacker">
+          <button id="toggle-chill" class="mode-btn ${!isHacker ? 'active' : ''}" aria-label="Chill mode">
+            ${leafSvg()}
+            <span class="mode-btn-label">Chill</span>
           </button>
-          <button id="toggle-hacker" class="mode-btn ${isHacker ? 'active' : ''}">
-            ${termPromptSvg}
-            <span>Hacker</span>
+          <button id="toggle-hacker" class="mode-btn ${isHacker ? 'active' : ''}" aria-label="Hacker mode">
+            ${termPromptSvg()}
+            <span class="mode-btn-label">Hacker</span>
           </button>
         </div>
       </div>
 
-      <!-- Hero Mascot & Speech Bubble Section with previous animated pet restored -->
-      <div class="mascot-hero-section">
-        <div id="hero-mascot" class="mascot-container" title="Click to interact with ${activePet === 'ghost' ? 'Pixel' : activePet === 'cat' ? 'Byte' : 'Mochi'}!">
-          ${createMascotSvg(activePet, 160, 'hero')}
+      <div class="mascot-hero-section ${hasMessages ? 'is-compact' : ''}">
+        <div id="hero-mascot" class="mascot-container" title="Click to interact with Pixel!">
+          ${createMascotSvg(activePet, petSize, petPrefix)}
         </div>
-        <div class="speech-bubble ${chatUi.greetingSeen ? '' : 'is-new'}">
-          <div class="speech-bubble-tail"></div>
-          <div id="speech-bubble-text" class="speech-bubble-inner-text">${state.mascotSpeech || petVoiceEngine.line('welcome')}</div>
-        </div>
+        ${hasMessages ? '' : `
+          <div class="speech-bubble ${chatUi.greetingSeen ? '' : 'is-new'}">
+            <div class="speech-bubble-tail"></div>
+            <div id="speech-bubble-text" class="speech-bubble-inner-text">${state.mascotSpeech || petVoiceEngine.line('welcome')}</div>
+          </div>
+        `}
       </div>
 
-      <!-- Workspace Area -->
       <div class="workspace-scroll-area">
         ${isHacker && state.terminalTab === 'terminal' ? `
-          <!-- Hacker Terminal View -->
           <div class="terminal-container">
             <div class="terminal-header">
               <div class="terminal-dots">
@@ -150,8 +248,7 @@ export function renderChatView(container) {
             </div>
           </div>
         ` : `
-          ${(state.chatMessages && state.chatMessages.length > 0) ? `
-            <!-- Chat Thread Stream -->
+          ${hasMessages ? `
             <div class="chat-thread-stream" id="chat-thread-stream">
               ${messages.map(m => renderMessage(m, {
                 isLast: m === lastMsg,
@@ -160,151 +257,36 @@ export function renderChatView(container) {
                 ui: chatUi,
               })).join('')}
             </div>
-          ` : `
-            <!-- Main Ask Card matching screenshot -->
-            <div class="ask-card">
-              <div class="ask-card-header">
-                <div class="terminal-square-icon">>_</div>
-                <h2 class="ask-card-title">Ask anything in the chat window</h2>
-              </div>
+          ` : renderEmptyState()}
 
-              <p class="ask-card-desc">
-                Tell me what you'd like to set up. I can configure web environments, coding languages, and developer tools that support unattended CLI setup.
-              </p>
-
-              <!-- 3 Starter Cards in 3-column row -->
-              <div class="starter-cards-grid">
-                <!-- Card 1: Web & TypeScript Stack -->
-                <div class="starter-card" data-prompt="set up fullstack Node.js and TypeScript web environment">
-                  <div class="starter-card-top">
-                    <div class="terminal-square-icon-sm">>_</div>
-                    <div class="starter-card-title">Web & TypeScript<br/>Stack</div>
-                    <div class="starter-card-arrow">${icon('arrowRight', 16)}</div>
-                  </div>
-                  <div class="starter-card-body">
-                    Install Node.js LTS, TypeScript, Vite, NPM, and modern web build tooling.
-                  </div>
-                </div>
-
-                <!-- Card 2: Python AI & Data Science -->
-                <div class="starter-card" data-prompt="setup Python AI data science venv">
-                  <div class="starter-card-top">
-                    <div class="starter-card-icon-wrap">${pythonLogoSvg}</div>
-                    <div class="starter-card-title">Python AI &<br/>Data Science</div>
-                    <div class="starter-card-arrow">${icon('arrowRight', 16)}</div>
-                  </div>
-                  <div class="starter-card-body">
-                    Set up Python, virtualenvs, PyTorch, Jupyter, and common data science tools.
-                  </div>
-                </div>
-
-                <!-- Card 3: C++20 Dev Toolchain -->
-                <div class="starter-card" data-prompt="set me up for C++20 dev">
-                  <div class="starter-card-top">
-                    <div class="terminal-square-icon-sm">>_</div>
-                    <div class="starter-card-title">C++20 Dev Toolchain</div>
-                    <div class="starter-card-arrow">${icon('arrowRight', 16)}</div>
-                  </div>
-                  <div class="starter-card-body">
-                    Install compilers, CMake, and a modern C++ development environment.
-                  </div>
-                </div>
-              </div>
-
-              <!-- Bottom Indicator: Dry-Run Simulation Active -->
-              <div class="dry-run-pill-row">
-                <div class="dry-run-pill">
-                  <span class="dry-run-green-dot"></span>
-                  <span>Unattended CLI Setups Only</span>
-                  <span class="dry-run-dot-sep">•</span>
-                  <span>Web stacks, runtimes & coding languages only (no launchers)</span>
-                </div>
-              </div>
-            </div>
-          `}
-
-          <!-- Chill Plan Card (when plan exists) -->
-          ${(plan && plan.tasks && plan.tasks.length > 0) ? `
-          <div class="plan-card" style="margin-top: 16px;">
-            <div class="plan-title">${plan.title}</div>
-            <div class="plan-subtitle">${plan.subtitle}</div>
-
-            <div class="plan-steps-list">
-              ${plan.tasks.map(t => `
-                <div class="step-row" data-task-id="${t.id}">
-                  <div class="step-left">
-                    <div class="step-number">${t.num}</div>
-                    <div class="step-info">
-                      <div class="step-title">${t.title}</div>
-                      <div class="step-desc">${t.desc}</div>
-                      <div class="step-meta-row" style="margin-top: 5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                        <span class="step-source-pill" style="font-size: 11px; padding: 2px 7px; background: rgba(0,0,0,0.06); border-radius: 4px;">
-                          ${t.sourceUrl ? `<a href="${t.sourceUrl}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;" title="Direct publisher link">${icon('globe', 14)} From <strong>${t.sourceDomain || t.source}</strong></a>` : `<span>${icon('package', 14)} ${t.sourceDomain || t.source}</span>`}
-                        </span>
-                        <span class="step-verdict-text" style="font-size: 11px; color: ${t.verdict === 'GREEN' ? '#2e7d32' : t.verdict === 'YELLOW' ? '#b26a00' : '#c62828'};">
-                          <strong>${t.verdictTitle || t.verdict}</strong>: ${t.verdictDesc || ''}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="badge ${t.verdict === 'GREEN' ? 'badge-green' : t.verdict === 'YELLOW' ? 'badge-yellow' : 'badge-red'}">
-                    ${t.verdict}
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-
-            <div class="plan-trust-row" style="margin: 14px 0 6px; padding: 8px 12px; background: rgba(0,0,0,0.04); border-radius: 6px; display: flex; align-items: center; gap: 8px; font-size: 12px;">
-              <input type="checkbox" id="trust-winget-checkbox" style="cursor: pointer;" />
-              <label for="trust-winget-checkbox" style="cursor: pointer; color: var(--ink-soft);">
-                Don't ask me about verified winget packages again (narrow trust)
-              </label>
-            </div>
-
-            <div class="plan-actions-row">
-              <button id="btn-approve-plan" class="btn-approve">Approve safe steps</button>
-              <button id="btn-review-yellow" class="btn-review">Review warnings</button>
-            </div>
-          </div>
-          ` : ''}
+          ${renderPlanCard(plan)}
         `}
       </div>
 
-      <!-- Bottom Chat Composer Area matching screenshot -->
       <div class="bottom-bar">
         <div class="composer-box">
-          <button class="composer-paperclip" type="button" title="Attachments aren't available yet" aria-label="Attachments aren't available yet" disabled>
-            ${icon('paperclip')}
-          </button>
-          <span class="composer-slash" title="Type / for shortcuts" aria-hidden="true">/</span>
-          <input id="chat-input" class="composer-input" type="text" placeholder="${isWorking ? 'Working... press Esc to stop' : 'Tell me what to set up...'}" />
+          <input id="chat-input" class="composer-input" type="text" placeholder="${isWorking ? 'Working... press Esc to stop' : 'What would you like to set up?'}" />
           ${isWorking ? '<button id="btn-stop-run" class="btn-stop" type="button">Stop</button>' : ''}
-          <button id="btn-chat-send" class="btn-send">
-            <span>Send</span>
+          <button id="btn-chat-send" class="btn-send" type="button" aria-label="Send">
+            <span class="btn-send-label">Send</span>
             ${icon('send')}
           </button>
         </div>
-
-        <!-- Suggestion Chips matching screenshot -->
-        <div class="chips-row">
-          <button class="suggestion-chip" data-chip="web">Web & TypeScript</button>
-          <button class="suggestion-chip" data-chip="cpp">C++ toolchain</button>
-          <button class="suggestion-chip" data-chip="python">Python data science</button>
-        </div>
+        ${hasMessages ? '' : `<p class="composer-scope">Installs only tools that can set up from the command line. No game launchers or apps that need a login.</p>`}
       </div>
     </div>
   `;
   chatUi.greetingSeen = true;
 
-  // Sync mascot state
-  const mascotSvg = container.querySelector('#hero-ghost-root');
+  if (isContextOpen()) container.insertAdjacentHTML('beforeend', contextModalHtml());
+  bindContextPanel(container, () => renderChatView(container));
+
+  const mascotSvg = container.querySelector('#hero-ghost-root') || container.querySelector('#header-ghost-root');
   if (mascotSvg) {
     mascotSvg.dataset.state = state.mascotState;
     mascotSvg.dataset.mode = state.mode;
   }
 
-
-  // Event Listeners for Mode Toggle
   container.querySelector('#toggle-chill').onclick = () => {
     store.setMode('chill');
     petVoiceEngine.trigger('mode_toggle', { mode: 'chill' });
@@ -314,7 +296,6 @@ export function renderChatView(container) {
     petVoiceEngine.trigger('mode_toggle', { mode: 'hacker' });
   };
 
-  // Mascot Click -> Poke event triggers pet voiceline and poke animation
   const heroMascot = container.querySelector('#hero-mascot');
   if (heroMascot) {
     heroMascot.onclick = () => {
@@ -327,7 +308,6 @@ export function renderChatView(container) {
     };
   }
 
-  // Plan Approval -> triggers execution
   const btnApprove = container.querySelector('#btn-approve-plan');
   if (btnApprove) {
     btnApprove.onclick = () => {
@@ -338,32 +318,34 @@ export function renderChatView(container) {
     };
   }
 
-  // Review Yellow button
+  // Expand all YELLOW/RED Why? rows instead of alert()
   const btnReview = container.querySelector('#btn-review-yellow');
   if (btnReview) {
     btnReview.onclick = () => {
-      const heldTasks = (plan.tasks || []).filter(t => t.verdict === 'YELLOW');
-      if (heldTasks.length > 0) {
-        const firstHeld = heldTasks[0];
-        petVoiceEngine.trigger('warning_held', { title: firstHeld.title });
-        const reasons = (firstHeld.reasons && firstHeld.reasons.length > 0)
-          ? firstHeld.reasons.join('\n- ')
-          : 'Brand new package, young release, zero community endorsements.';
-        alert(`HELD TASK: ${firstHeld.title}\n- Source: ${firstHeld.source}\n- Check: ${firstHeld.desc}\n- Zero-Trust Policy:\n- ${reasons}`);
-      } else {
-        alert("All steps in the current plan are verified GREEN!");
-      }
+      const held = (plan.tasks || []).filter(t => t.verdict === 'YELLOW' || t.verdict === 'RED');
+      held.forEach(t => chatUi.whyOpen.add(t.id));
+      if (held[0]) petVoiceEngine.trigger('warning_held', { title: held[0].title });
+      sounds.play('ui.click');
+      renderChatView(container);
     };
   }
 
-  // Composer Send & Input handling with listening animation
+  container.querySelectorAll('.step-why-btn').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.getAttribute('data-why');
+      if (chatUi.whyOpen.has(id)) chatUi.whyOpen.delete(id);
+      else chatUi.whyOpen.add(id);
+      sounds.play('ui.click');
+      renderChatView(container);
+    };
+  });
+
   const chatInput = container.querySelector('#chat-input');
   const btnSend = container.querySelector('#btn-chat-send');
   const btnStop = container.querySelector('#btn-stop-run');
   if (btnStop) btnStop.onclick = () => simulation.stopRun();
 
   if (chatInput) {
-    // Restore preserved input text and cursor position
     if (prevValue && !chatInput.value) {
       chatInput.value = prevValue;
     }
@@ -376,14 +358,12 @@ export function renderChatView(container) {
 
     let typingTimer = null;
     chatInput.oninput = () => {
-      const mascotSvg = container.querySelector('#hero-ghost-root');
-      if (mascotSvg) {
-        mascotSvg.dataset.state = 'listening';
-      }
+      const root = container.querySelector('#hero-ghost-root') || container.querySelector('#header-ghost-root');
+      if (root) root.dataset.state = 'listening';
       clearTimeout(typingTimer);
       typingTimer = setTimeout(() => {
-        if (mascotSvg && mascotSvg.dataset.state === 'listening') {
-          mascotSvg.dataset.state = store.getState().mascotState || 'idle';
+        if (root && root.dataset.state === 'listening') {
+          root.dataset.state = store.getState().mascotState || 'idle';
         }
       }, 1500);
     };
@@ -415,8 +395,7 @@ export function renderChatView(container) {
     };
   }
 
-  // Starter Cards (Interactive prompt cards)
-  container.querySelectorAll('.starter-card').forEach(card => {
+  container.querySelectorAll('.starter-pill').forEach(card => {
     card.onclick = () => {
       const prompt = card.getAttribute('data-prompt');
       petVoiceEngine.trigger('prompt_selected', { prompt });
@@ -424,7 +403,6 @@ export function renderChatView(container) {
     };
   });
 
-  // Chat Option Pills (Quick response buttons inside assistant question messages)
   container.querySelectorAll('.chat-option-pill').forEach(btn => {
     btn.onclick = () => {
       const choice = btn.getAttribute('data-choice');
@@ -441,7 +419,6 @@ export function renderChatView(container) {
     };
   });
 
-  // Choice groups: remember the selection across re-renders and keep the summary in sync
   container.querySelectorAll('.choice-input').forEach(input => {
     input.onchange = () => {
       chatUi.selections[`${input.dataset.form}:${input.dataset.gi}`] = Number(input.dataset.oi);
@@ -450,7 +427,6 @@ export function renderChatView(container) {
     };
   });
 
-  // Continue: send every answer in one message
   container.querySelectorAll('.chat-continue-btn').forEach(btn => {
     btn.onclick = () => {
       const formId = btn.getAttribute('data-continue');
@@ -468,7 +444,6 @@ export function renderChatView(container) {
     };
   });
 
-  // Collapsible system check: remember which ones the user closed
   container.querySelectorAll('details.chat-sys').forEach(details => {
     details.addEventListener('toggle', () => {
       const key = details.getAttribute('data-key');
@@ -477,7 +452,6 @@ export function renderChatView(container) {
     });
   });
 
-  // Copy path
   container.querySelectorAll('.sys-copy').forEach(btn => {
     btn.onclick = async (e) => {
       e.stopPropagation();
@@ -494,7 +468,6 @@ export function renderChatView(container) {
     };
   });
 
-  // Code Block Copy to Clipboard
   container.querySelectorAll('.chat-code-copy-btn').forEach(btn => {
     btn.onclick = async (e) => {
       e.stopPropagation();
@@ -510,29 +483,6 @@ export function renderChatView(container) {
     };
   });
 
-  // Suggestion Chips
-  container.querySelectorAll('.suggestion-chip').forEach(chip => {
-    chip.onclick = () => {
-      const type = chip.getAttribute('data-chip');
-      sounds.play('ui.click');
-      if (type === 'web') {
-        const goal = 'set up fullstack Node.js and TypeScript web environment';
-        petVoiceEngine.trigger('prompt_selected', { prompt: goal });
-        bridge.submitGoal(goal);
-      } else if (type === 'cpp') {
-        const goal = 'set me up for C++20 dev';
-        petVoiceEngine.trigger('prompt_selected', { prompt: goal });
-        bridge.submitGoal(goal);
-      } else if (type === 'python') {
-        const goal = 'setup Python AI data science venv';
-        petVoiceEngine.trigger('prompt_selected', { prompt: goal });
-        bridge.submitGoal(goal);
-      }
-    };
-  });
-
-  // Scrolling: keep the reader's place, and land on the START of a new long reply
-  // (jumping to the bottom would hide the beginning of what the assistant just said).
   const scrollArea = container.querySelector('.workspace-scroll-area');
   const chatStream = container.querySelector('#chat-thread-stream');
   if (scrollArea && chatStream) {

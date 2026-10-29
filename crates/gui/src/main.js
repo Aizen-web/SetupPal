@@ -68,12 +68,16 @@ function initApp() {
         renderChatView(mainViewEl);
     }
 
-    // 3. Task Panel (only on chats page or when plan exists)
-    if (state.activePage === 'chats' || state.tasksOpen) {
+    // 3. Task Panel — only when chats page has an active plan with steps
+    const hasPlanSteps = Boolean(state.activePlan?.tasks?.length);
+    if (state.activePage === 'chats' && hasPlanSteps) {
       taskPanelEl.style.display = 'block';
+      taskPanelEl.classList.remove('task-panel-collapsed');
       renderTaskPanel(taskPanelEl);
     } else {
       taskPanelEl.style.display = 'none';
+      taskPanelEl.classList.add('task-panel-collapsed');
+      taskPanelEl.innerHTML = '';
     }
 
     // 4. Animation Lab Modal

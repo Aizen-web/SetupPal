@@ -193,6 +193,12 @@ pub struct ChatRequest {
     pub api_key: Option<String>,
     /// Active mascot: "ghost" | "cat" | "bunny". Drives the assistant's personality.
     pub pet: Option<String>,
+    /// How many recent messages are sent word for word (older ones are compacted into notes).
+    pub memory_turns: Option<usize>,
+    /// Max tokens for the reply.
+    pub max_reply_tokens: Option<u32>,
+    /// Whether to attach PC facts to the message.
+    pub include_pc_facts: Option<bool>,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub endpoint: Option<String>,
@@ -222,6 +228,9 @@ pub struct ChatResponse {
     pub ready_to_execute: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_metrics: Option<TokenOptimizationMetrics>,
+    /// What was sent to the model this turn (powers the context viewer).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -447,7 +456,7 @@ async fn test_key_handler(
 }
 
 /// Bump when the prompt or host-facts format changes so the session cache never serves old-style replies.
-const PROMPT_VERSION: &str = "v17-pixel-plan";
+const PROMPT_VERSION: &str = "v18-compact-memory";
 
 const STATIC_SYSTEM_PROMPT: &str = "\
 You are Pixel, the SetupPal assistant on the user's Windows PC. You help them plan and install developer software: programming languages, runtimes, compilers, SDKs, package managers, web stacks, and dev tools.\n\
@@ -526,69 +535,97 @@ fn format_host_facts(
     out
 }
 
-fn distill_history(raw_history: &[ChatMessageItem]) -> (Vec<ChatMessageItem>, usize) {
-    let mut compacted_count = 0;
-    // Cap history window to the 3 most recent turns to avoid quadratic token growth (O(N^2))
-    let slice = if raw_history.len() > 10 {
-        compacted_count += raw_history.len() - 10;
-        &raw_history[raw_history.len() - 10..]
+/// Rough token estimate (about 4 characters per token).
+fn est_tokens(s: &str) -> usize {
+    s.chars().count().div_ceil(4)
+}
+
+fn clip(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() > max {
+        let t: String = s.chars().take(max).collect();
+        format!("{}...", t.trim_end())
     } else {
-        raw_history
+        s.to_string()
+    }
+}
+
+/// First meaningful line/sentence of a reply, used for compact notes.
+fn gist(s: &str, max: usize) -> String {
+    let line = s
+        .lines()
+        .map(|l| l.trim().trim_start_matches('#').trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    let line = line.split(". ").next().unwrap_or(line);
+    clip(line, max)
+}
+
+struct PromptContext {
+    /// Compact notes covering older messages (never drops what the user asked for).
+    memory_note: Option<String>,
+    /// Newest messages, sent as written (clipped).
+    recent: Vec<ChatMessageItem>,
+    /// How many older messages were folded into the notes.
+    compacted: usize,
+}
+
+const MEMORY_NOTE_CHARS: usize = 1800;
+
+fn build_context(raw: &[ChatMessageItem], user_prompt: &str, keep_recent: usize) -> PromptContext {
+    let keep = keep_recent.clamp(2, 16);
+    let mut hist: Vec<&ChatMessageItem> = raw.iter().collect();
+    if let Some(last) = hist.last() {
+        if last.role == "user" && last.content.trim() == user_prompt.trim() {
+            hist.pop();
+        }
+    }
+    let split = hist.len().saturating_sub(keep);
+    let (older, recent) = hist.split_at(split);
+
+    // Notes are built newest-first so that, if space runs out, the oldest lines are the ones dropped.
+    let mut lines: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    let mut trimmed_any = false;
+    for m in older.iter().rev() {
+        let line = if m.role == "user" {
+            format!("- User: {}", clip(&m.content, 220))
+        } else {
+            format!("- Pixel: {}", gist(&m.content, 140))
+        };
+        if used + line.len() > MEMORY_NOTE_CHARS {
+            trimmed_any = true;
+            break;
+        }
+        used += line.len() + 1;
+        lines.push(line);
+    }
+    lines.reverse();
+    let memory_note = if lines.is_empty() {
+        None
+    } else {
+        let head = if trimmed_any { "(oldest notes dropped)\n" } else { "" };
+        Some(format!("{}{}", head, lines.join("\n")))
     };
 
-    let items: Vec<ChatMessageItem> = slice.iter().map(|item| {
-        let trimmed = item.content.trim();
-        if item.role == "assistant" {
-            // Cut off trailing question lists or option dumps from previous turns
-            let cut = if let Some(idx) = trimmed.find("\n### Your choices") {
-                compacted_count += 1;
-                &trimmed[..idx]
-            } else if let Some(idx) = trimmed.find("\n\n❓ **Questions") {
-                compacted_count += 1;
-                &trimmed[..idx]
-            } else if let Some(idx) = trimmed.find("\n\nReview the") {
-                compacted_count += 1;
-                &trimmed[..idx]
-            } else {
-                trimmed
-            };
+    let recent = recent
+        .iter()
+        .map(|m| ChatMessageItem {
+            role: if m.role == "user" { "user".into() } else { "assistant".into() },
+            content: clip(&m.content, if m.role == "user" { 700 } else { 900 }),
+        })
+        .collect();
 
-            let distilled = if cut.len() > 700 {
-                compacted_count += 1;
-                let boundary = cut.floor_char_boundary(700);
-                format!("{}...", &cut[..boundary])
-            } else {
-                cut.to_string()
-            };
-
-            ChatMessageItem {
-                role: "assistant".to_string(),
-                content: distilled,
-            }
-        } else {
-            let content = if trimmed.len() > 600 {
-                compacted_count += 1;
-                let boundary = trimmed.floor_char_boundary(600);
-                format!("{}...", &trimmed[..boundary])
-            } else {
-                trimmed.to_string()
-            };
-            ChatMessageItem {
-                role: "user".to_string(),
-                content,
-            }
-        }
-    }).collect();
-
-    (items, compacted_count)
+    PromptContext { memory_note, recent, compacted: older.len() }
 }
 
 async fn call_ai_chat(
     ai_config: &ResolvedAiConfig,
     user_prompt: &str,
-    history: &[ChatMessageItem],
+    ctx: &PromptContext,
     host_facts: &str,
     pet: Option<&str>,
+    max_tokens: u32,
 ) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(45))
@@ -603,11 +640,14 @@ async fn call_ai_chat(
         "content": format!("{}\n\n{}", STATIC_SYSTEM_PROMPT, pet_persona(pet))
     }));
 
-    // 2. Distilled, bounded conversation turns (preventing trailing duplicate user message)
-    for (idx, item) in history.iter().enumerate() {
-        if idx == history.len().saturating_sub(1) && item.role == "user" && item.content.trim() == user_prompt.trim() {
-            continue;
-        }
+    // 2. Compact notes for older turns, then the most recent turns as written
+    if let Some(note) = &ctx.memory_note {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": format!("Earlier in this chat (compacted notes, oldest first). Treat what the user said here as still true:\n{}", note)
+        }));
+    }
+    for item in ctx.recent.iter() {
         messages.push(serde_json::json!({
             "role": item.role,
             "content": item.content
@@ -631,7 +671,7 @@ async fn call_ai_chat(
         "model": ai_config.model,
         "messages": messages,
         "temperature": 0.5,
-        "max_tokens": 800
+        "max_tokens": max_tokens
     });
 
     // NVIDIA's hosted endpoint occasionally returns a transient empty 404/429/5xx; retry a couple of times.
@@ -763,6 +803,7 @@ async fn chat_handler(
         step_metadata: None,
         ready_to_execute: false,
         token_metrics: None,
+        context: None,
     };
 
     let Some(ai_config) = resolve_ai_config(&req, &state.config) else {
@@ -772,13 +813,48 @@ async fn chat_handler(
         )));
     };
 
+    let raw_hist = req.history.as_deref().unwrap_or(&[]);
+    let keep_recent = req.memory_turns.unwrap_or(6);
+    let max_tokens = req.max_reply_tokens.unwrap_or(800).clamp(200, 2000);
+    let include_facts = req.include_pc_facts.unwrap_or(true);
+    let ctx = build_context(raw_hist, raw_msg, keep_recent);
+    let host_facts = if include_facts {
+        format_host_facts(&profile, &mc_info, raw_msg, raw_hist)
+    } else {
+        "(PC facts are turned off by the user. Do not claim to know what is installed.)".to_string()
+    };
+    let system_tokens = est_tokens(STATIC_SYSTEM_PROMPT) + est_tokens(pet_persona(req.pet.as_deref()));
+    let memory_tokens = ctx.memory_note.as_deref().map(est_tokens).unwrap_or(0);
+    let recent_tokens: usize = ctx.recent.iter().map(|m| est_tokens(&m.content)).sum();
+    let facts_tokens = est_tokens(&host_facts);
+    let user_tokens = est_tokens(raw_msg);
+    let context_json = serde_json::json!({
+        "model": ai_config.model,
+        "system_tokens": system_tokens,
+        "memory_tokens": memory_tokens,
+        "recent_tokens": recent_tokens,
+        "facts_tokens": facts_tokens,
+        "user_tokens": user_tokens,
+        "total_tokens": system_tokens + memory_tokens + recent_tokens + facts_tokens + user_tokens,
+        "reply_budget": max_tokens,
+        "total_messages": raw_hist.len(),
+        "recent_messages": ctx.recent.len(),
+        "compacted_messages": ctx.compacted,
+        "memory_note": ctx.memory_note,
+        "recent": ctx.recent,
+        "facts": host_facts,
+    });
+
     // Include a lightweight history signature so multi-turn short answers don't collide
     let hist_sig = req.history.as_deref().map(|h| {
         h.iter().map(|i| format!("{}:{}", i.role, i.content.chars().take(20).collect::<String>())).collect::<Vec<_>>().join(";")
     }).unwrap_or_default();
     let cache_key = format!(
-        "{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}",
         PROMPT_VERSION,
+        keep_recent,
+        max_tokens,
+        include_facts,
         req.pet.as_deref().unwrap_or("ghost"),
         ai_config.model,
         ai_config.endpoint,
@@ -800,6 +876,7 @@ async fn chat_handler(
                     step_metadata: None,
                     ready_to_execute: false,
                     token_metrics: None,
+                    context: Some(context_json.clone()),
                 }));
             }
         }
@@ -809,11 +886,8 @@ async fn chat_handler(
         goal: raw_msg.to_string(),
     });
 
-    let raw_hist = req.history.as_deref().unwrap_or(&[]);
-    let host_facts = format_host_facts(&profile, &mc_info, raw_msg, raw_hist);
-    let (distilled_history, _) = distill_history(raw_hist);
 
-    match call_ai_chat(&ai_config, raw_msg, &distilled_history, &host_facts, req.pet.as_deref()).await {
+    match call_ai_chat(&ai_config, raw_msg, &ctx, &host_facts, req.pet.as_deref(), max_tokens).await {
         Ok(ai_reply) => {
             {
                 let mut cache = state.ai_cache.write().await;
@@ -834,6 +908,7 @@ async fn chat_handler(
                 step_metadata: None,
                 ready_to_execute: false,
                 token_metrics: None,
+                context: Some(context_json.clone()),
             }))
         }
         Err(err) => {

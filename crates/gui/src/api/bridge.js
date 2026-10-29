@@ -5,6 +5,7 @@
 
 import { apiClient } from './client.js';
 import { store } from '../state/store.js';
+import { setLastContext } from '../state/prefs.js';
 import { sounds } from '../audio/sound-engine.js';
 import { petVoiceEngine } from '../mascot/voicelines.js';
 import confetti from 'canvas-confetti';
@@ -328,18 +329,12 @@ export class BackendBridge {
       // Exclude the current message just pushed to store so it is not duplicated in prompt
       const allMsgs = store.getState().chatMessages || [];
       const previousTurns = allMsgs.length > 1 ? allMsgs.slice(0, -1) : [];
-      const history = previousTurns.slice(-3).map(m => {
-        let text = (m.text || '').trim();
-        const cutIdx = text.indexOf('\n\n❓ **Questions');
-        if (cutIdx > 0) text = text.slice(0, cutIdx).trim();
-        const planIdx = text.indexOf('\n\nReview the');
-        if (planIdx > 0) text = text.slice(0, planIdx).trim();
-        if (text.length > 250) text = text.slice(0, 250) + '...';
-        return {
-          role: m.sender === 'user' ? 'user' : 'assistant',
-          content: text
-        };
-      });
+      // Send the whole conversation (each message size-capped). The backend folds older turns
+      // into short notes, so nothing the user said is forgotten and tokens stay small.
+      const history = previousTurns.slice(-60).map(m => ({
+        role: m.sender === 'user' ? 'user' : 'assistant',
+        content: (m.text || '').trim().slice(0, 1200)
+      }));
 
       let data;
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -362,6 +357,8 @@ export class BackendBridge {
           }
         }
       }
+
+      setLastContext(data.context);
 
       if (data.plan && data.safety) {
         const plan = data.plan;

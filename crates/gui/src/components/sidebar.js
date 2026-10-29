@@ -1,15 +1,15 @@
 /**
  * SetupPal: Sidebar Component
- * Styled to match the exact aesthetic of the screenshot
+ * Footer keeps Settings + a quiet safety indicator; Mascot Lab lives in Settings.
  */
 
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
-import { ANIMATIONS } from '../mascot/animations.js';
 import { icon } from './icon.js';
 
 export function renderSidebar(container) {
   const state = store.getState();
+  const safety = state.settings?.safetyLevel || 'strict';
 
   container.innerHTML = `
     <div class="sidebar">
@@ -76,35 +76,21 @@ export function renderSidebar(container) {
       </div>
 
       <div class="sidebar-bottom">
-        <div id="safety-chip-btn" class="safety-chip" title="Click to view Zero-Trust safety policy">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-          </svg>
-          <span>Safety:</span>
-          <span class="safety-badge">${state.settings?.safetyLevel || 'strict'}</span>
-        </div>
-
-        <button id="btn-open-lab" class="btn-sidebar-bottom">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10 2v7.31L4.69 19.34A2 2 0 0 0 6.43 22h11.14a2 2 0 0 0 1.74-2.66L14 9.31V2"></path>
-            <line x1="8.5" y1="2" x2="15.5" y2="2"></line>
-            <line x1="14" y1="9" x2="10" y2="9"></line>
-          </svg>
-          <span>Mascot Lab (${ANIMATIONS.length} ${ANIMATIONS.length === 1 ? 'animation' : 'animations'})</span>
-        </button>
-
         <button id="btn-open-settings" class="btn-sidebar-bottom ${state.activePage === 'settings' ? 'active' : ''}">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3"></circle>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
           </svg>
           <span>Settings</span>
+          <span id="safety-chip-btn" class="safety-dot" title="Safety: ${safety}. Click for Zero-Trust policy." aria-label="Safety ${safety}">
+            <span class="safety-dot-orb"></span>
+            <span class="safety-dot-label">${safety}</span>
+          </span>
         </button>
       </div>
     </div>
   `;
 
-  // Attach event handlers
   container.querySelector('#btn-new-chat').onclick = () => {
     store.createConversation();
   };
@@ -132,13 +118,11 @@ export function renderSidebar(container) {
     };
   });
 
-  container.querySelector('#safety-chip-btn').onclick = () => {
+  container.querySelector('#safety-chip-btn').onclick = (e) => {
+    e.stopPropagation();
     sounds.play('ui.click');
-    alert("Zero-Trust Security Level: STRICT\n- All machine alterations require explicit approval\n- Typosquat distance & CVEs scanned via OSV.dev\n- Hash matching enforced for all binaries");
-  };
-
-  container.querySelector('#btn-open-lab').onclick = () => {
-    store.toggleAnimationLab(true);
+    const level = (store.getState().settings?.safetyLevel || 'strict').toUpperCase();
+    alert(`Zero-Trust Security Level: ${level}\n- All machine alterations require explicit approval\n- Typosquat distance & CVEs scanned via OSV.dev\n- Hash matching enforced for all binaries`);
   };
 
   container.querySelector('#btn-open-settings').onclick = () => {

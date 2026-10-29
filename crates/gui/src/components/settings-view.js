@@ -5,18 +5,19 @@
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { apiClient } from '../api/client.js';
-import { icon } from './icon.js';
+import { getPrefs, setPrefs, resetPrefs, REPLY_LENGTHS } from '../state/prefs.js';
 
 export function renderSettingsView(container) {
   const state = store.getState();
   const settings = state.settings;
+  const prefs = getPrefs();
 
   container.innerHTML = `
     <div class="main-content" style="padding: 24px 32px; overflow-y: auto;">
       <div style="margin-bottom: 24px;">
         <h1 class="font-pixel" style="font-size: 24px; color: var(--ink);">Settings</h1>
         <div style="font-size: 13px; color: var(--ink-soft); margin-top: 4px;">
-          Configure appearance, safety gates, audio engine, and mascot behavior.
+          Appearance, safety, chat memory, and audio.
         </div>
       </div>
 
@@ -66,37 +67,44 @@ export function renderSettingsView(container) {
           </div>
         </div>
 
-        <!-- AI Card -->
+        <!-- Chat & Memory Card -->
         <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px; box-shadow: var(--shadow-card);">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+          <h2 class="font-pixel" style="font-size: 17px; color: var(--ink); margin-bottom: 4px;">Chat & Memory</h2>
+          <div style="font-size: 12px; color: var(--ink-soft); margin-bottom: 10px;">Older messages are folded into short notes, so Pixel remembers what you said without sending the whole chat every time.</div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
             <div>
-              <h2 class="font-pixel" style="font-size: 17px; color: var(--ink); margin: 0 0 4px 0;">AI</h2>
-              <div style="font-size: 12px; color: var(--ink-soft);">NVIDIA API key used for chat.</div>
+              <div style="font-weight: 600; font-size: 13.5px; color: var(--ink);">Recent messages kept in full</div>
+              <div style="font-size: 12px; color: var(--ink-soft);">More means better recall but more tokens</div>
             </div>
-            <div id="ai-key-status-badge"></div>
+            <select id="select-memory" style="background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px; outline: none;">
+              ${[4, 6, 10, 16].map(n => `<option value="${n}" ${prefs.memoryTurns === n ? 'selected' : ''}>${n}${n === 6 ? ' (Default)' : ''}</option>`).join('')}
+            </select>
           </div>
 
-          <div style="display: flex; flex-direction: column; gap: 14px; margin-top: 14px;">
-            <div style="padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
-              <div style="font-weight: 600; font-size: 13px; color: var(--ink); margin-bottom: 6px;">API Key</div>
-              <div style="display: flex; gap: 8px;">
-                <input id="input-ai-key" type="password" placeholder="nvapi-..." style="flex: 1; background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; font-family: var(--font-mono); outline: none;" />
-                <button id="btn-toggle-key-vis" class="btn-review" style="padding: 6px 10px; font-size: 12px;" title="Show API key" aria-label="Show API key">${icon('eye', 18)}</button>
-              </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
+            <div>
+              <div style="font-weight: 600; font-size: 13.5px; color: var(--ink);">Reply length</div>
+              <div style="font-size: 12px; color: var(--ink-soft);">Upper limit on how long answers can get</div>
             </div>
+            <select id="select-reply-length" style="background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px; outline: none;">
+              ${Object.entries(REPLY_LENGTHS).map(([k, v]) => `<option value="${k}" ${prefs.replyLength === k ? 'selected' : ''}>${v.label} (${v.tokens})</option>`).join('')}
+            </select>
+          </div>
 
-            <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0;">
-              <div style="font-weight: 600; font-size: 13px; color: var(--ink);">Model</div>
-              <code class="font-mono" style="font-size: 12px; color: var(--ink);">nvidia/nemotron-3.5-bolt-e4b</code>
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-subtle);">
+            <div>
+              <div style="font-weight: 600; font-size: 13.5px; color: var(--ink);">Share PC facts with the AI</div>
+              <div style="font-size: 12px; color: var(--ink-soft);">OS, GPU, free disk, and installed dev tools. Needed for good recommendations</div>
             </div>
+            <input type="checkbox" id="check-pc-facts" ${prefs.includePcFacts ? 'checked' : ''} style="transform: scale(1.3); cursor: pointer;" />
+          </div>
 
-            <div style="display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px dashed var(--border-subtle);">
-              <div id="ai-save-msg" style="font-size: 12px; font-weight: 500; max-width: 340px; word-break: break-word;"></div>
-              <div style="display: flex; gap: 8px;">
-                <button id="btn-test-ai-key" class="btn-review" style="padding: 6px 14px; font-size: 12px;">Test Connection</button>
-                <button id="btn-clear-ai-key" class="btn-review" style="padding: 6px 14px; font-size: 12px;">Clear Key</button>
-                <button id="btn-save-ai-key" class="btn-approve" style="padding: 6px 16px; font-size: 12px;">Save</button>
-              </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0 2px;">
+            <div style="font-size: 12px; color: var(--ink-soft);">Model: <code class="font-mono">nvidia/nemotron-3.5-bolt-e4b</code> · API key lives on the Accounts page</div>
+            <div style="display: flex; gap: 8px;">
+              <button id="btn-clear-chats" class="btn-review" style="padding: 6px 12px; font-size: 12px; color: var(--v-red);">Clear all chats</button>
+              <button id="btn-reset-prefs" class="btn-review" style="padding: 6px 12px; font-size: 12px;">Reset</button>
             </div>
           </div>
         </div>
@@ -127,6 +135,17 @@ export function renderSettingsView(container) {
           <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border-subtle); margin-top: 8px;">
             <div style="font-size: 13px; color: var(--ink-soft);">Volume</div>
             <input type="range" id="range-vol" min="0" max="1" step="0.05" value="${sounds.volume}" style="width: 140px; cursor: pointer;" />
+          </div>
+        </div>
+
+        <!-- Mascot Lab Card -->
+        <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px; box-shadow: var(--shadow-card);">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+            <div>
+              <h2 class="font-pixel" style="font-size: 17px; color: var(--ink); margin-bottom: 4px;">Mascot Lab</h2>
+              <div style="font-size: 12px; color: var(--ink-soft);">Preview Pixel's animations and pet states.</div>
+            </div>
+            <button id="btn-open-mascot-lab" class="btn-review" style="padding: 6px 12px; font-size: 12px; flex: none;">Open lab</button>
           </div>
         </div>
       </div>
@@ -187,86 +206,33 @@ export function renderSettingsView(container) {
     };
   }
 
-  // AI Configuration (single fixed NVIDIA model; only the key is configurable)
-  const badgeEl = container.querySelector('#ai-key-status-badge');
-  const keyInput = container.querySelector('#input-ai-key');
-  const btnToggleVis = container.querySelector('#btn-toggle-key-vis');
-  const btnSaveKey = container.querySelector('#btn-save-ai-key');
-  const btnClearKey = container.querySelector('#btn-clear-ai-key');
-  const btnTestKey = container.querySelector('#btn-test-ai-key');
-  const msgEl = container.querySelector('#ai-save-msg');
-
-  const escapeHtml = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const setMsg = (text, color) => {
-    if (msgEl) msgEl.innerHTML = `<span style="color: ${color};">${escapeHtml(text)}</span>`;
+  // Chat & memory preferences
+  container.querySelector('#select-memory').onchange = (e) => {
+    setPrefs({ memoryTurns: Number(e.target.value) });
+    sounds.play('ui.click');
+  };
+  container.querySelector('#select-reply-length').onchange = (e) => {
+    setPrefs({ replyLength: e.target.value });
+    sounds.play('ui.click');
+  };
+  container.querySelector('#check-pc-facts').onchange = (e) => {
+    setPrefs({ includePcFacts: e.target.checked });
+    sounds.play('ui.click');
+  };
+  container.querySelector('#btn-reset-prefs').onclick = () => {
+    resetPrefs();
+    sounds.play('ui.click');
+    renderSettingsView(container);
+  };
+  container.querySelector('#btn-clear-chats').onclick = () => {
+    if (!confirm('Delete all saved chats? This cannot be undone.')) return;
+    ['setuppal_local_conversations_v2', 'setuppal_active_conv_id_v2'].forEach(k => localStorage.removeItem(k));
+    sounds.play('ui.click');
+    location.reload();
   };
 
-  const updateAiBadge = () => {
-    const key = localStorage.getItem('setuppal_ai_api_key') || '';
-    if (key.trim()) {
-      const masked = key.length > 10 ? `${key.slice(0, 6)}...${key.slice(-4)}` : '••••••';
-      badgeEl.innerHTML = `<span style="background: rgba(34, 197, 94, 0.15); color: #16a34a; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid rgba(34, 197, 94, 0.3);">● Key saved (${masked})</span>`;
-    } else {
-      badgeEl.innerHTML = `<span style="background: rgba(239, 68, 68, 0.1); color: var(--v-red); font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid rgba(239, 68, 68, 0.25);">○ No key</span>`;
-    }
+  container.querySelector('#btn-open-mascot-lab').onclick = () => {
+    sounds.play('ui.click');
+    store.toggleAnimationLab(true);
   };
-
-  // Drop settings left over from the old provider/model/endpoint selectors
-  ['setuppal_ai_provider', 'setuppal_ai_model', 'setuppal_ai_endpoint'].forEach(k => localStorage.removeItem(k));
-
-  if (keyInput) keyInput.value = localStorage.getItem('setuppal_ai_api_key') || '';
-  updateAiBadge();
-
-  if (btnToggleVis && keyInput) {
-    btnToggleVis.onclick = () => {
-      keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
-      const isHidden = keyInput.type === 'password';
-      btnToggleVis.innerHTML = icon(isHidden ? 'eye' : 'eyeOff', 18);
-      btnToggleVis.title = isHidden ? 'Show API key' : 'Hide API key';
-      btnToggleVis.setAttribute('aria-label', btnToggleVis.title);
-    };
-  }
-
-  if (btnSaveKey) {
-    btnSaveKey.onclick = () => {
-      const keyVal = (keyInput?.value || '').trim();
-      if (keyVal) localStorage.setItem('setuppal_ai_api_key', keyVal);
-      else localStorage.removeItem('setuppal_ai_api_key');
-      sounds.play('task.done');
-      updateAiBadge();
-      setMsg('Saved.', '#16a34a');
-      setTimeout(() => { if (msgEl) msgEl.innerHTML = ''; }, 3000);
-    };
-  }
-
-  if (btnTestKey) {
-    btnTestKey.onclick = async () => {
-      const keyVal = (keyInput?.value || '').trim() || localStorage.getItem('setuppal_ai_api_key') || '';
-      if (!keyVal) {
-        setMsg('Enter an API key first.', 'var(--v-red)');
-        return;
-      }
-      setMsg('Testing...', 'var(--accent)');
-      sounds.play('ui.click');
-      try {
-        const res = await apiClient.validateKey({ apiKey: keyVal });
-        sounds.play(res.valid ? 'verdict.green' : 'verdict.red');
-        setMsg(res.message, res.valid ? '#16a34a' : 'var(--v-red)');
-      } catch (err) {
-        sounds.play('error');
-        setMsg(`Error: ${err.message}`, 'var(--v-red)');
-      }
-    };
-  }
-
-  if (btnClearKey) {
-    btnClearKey.onclick = () => {
-      localStorage.removeItem('setuppal_ai_api_key');
-      if (keyInput) keyInput.value = '';
-      sounds.play('ui.click');
-      updateAiBadge();
-      setMsg('Key cleared.', 'var(--ink-soft)');
-      setTimeout(() => { if (msgEl) msgEl.innerHTML = ''; }, 3000);
-    };
-  }
 }
