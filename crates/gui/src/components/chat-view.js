@@ -11,6 +11,7 @@ import { bridge } from '../api/bridge.js';
 import { petVoiceEngine } from '../mascot/voicelines.js';
 import { createMascotSvg } from '../mascot/pets.js';
 import { renderMessage } from './chat-message.js';
+import { icon } from './icon.js';
 
 /**
  * UI state that must survive full re-renders (the view rebuilds its DOM on every store update):
@@ -20,6 +21,7 @@ const chatUi = {
   selections: {},
   collapsed: new Set(),
   seen: new Set(),
+  greetingSeen: false,
 };
 
 function updateChoiceSummary(container, formId) {
@@ -46,6 +48,7 @@ export function renderChatView(container) {
   const plan = state.activePlan;
   const isHacker = state.mode === 'hacker';
   const activePet = state.activePet || 'ghost';
+  const isWorking = Boolean(plan?.tasks?.some((task) => task.status === 'running'));
 
   // Preserve scroll position (the DOM is rebuilt below)
   const prevScrollEl = container.querySelector('.workspace-scroll-area');
@@ -93,21 +96,21 @@ export function renderChatView(container) {
   `;
 
   container.innerHTML = `
-    <div class="main-content">
+    <div class="main-content ${messages.length > 0 ? 'has-messages' : ''}">
       <!-- Top Navigation Bar matching screenshot -->
       <div class="top-nav-bar">
         <!-- Mascot Selector Group: [Pixel] [Byte] [Mochi] -->
         <div class="pet-selector-group">
-          <button class="pet-pill-btn ${activePet === 'ghost' ? 'active' : ''}" data-pet="ghost" title="Pixel the Ghost">
-            <span>👻</span>
+          <button class="pet-pill-btn ${activePet === 'ghost' ? 'active' : ''}" data-pet="ghost" title="Pixel the Ghost" aria-label="Select Pixel the Ghost">
+            ${icon('ghost', 20, 'pet-pill-icon')}
             <span>Pixel</span>
           </button>
-          <button class="pet-pill-btn ${activePet === 'cat' ? 'active' : ''}" data-pet="cat" title="Byte the Cyber Cat">
-            <span>🐱</span>
+          <button class="pet-pill-btn ${activePet === 'cat' ? 'active' : ''}" data-pet="cat" title="Byte the Cyber Cat" aria-label="Select Byte the Cat">
+            ${icon('cat', 20, 'pet-pill-icon')}
             <span>Byte</span>
           </button>
-          <button class="pet-pill-btn ${activePet === 'bunny' ? 'active' : ''}" data-pet="bunny" title="Mochi the Fluffy Bunny">
-            <span>🐰</span>
+          <button class="pet-pill-btn ${activePet === 'bunny' ? 'active' : ''}" data-pet="bunny" title="Mochi the Fluffy Bunny" aria-label="Select Mochi the Bunny">
+            ${icon('bunny', 20, 'pet-pill-icon')}
             <span>Mochi</span>
           </button>
         </div>
@@ -130,9 +133,9 @@ export function renderChatView(container) {
       <!-- Hero Mascot & Speech Bubble Section with previous animated pet restored -->
       <div class="mascot-hero-section">
         <div id="hero-mascot" class="mascot-container" title="Click to interact with ${activePet === 'ghost' ? 'Pixel' : activePet === 'cat' ? 'Byte' : 'Mochi'}!">
-          ${createMascotSvg(activePet, 135, 'hero')}
+          ${createMascotSvg(activePet, 160, 'hero')}
         </div>
-        <div class="speech-bubble">
+        <div class="speech-bubble ${chatUi.greetingSeen ? '' : 'is-new'}">
           <div class="speech-bubble-tail"></div>
           <div id="speech-bubble-text" class="speech-bubble-inner-text">${state.mascotSpeech || "Hey there! I'm Setup Pal.\nI'll help you set up your development\ntools and environments safely!"}</div>
         </div>
@@ -156,7 +159,7 @@ export function renderChatView(container) {
                 <div class="log-line ${l.type}">${l.text}</div>
               `).join('')}
               <div class="log-line">
-                <span style="color: var(--accent);">> </span>
+                <span class="terminal-prompt">› </span>
                 <span class="terminal-cursor"></span>
               </div>
             </div>
@@ -191,7 +194,7 @@ export function renderChatView(container) {
                   <div class="starter-card-top">
                     <div class="terminal-square-icon-sm">>_</div>
                     <div class="starter-card-title">Minecraft & OptiFine</div>
-                    <div class="starter-card-arrow">&rarr;</div>
+                    <div class="starter-card-arrow">${icon('arrowRight', 16)}</div>
                   </div>
                   <div class="starter-card-body">
                     Install and configure Minecraft with OptiFine, mods, and performance tweaks.
@@ -203,7 +206,7 @@ export function renderChatView(container) {
                   <div class="starter-card-top">
                     <div class="starter-card-icon-wrap">${pythonLogoSvg}</div>
                     <div class="starter-card-title">Python AI &<br/>Data Science</div>
-                    <div class="starter-card-arrow">&rarr;</div>
+                    <div class="starter-card-arrow">${icon('arrowRight', 16)}</div>
                   </div>
                   <div class="starter-card-body">
                     Set up Python, virtualenvs, PyTorch, Jupyter, and common data science tools.
@@ -215,7 +218,7 @@ export function renderChatView(container) {
                   <div class="starter-card-top">
                     <div class="terminal-square-icon-sm">>_</div>
                     <div class="starter-card-title">C++20 Dev Toolchain</div>
-                    <div class="starter-card-arrow">&rarr;</div>
+                    <div class="starter-card-arrow">${icon('arrowRight', 16)}</div>
                   </div>
                   <div class="starter-card-body">
                     Install compilers, CMake, and a modern C++ development environment.
@@ -251,7 +254,7 @@ export function renderChatView(container) {
                       <div class="step-desc">${t.desc}</div>
                       <div class="step-meta-row" style="margin-top: 5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                         <span class="step-source-pill" style="font-size: 11px; padding: 2px 7px; background: rgba(0,0,0,0.06); border-radius: 4px;">
-                          ${t.sourceUrl ? `<a href="${t.sourceUrl}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;" title="Direct publisher link">🌐 From <strong>${t.sourceDomain || t.source}</strong></a>` : `<span>📦 ${t.sourceDomain || t.source}</span>`}
+                          ${t.sourceUrl ? `<a href="${t.sourceUrl}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;" title="Direct publisher link">${icon('globe', 14)} From <strong>${t.sourceDomain || t.source}</strong></a>` : `<span>${icon('package', 14)} ${t.sourceDomain || t.source}</span>`}
                         </span>
                         <span class="step-verdict-text" style="font-size: 11px; color: ${t.verdict === 'GREEN' ? '#2e7d32' : t.verdict === 'YELLOW' ? '#b26a00' : '#c62828'};">
                           <strong>${t.verdictTitle || t.verdict}</strong>: ${t.verdictDesc || ''}
@@ -285,12 +288,15 @@ export function renderChatView(container) {
       <!-- Bottom Chat Composer Area matching screenshot -->
       <div class="bottom-bar">
         <div class="composer-box">
-          <span class="composer-paperclip" title="Attach file">📎</span>
-          <span class="composer-slash">/</span>
-          <input id="chat-input" class="composer-input" type="text" placeholder="Tell me what to set up..." />
+          <button class="composer-paperclip" type="button" title="Attachments aren't available yet" aria-label="Attachments aren't available yet" disabled>
+            ${icon('paperclip')}
+          </button>
+          <span class="composer-slash" title="Type / for shortcuts" aria-hidden="true">/</span>
+          <input id="chat-input" class="composer-input" type="text" placeholder="${isWorking ? 'Working... press Esc to stop' : 'Tell me what to set up...'}" />
+          ${isWorking ? '<button id="btn-stop-run" class="btn-stop" type="button">Stop</button>' : ''}
           <button id="btn-chat-send" class="btn-send">
             <span>Send</span>
-            <span>&rarr;</span>
+            ${icon('send')}
           </button>
         </div>
 
@@ -300,13 +306,15 @@ export function renderChatView(container) {
           <button class="suggestion-chip" data-chip="cpp">C++ toolchain</button>
           <button class="suggestion-chip" data-chip="python">Python data science</button>
           <button class="suggestion-chip chip-attack" data-chip="attack">
-            <span class="chip-warn-icon">⚠️</span>
+            ${icon('alert', 16, 'chip-warn-icon')}
+            <span class="demo-tag">Demo</span>
             <span>Simulate Attack Radar</span>
           </button>
         </div>
       </div>
     </div>
   `;
+  chatUi.greetingSeen = true;
 
   // Sync mascot state
   const mascotSvg = container.querySelector('#hero-ghost-root');
@@ -379,6 +387,8 @@ export function renderChatView(container) {
   // Composer Send & Input handling with listening animation
   const chatInput = container.querySelector('#chat-input');
   const btnSend = container.querySelector('#btn-chat-send');
+  const btnStop = container.querySelector('#btn-stop-run');
+  if (btnStop) btnStop.onclick = () => simulation.stopRun();
 
   if (chatInput) {
     // Restore preserved input text and cursor position

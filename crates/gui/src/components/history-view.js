@@ -6,6 +6,7 @@ import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { bridge } from '../api/bridge.js';
 import { createGhostSvg } from '../mascot/pixel-ghost.js';
+import { icon } from './icon.js';
 
 export function renderHistoryView(container) {
   const state = store.getState();
@@ -25,10 +26,10 @@ export function renderHistoryView(container) {
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
           <div style="display: flex; align-items: center; gap: 8px;">
             <a id="btn-export-audit" href="/api/history/export?format=html" target="_blank" class="btn-review" style="font-size: 12.5px; text-decoration: none; display: flex; align-items: center; gap: 4px; padding: 5px 12px;">
-              📄 Export Audit Report (HTML)
+              ${icon('fileText', 18)} Export Audit Report (HTML)
             </a>
             <button id="btn-rewind" class="btn-review" style="border-color: var(--v-red); color: var(--v-red); font-size: 12.5px;">
-              ⏪ Rewind Last Change
+              ${icon('rewind', 18)} Rewind Last Change
             </button>
           </div>
         </div>

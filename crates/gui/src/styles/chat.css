@@ -19,8 +19,14 @@
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
   padding: 8px 0 32px;
+}
+
+.workspace-scroll-area {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  mask-image: linear-gradient(to bottom, transparent, #000 24px);
 }
 
 .chat-bubble {
@@ -29,12 +35,17 @@
 }
 
 .chat-bubble.is-new {
-  animation: chatIn 0.22s ease-out both;
+  animation: chatIn 180ms var(--ease-out-expo) both;
 }
 
 @keyframes chatIn {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(8px) scale(.96); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+.chat-bubble.user-bubble + .chat-bubble.user-bubble,
+.chat-bubble.bot-bubble + .chat-bubble.bot-bubble {
+  margin-top: -8px;
 }
 
 /* Assistant: avatar + column, no bubble */
@@ -95,16 +106,17 @@
 /* User: soft bubble, right aligned */
 .user-bubble {
   width: auto;
-  max-width: 78%;
+  max-width: 70%;
   align-self: flex-end;
-  background: var(--accent-soft);
+  background: var(--bubble-user);
   color: var(--ink);
-  border: 1px solid var(--border);
+  border: 1px solid var(--bubble-user-border);
   border-radius: 16px 16px 4px 16px;
-  padding: 10px 14px;
+  padding: 10px 16px;
 }
 
 [data-mode="hacker"] .user-bubble {
+  background: var(--bg-surface);
   border-color: var(--accent);
   box-shadow: var(--glow-sm);
 }
@@ -180,7 +192,8 @@
 
 .ext-arrow {
   margin-left: 2px;
-  font-size: 0.85em;
+  display: inline-flex;
+  vertical-align: middle;
 }
 
 .chat-inline-link:focus-visible,

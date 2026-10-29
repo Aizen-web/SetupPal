@@ -5,6 +5,7 @@
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { apiClient } from '../api/client.js';
+import { icon } from './icon.js';
 
 export function renderSettingsView(container) {
   const state = store.getState();
@@ -80,7 +81,7 @@ export function renderSettingsView(container) {
               <div style="font-weight: 600; font-size: 13px; color: var(--ink); margin-bottom: 6px;">API Key</div>
               <div style="display: flex; gap: 8px;">
                 <input id="input-ai-key" type="password" placeholder="nvapi-..." style="flex: 1; background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; font-family: var(--font-mono); outline: none;" />
-                <button id="btn-toggle-key-vis" class="btn-review" style="padding: 6px 10px; font-size: 12px;" title="Show/Hide Key">👁️</button>
+                <button id="btn-toggle-key-vis" class="btn-review" style="padding: 6px 10px; font-size: 12px;" title="Show API key" aria-label="Show API key">${icon('eye', 18)}</button>
               </div>
             </div>
 
@@ -121,9 +122,9 @@ export function renderSettingsView(container) {
               <div style="font-size: 12px; color: var(--ink-soft);">Each pet features 20 unique animations and distinct personalities</div>
             </div>
             <select id="select-active-pet" style="background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px; outline: none;">
-              <option value="ghost" ${state.activePet === 'ghost' ? 'selected' : ''}>👻 Pixel the Ghost</option>
-              <option value="cat" ${state.activePet === 'cat' ? 'selected' : ''}>🐱 Byte the Cat</option>
-              <option value="bunny" ${state.activePet === 'bunny' ? 'selected' : ''}>🐰 Mochi the Bunny</option>
+              <option value="ghost" ${state.activePet === 'ghost' ? 'selected' : ''}>Pixel the Ghost</option>
+              <option value="cat" ${state.activePet === 'cat' ? 'selected' : ''}>Byte the Cat</option>
+              <option value="bunny" ${state.activePet === 'bunny' ? 'selected' : ''}>Mochi the Bunny</option>
             </select>
           </div>
         </div>
@@ -240,7 +241,10 @@ export function renderSettingsView(container) {
   if (btnToggleVis && keyInput) {
     btnToggleVis.onclick = () => {
       keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
-      btnToggleVis.textContent = keyInput.type === 'password' ? '👁️' : '🙈';
+      const isHidden = keyInput.type === 'password';
+      btnToggleVis.innerHTML = icon(isHidden ? 'eye' : 'eyeOff', 18);
+      btnToggleVis.title = isHidden ? 'Show API key' : 'Hide API key';
+      btnToggleVis.setAttribute('aria-label', btnToggleVis.title);
     };
   }
 

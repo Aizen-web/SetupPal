@@ -8,6 +8,7 @@ import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { createMascotSvg } from '../mascot/pets.js';
 import { apiClient } from '../api/client.js';
+import { icon } from './icon.js';
 
 let isNimEditing = false;
 
@@ -69,17 +70,17 @@ export function renderAccountsView(container) {
 
       <!-- Connected Services Grid -->
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-bottom: 24px;">
-        
+
         <!-- NVIDIA NIM / AI Key Card -->
         <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-card); display: flex; flex-direction: column; justify-content: space-between;">
           <div>
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-              <div style="font-weight: 700; font-size: 15px; color: var(--ink);">⚡ NVIDIA NIM (AI Engine)</div>
+              <div class="integration-name">${icon('bolt', 20)} NVIDIA NIM (AI Engine)</div>
               <span id="badge-nim-status" class="badge ${hasNimKey ? 'badge-green' : 'badge-yellow'}">
                 ${hasNimKey ? 'ACTIVE' : 'NOT CONFIGURED'}
               </span>
             </div>
-            
+
             <div style="font-size: 12.5px; color: var(--ink-soft); margin-bottom: 14px; line-height: 1.5;">
               Powers zero-trust planning, question analysis, and toolchain reasoning via NVIDIA NIM (nvidia/nemotron-3.5-bolt-e4b).
             </div>
@@ -100,7 +101,7 @@ export function renderAccountsView(container) {
                   <div style="font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 4px;">Enter NVIDIA API Key:</div>
                   <div style="display: flex; gap: 6px;">
                     <input id="acc-input-nim" type="password" placeholder="Paste your nvapi-... key" value="${savedKey}" style="flex: 1; background: var(--bg-surface); border: 1px solid var(--border); color: var(--ink); padding: 7px 10px; border-radius: var(--radius-sm); font-size: 12.5px; font-family: var(--font-mono); outline: none;" />
-                    <button id="acc-btn-toggle-nim-vis" class="btn-review" style="padding: 4px 8px; font-size: 11px;" title="Show/Hide">👁️</button>
+                    <button id="acc-btn-toggle-nim-vis" class="btn-review" style="padding: 4px 8px; font-size: 11px;" title="Show API key" aria-label="Show API key">${icon('eye', 18)}</button>
                   </div>
                 </div>
                 <div style="font-size: 11px; color: var(--ink-soft);">
@@ -137,7 +138,7 @@ export function renderAccountsView(container) {
                 ${isGhActive ? 'CONNECTED' : 'NOT CONNECTED'}
               </span>
             </div>
-            
+
             <div style="font-size: 12.5px; color: var(--ink-soft); margin-bottom: 14px; line-height: 1.5;">
               Authenticates against GitHub API to fetch verified release binaries, tags, and verify commit signatures.
             </div>
@@ -176,12 +177,12 @@ export function renderAccountsView(container) {
         <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-card); display: flex; flex-direction: column; justify-content: space-between;">
           <div>
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-              <div style="font-weight: 700; font-size: 15px; color: var(--ink);">🔍 Tavily Search</div>
+              <div class="integration-name">${icon('search', 20)} Tavily Search</div>
               <span id="badge-tavily-status" class="badge ${isTavilyActive ? 'badge-green' : ''}" style="${!isTavilyActive ? 'background: rgba(148, 163, 184, 0.15); color: var(--ink-soft); border: 1px solid var(--border);' : ''}">
                 ${isTavilyActive ? 'ACTIVE' : 'OPTIONAL (INACTIVE)'}
               </span>
             </div>
-            
+
             <div style="font-size: 12.5px; color: var(--ink-soft); margin-bottom: 14px; line-height: 1.5;">
               Live web radar for real-time domain allowlist checks and ecosystem safety audits.
             </div>
@@ -250,7 +251,10 @@ export function renderAccountsView(container) {
   if (btnToggleNimVis && inputNim) {
     btnToggleNimVis.onclick = () => {
       inputNim.type = inputNim.type === 'password' ? 'text' : 'password';
-      btnToggleNimVis.textContent = inputNim.type === 'password' ? '👁️' : '🙈';
+      const isHidden = inputNim.type === 'password';
+      btnToggleNimVis.innerHTML = icon(isHidden ? 'eye' : 'eyeOff', 18);
+      btnToggleNimVis.title = isHidden ? 'Show API key' : 'Hide API key';
+      btnToggleNimVis.setAttribute('aria-label', btnToggleNimVis.title);
     };
   }
 

@@ -24,6 +24,10 @@ function initApp() {
   const appContainer = document.getElementById('app');
   if (!appContainer) return;
 
+  document.addEventListener('visibilitychange', () => {
+    document.documentElement.classList.toggle('document-hidden', document.hidden);
+  });
+
   // Create layout DOM structure
   appContainer.innerHTML = `
     <div id="sidebar-container"></div>

@@ -6,11 +6,12 @@
  */
 
 import { formatChatMessage, escapeHtml } from './chat-formatter.js';
+import { icon } from './icon.js';
 
 const PETS = {
-  ghost: { emoji: '👻', name: 'Pixel' },
-  cat: { emoji: '🐱', name: 'Byte' },
-  bunny: { emoji: '🐰', name: 'Mochi' },
+  ghost: { icon: 'ghost', name: 'Pixel' },
+  cat: { icon: 'cat', name: 'Byte' },
+  bunny: { icon: 'bunny', name: 'Mochi' },
 };
 
 /**
@@ -59,7 +60,7 @@ export function renderMessage(m, ctx) {
 
   return `
     <div class="chat-bubble bot-bubble${newCls}" data-msg-id="${idAttr}">
-      <div class="chat-avatar-wrap" aria-hidden="true">${pet.emoji}</div>
+      <div class="chat-avatar-wrap" aria-hidden="true">${icon(pet.icon, 20)}</div>
       <div class="chat-msg-col">
         <div class="chat-meta">
           <span class="chat-author-name">${pet.name}</span>

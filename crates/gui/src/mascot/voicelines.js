@@ -91,7 +91,7 @@ export class PetPersonality {
 
 export class GhostPersonality extends PetPersonality {
   constructor() {
-    super("Pixel", "Pixel the Ghost", "👻");
+    super("Pixel", "Pixel the Ghost", "ghost");
   }
 
   getWelcome() {
@@ -141,7 +141,7 @@ export class GhostPersonality extends PetPersonality {
 
 export class CatPersonality extends PetPersonality {
   constructor() {
-    super("Byte", "Byte the Cyber Cat", "🐱");
+    super("Byte", "Byte the Cyber Cat", "cat");
   }
 
   getWelcome() {
@@ -191,7 +191,7 @@ export class CatPersonality extends PetPersonality {
 
 export class BunnyPersonality extends PetPersonality {
   constructor() {
-    super("Mochi", "Mochi the Bunny", "🐰");
+    super("Mochi", "Mochi the Bunny", "bunny");
   }
 
   getWelcome() {
@@ -339,4 +339,3 @@ export class PetVoiceEngine {
 }
 
 export const petVoiceEngine = new PetVoiceEngine();
-

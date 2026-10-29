@@ -223,23 +223,23 @@ export function createClipboardTaskArtSvg(size = 110) {
   <ellipse cx="55" cy="98" rx="36" ry="6" fill="rgba(68, 57, 51, 0.12)" />
 
   <!-- Clipboard Board (Warm tan wood) -->
-  <rect x="25" y="20" width="60" height="74" rx="8" fill="#D7C6B0" stroke="#443933" stroke-width="2.6" />
+  <rect x="25" y="20" width="60" height="74" rx="8" fill="var(--clipboard-board, #D7C6B0)" stroke="var(--clipboard-outline, #443933)" stroke-width="2.6" />
 
   <!-- White Paper Sheet -->
-  <rect x="31" y="26" width="48" height="62" rx="4" fill="#FAF6F0" stroke="#E6DAC7" stroke-width="1.8" />
+  <rect x="31" y="26" width="48" height="62" rx="4" fill="var(--clipboard-paper, #FAF6F0)" stroke="var(--clipboard-line, #E6DAC7)" stroke-width="1.8" />
 
   <!-- Metal Clip at Top -->
-  <path d="M 42 16 C 42 12, 68 12, 68 16 L 68 25 L 42 25 Z" fill="#695A4E" stroke="#443933" stroke-width="2.2" stroke-linejoin="round" />
-  <circle cx="55" cy="13" r="4" fill="none" stroke="#443933" stroke-width="2" />
-  <circle cx="55" cy="21" r="2.2" fill="#FAF6F0" />
+  <path d="M 42 16 C 42 12, 68 12, 68 16 L 68 25 L 42 25 Z" fill="var(--clipboard-clip, #695A4E)" stroke="var(--clipboard-outline, #443933)" stroke-width="2.2" stroke-linejoin="round" />
+  <circle cx="55" cy="13" r="4" fill="none" stroke="var(--clipboard-outline, #443933)" stroke-width="2" />
+  <circle cx="55" cy="21" r="2.2" fill="var(--clipboard-paper, #FAF6F0)" />
 
   <!-- Mini Terminal Screen on Paper -->
-  <rect x="37" y="34" width="36" height="28" rx="4" fill="#3D332D" stroke="#443933" stroke-width="1.8" />
-  <text x="42" y="52" font-family="'JetBrains Mono', Consolas, monospace" font-size="12" font-weight="700" fill="#FAF5EE">>_</text>
+  <rect x="37" y="34" width="36" height="28" rx="4" fill="var(--clipboard-screen, #3D332D)" stroke="var(--clipboard-outline, #443933)" stroke-width="1.8" />
+  <text x="42" y="52" font-family="'JetBrains Mono', Consolas, monospace" font-size="12" font-weight="700" fill="var(--clipboard-screen-text, #FAF5EE)">>_</text>
 
   <!-- Note lines underneath -->
-  <line x1="38" y1="70" x2="72" y2="70" stroke="#D7C6B0" stroke-width="2.2" stroke-linecap="round" />
-  <line x1="38" y1="76" x2="62" y2="76" stroke="#D7C6B0" stroke-width="2.2" stroke-linecap="round" />
+  <line x1="38" y1="70" x2="72" y2="70" stroke="var(--clipboard-line, #D7C6B0)" stroke-width="2.2" stroke-linecap="round" />
+  <line x1="38" y1="76" x2="62" y2="76" stroke="var(--clipboard-line, #D7C6B0)" stroke-width="2.2" stroke-linecap="round" />
 </svg>
 `;
 }
