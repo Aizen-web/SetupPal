@@ -410,7 +410,7 @@ class Store {
   }
 
   setActivePet(pet) {
-    if (!['ghost', 'cat', 'bunny'].includes(pet)) return;
+    pet = 'ghost';
     this.setState({ activePet: pet });
     sounds.play('ui.click');
     

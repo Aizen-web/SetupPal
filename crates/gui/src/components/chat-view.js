@@ -47,7 +47,7 @@ export function renderChatView(container) {
   const state = store.getState();
   const plan = state.activePlan;
   const isHacker = state.mode === 'hacker';
-  const activePet = state.activePet || 'ghost';
+  const activePet = 'ghost';
   const isWorking = Boolean(plan?.tasks?.some((task) => task.status === 'running'));
 
   // Preserve scroll position (the DOM is rebuilt below)
@@ -99,21 +99,6 @@ export function renderChatView(container) {
     <div class="main-content ${messages.length > 0 ? 'has-messages' : ''}">
       <!-- Top Navigation Bar matching screenshot -->
       <div class="top-nav-bar">
-        <!-- Mascot Selector Group: [Pixel] [Byte] [Mochi] -->
-        <div class="pet-selector-group">
-          <button class="pet-pill-btn ${activePet === 'ghost' ? 'active' : ''}" data-pet="ghost" title="Pixel the Ghost" aria-label="Select Pixel the Ghost">
-            ${icon('ghost', 20, 'pet-pill-icon')}
-            <span>Pixel</span>
-          </button>
-          <button class="pet-pill-btn ${activePet === 'cat' ? 'active' : ''}" data-pet="cat" title="Byte the Cyber Cat" aria-label="Select Byte the Cat">
-            ${icon('cat', 20, 'pet-pill-icon')}
-            <span>Byte</span>
-          </button>
-          <button class="pet-pill-btn ${activePet === 'bunny' ? 'active' : ''}" data-pet="bunny" title="Mochi the Fluffy Bunny" aria-label="Select Mochi the Bunny">
-            ${icon('bunny', 20, 'pet-pill-icon')}
-            <span>Mochi</span>
-          </button>
-        </div>
 
         <div style="flex: 1;"></div>
 
@@ -318,14 +303,6 @@ export function renderChatView(container) {
     mascotSvg.dataset.mode = state.mode;
   }
 
-  // Pet Selector Buttons
-  container.querySelectorAll('.pet-selector-group button').forEach(btn => {
-    btn.onclick = () => {
-      const pet = btn.getAttribute('data-pet');
-      store.setActivePet(pet);
-      petVoiceEngine.trigger('pet_change');
-    };
-  });
 
   // Event Listeners for Mode Toggle
   container.querySelector('#toggle-chill').onclick = () => {

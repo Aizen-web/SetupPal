@@ -112,23 +112,6 @@ export function renderSettingsView(container) {
           </div>
         </div>
 
-        <!-- Mascot Pet Card -->
-        <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px; box-shadow: var(--shadow-card);">
-          <h2 class="font-pixel" style="font-size: 17px; color: var(--ink); margin-bottom: 14px;">Active Kawaii Pet Companion</h2>
-          
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0;">
-            <div>
-              <div style="font-weight: 600; font-size: 13.5px; color: var(--ink);">Companion Pet</div>
-              <div style="font-size: 12px; color: var(--ink-soft);">Each pet features 20 unique animations and distinct personalities</div>
-            </div>
-            <select id="select-active-pet" style="background: var(--bg-canvas); border: 1px solid var(--border); color: var(--ink); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px; outline: none;">
-              <option value="ghost" ${state.activePet === 'ghost' ? 'selected' : ''}>Pixel the Ghost</option>
-              <option value="cat" ${state.activePet === 'cat' ? 'selected' : ''}>Byte the Cat</option>
-              <option value="bunny" ${state.activePet === 'bunny' ? 'selected' : ''}>Mochi the Bunny</option>
-            </select>
-          </div>
-        </div>
-
         <!-- Sound Engine Card -->
         <div style="background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px; box-shadow: var(--shadow-card);">
           <h2 class="font-pixel" style="font-size: 17px; color: var(--ink); margin-bottom: 14px;">Cozy 8-Bit Audio</h2>
@@ -160,10 +143,6 @@ export function renderSettingsView(container) {
 
   container.querySelector('#btn-force-chill').onclick = () => store.setMode('chill');
   container.querySelector('#btn-force-hacker').onclick = () => store.setMode('hacker');
-
-  container.querySelector('#select-active-pet').onchange = (e) => {
-    store.setActivePet(e.target.value);
-  };
 
   container.querySelector('#select-safety').onchange = (e) => {
     store.setState(s => ({ ...s, settings: { ...s.settings, safetyLevel: e.target.value } }));
