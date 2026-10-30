@@ -95,11 +95,17 @@ impl HttpOsvClient {
     }
 
     pub fn osv_ecosystem_name(ecosystem: Ecosystem) -> Option<&'static str> {
-        match ecosystem {
-            Ecosystem::PyPI => Some("PyPI"),
-            Ecosystem::Npm => Some("npm"),
-            _ => None,
-        }
+        osv_ecosystem_name(ecosystem)
+    }
+}
+
+/// OSV.dev ecosystem name, or `None` when OSV.dev has no advisories for that source.
+pub fn osv_ecosystem_name(ecosystem: Ecosystem) -> Option<&'static str> {
+    match ecosystem {
+        Ecosystem::PyPI => Some("PyPI"),
+        Ecosystem::Npm => Some("npm"),
+        Ecosystem::Cargo => Some("crates.io"),
+        Ecosystem::Winget | Ecosystem::Modrinth | Ecosystem::GitHub | Ecosystem::Vendor => None,
     }
 }
 
@@ -123,10 +129,13 @@ impl OsvClient for HttpOsvClient {
             version,
         };
 
-        let resp = self.http.post(&self.endpoint).json(&req_body).send().await?;
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
-        }
+        let resp = self
+            .http
+            .post(&self.endpoint)
+            .json(&req_body)
+            .send()
+            .await?
+            .error_for_status()?;
 
         let parsed: OsvQueryResponse = resp.json().await?;
         let summaries = parsed

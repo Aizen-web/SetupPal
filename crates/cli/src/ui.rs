@@ -149,12 +149,33 @@ pub fn render_plan_with_safety(
                 expected_sha256,
             } => {
                 println!(
-                    "     Action: DownloadArtifact | adapter={:?} | id={}@{} -> {} (sha256={:.16}...)",
+                    "     Action: DownloadArtifact | adapter={:?} | id={}@{} -> {} (sha256={})",
                     adapter,
                     id,
                     version,
                     destination.display(),
                     expected_sha256
+                        .as_deref()
+                        .map(|h| format!("{:.16}...", h))
+                        .unwrap_or_else(|| "from upstream".to_string())
+                );
+            }
+            Step::RunVendorInstaller {
+                installer,
+                mc_version,
+                installer_path,
+            } => {
+                println!(
+                    "     Action: RunVendorInstaller | installer={:?} | minecraft={} | jar={}",
+                    installer,
+                    mc_version,
+                    installer_path.display()
+                );
+            }
+            Step::AddDiscoveredToolToPath { binary } => {
+                println!(
+                    "     Action: AddDiscoveredToolToPath | binary={}",
+                    binary.executable_name().bright_green()
                 );
             }
             Step::VerifyHash {
@@ -238,10 +259,18 @@ pub fn render_execution_summary(summary: &installer_core::PlanExecutionSummary) 
     println!("  Goal: {}\n", summary.goal.bold());
 
     for step in &summary.step_results {
-        if step.executed {
+        if let Some(err) = &step.error {
             println!(
                 "  {} {} — {}",
-                "✔".bright_green().bold(),
+                "✖".bright_red().bold(),
+                step.step_id.bold(),
+                step.description
+            );
+            println!("    {} {}", "FAILED:".bright_red().bold(), err);
+        } else if step.executed {
+            println!(
+                "  {} {} — {}",
+                if step.succeeded() { "✔".bright_green().bold() } else { "✖".bright_red().bold() },
                 step.step_id.bold(),
                 step.description
             );
@@ -276,6 +305,14 @@ pub fn render_execution_summary(summary: &installer_core::PlanExecutionSummary) 
             }
         }
         println!();
+    }
+
+    if let Some(halted) = &summary.halted_at_step_id {
+        println!(
+            "  {} Stopped at step {} — it needs your approval. Re-run with --yes (and --allow-yellow for caution steps) to continue.\n",
+            "⏸".bright_yellow().bold(),
+            halted.bold()
+        );
     }
 
     if let Some(cpp_ver) = &summary.toolchain_verification {

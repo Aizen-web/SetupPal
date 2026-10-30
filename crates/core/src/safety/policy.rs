@@ -21,6 +21,9 @@ pub const ALLOWED_DOWNLOAD_DOMAINS: &[&str] = &[
     "api.adoptium.net",
     "fabricmc.net",
     "maven.fabricmc.net",
+    "meta.fabricmc.net",
+    "crates.io",
+    "static.crates.io",
     "cmake.org",
     "llvm.org",
     "git-scm.com",
@@ -201,12 +204,32 @@ pub fn evaluate_step_policy(step: &Step, description: &str) -> Vec<String> {
                 ));
             }
             validate_safe_path(destination, &mut violations);
-            if !is_valid_sha256_hex(expected_sha256) {
+            if let Some(hash) = expected_sha256 {
+                if !is_valid_sha256_hex(hash) {
+                    violations.push(format!(
+                        "DownloadArtifact pins an invalid or placeholder SHA-256 hash (`{hash}`)"
+                    ));
+                }
+            }
+        }
+        Step::RunVendorInstaller {
+            mc_version,
+            installer_path,
+            ..
+        } => {
+            validate_safe_path(installer_path, &mut violations);
+            let version_ok = !mc_version.is_empty()
+                && mc_version.len() <= 32
+                && mc_version
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+            if !version_ok {
                 violations.push(format!(
-                    "DownloadArtifact requires a valid 64-character hex SHA-256 hash (got `{expected_sha256}`)"
+                    "Vendor installer game version `{mc_version}` is not a plain version string"
                 ));
             }
         }
+        Step::AddDiscoveredToolToPath { .. } => {}
         Step::VerifyHash {
             file_path,
             expected_sha256,
@@ -249,7 +272,75 @@ fn validate_safe_path(path: &Path, violations: &mut Vec<String>) {
     violations.extend(scan_for_destructive_patterns(&raw));
 }
 
+/// Inputs whose digests show up as copy-paste placeholders (the empty file first).
+const PLACEHOLDER_PREIMAGES: &[&[u8]] = &[b"", b"foo", b"bar", b"test", b"hello", b"hello world"];
+
+/// True when `hash` is the digest of an empty file or of a well-known test string, or is a
+/// single repeated character. Such values are placeholders, never real artifact digests.
+pub fn is_placeholder_sha256(hash: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let norm = hash.trim().to_ascii_lowercase();
+    if let Some(first) = norm.chars().next() {
+        if norm.chars().all(|c| c == first) {
+            return true;
+        }
+    }
+    PLACEHOLDER_PREIMAGES
+        .iter()
+        .any(|pre| hex::encode(Sha256::digest(pre)) == norm)
+}
+
+/// A real-looking SHA-256: 64 hex characters and not a known placeholder digest.
 pub fn is_valid_sha256_hex(hash: &str) -> bool {
     let trimmed = hash.trim();
-    trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+    trimmed.len() == 64
+        && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+        && !is_placeholder_sha256(trimmed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn placeholder_digests_are_rejected() {
+        assert!(!is_valid_sha256_hex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+        assert!(!is_valid_sha256_hex("2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"));
+        assert!(!is_valid_sha256_hex(&"0".repeat(64)));
+        assert!(!is_valid_sha256_hex("abc"));
+        assert!(is_valid_sha256_hex("61e035bf7bf70153e127440ce34de47c9036f0a2d0c65d1529454bd35ceefe4f"));
+    }
+
+    #[test]
+    fn shell_metacharacters_are_detected() {
+        assert_eq!(contains_shell_metacharacters("numpy; rm"), Some(';'));
+        assert_eq!(contains_shell_metacharacters("a|b"), Some('|'));
+        assert_eq!(contains_shell_metacharacters("typescript@5.6.2"), None);
+    }
+
+    #[test]
+    fn allowlist_requires_https_and_known_hosts() {
+        assert_eq!(is_url_domain_allowlisted("https://maven.fabricmc.net/x.jar"), Ok(true));
+        assert_eq!(is_url_domain_allowlisted("https://meta.fabricmc.net/v2"), Ok(true));
+        assert_eq!(is_url_domain_allowlisted("https://static.crates.io/crates/x"), Ok(true));
+        assert_eq!(is_url_domain_allowlisted("https://evil-github.com/x"), Ok(false));
+        assert!(is_url_domain_allowlisted("http://github.com/x").is_err());
+    }
+
+    #[test]
+    fn download_without_hash_is_not_a_policy_violation_but_bad_hash_is() {
+        let mut step = Step::DownloadArtifact {
+            adapter: crate::types::AdapterKind::Modrinth,
+            id: "sodium".to_string(),
+            version: "1".to_string(),
+            destination: PathBuf::from("./mods/sodium.jar"),
+            expected_sha256: None,
+        };
+        assert!(evaluate_step_policy(&step, "Download sodium").is_empty());
+        if let Step::DownloadArtifact { expected_sha256, .. } = &mut step {
+            *expected_sha256 = Some("0".repeat(64));
+        }
+        assert!(!evaluate_step_policy(&step, "Download sodium").is_empty());
+    }
 }

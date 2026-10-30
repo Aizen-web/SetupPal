@@ -1,12 +1,67 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::adapters::VerificationResult;
+use crate::adapters::pypi::venv_python;
+use crate::adapters::{
+    AdapterRegistry, ExecutionContext, PackageMetadata, SourceAdapter, VerificationResult,
+};
 use crate::config::CoreError;
 use crate::events::{AgentEvent, EventBus};
 use crate::os::OsProvider;
 use crate::safety::hash::verify_file_sha256;
-use crate::types::{AllowedBinary, PlannedStep, Step};
+use crate::types::{AdapterKind, AllowedBinary, Ecosystem, IsolationKind, PlannedStep, Step};
+
+/// Maps a package to the CLI binary it provides, for a post-install version check.
+pub fn binary_for_package(ecosystem: Ecosystem, package_id: &str) -> Option<AllowedBinary> {
+    if ecosystem != Ecosystem::Winget {
+        return None;
+    }
+    let id = package_id.to_ascii_lowercase();
+    let binary = if id == "git.git" {
+        AllowedBinary::Git
+    } else if id.starts_with("openjs.nodejs") {
+        AllowedBinary::Node
+    } else if id.starts_with("python.python.") {
+        AllowedBinary::Python
+    } else if id == "kitware.cmake" {
+        AllowedBinary::Cmake
+    } else if id == "llvm.llvm" {
+        AllowedBinary::Clang
+    } else if id.starts_with("eclipseadoptium.temurin.") || id.starts_with("microsoft.openjdk.") {
+        AllowedBinary::Java
+    } else if id == "rustlang.rustup" {
+        AllowedBinary::Rustc
+    } else if id == "ninja-build.ninja" {
+        AllowedBinary::Ninja
+    } else {
+        return None;
+    };
+    Some(binary)
+}
+
+/// Checks that `fabric-loader-*-<mc_version>` exists under `<minecraft_dir>\versions`.
+pub fn verify_fabric_profile(minecraft_dir: &Path, mc_version: &str) -> VerificationResult {
+    let versions = minecraft_dir.join("versions");
+    let suffix = format!("-{mc_version}");
+    let found = std::fs::read_dir(&versions).ok().and_then(|rd| {
+        rd.flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .find(|n| n.starts_with("fabric-loader-") && n.ends_with(&suffix))
+    });
+    match found {
+        Some(name) => VerificationResult {
+            passed: true,
+            command_run: format!("verify_fabric_profile {}", versions.display()),
+            exit_code: Some(0),
+            stdout: format!("Fabric profile present: {name}"),
+            stderr: String::new(),
+        },
+        None => VerificationResult::failed(
+            format!("verify_fabric_profile {}", versions.display()),
+            format!("No fabric-loader-*{suffix} folder in {}", versions.display()),
+        ),
+    }
+}
 
 /// Runs deterministic post-install checks per step and per goal.
 /// Refreshes PATH via Windows Registry / environment, checks binary presence,
@@ -15,6 +70,7 @@ use crate::types::{AllowedBinary, PlannedStep, Step};
 pub struct Verifier {
     os_provider: Arc<dyn OsProvider>,
     events: EventBus,
+    adapters: Option<AdapterRegistry>,
 }
 
 impl Verifier {
@@ -22,7 +78,14 @@ impl Verifier {
         Self {
             os_provider,
             events,
+            adapters: None,
         }
+    }
+
+    /// Lets `verify_step` check `InstallPackage` steps through their source adapters.
+    pub fn with_adapters(mut self, adapters: AdapterRegistry) -> Self {
+        self.adapters = Some(adapters);
+        self
     }
 
     /// Verifies a single `PlannedStep`.
@@ -42,12 +105,35 @@ impl Verifier {
                 file_path,
                 expected_sha256,
             } => self.verify_hash_step(&step.id, file_path, expected_sha256).await?,
-            Step::InstallPackage { package_id, .. } => VerificationResult {
-                passed: true,
-                command_run: format!("verify_package {package_id}"),
-                exit_code: Some(0),
-                stdout: format!("Package {package_id} install step recorded"),
-                stderr: String::new(),
+            Step::InstallPackage {
+                ecosystem,
+                package_id,
+                version,
+                source_adapter,
+            } => match self.adapters.as_ref().and_then(|a| a.get(*source_adapter)) {
+                Some(adapter) => {
+                    let mut meta = PackageMetadata::bare(
+                        *source_adapter,
+                        package_id.clone(),
+                        version.clone().unwrap_or_else(|| "latest".to_string()),
+                    );
+                    if *source_adapter != AdapterKind::Winget {
+                        if let Ok(resolved) = adapter.resolve_metadata(package_id, version.as_deref()).await {
+                            meta = resolved;
+                        }
+                    }
+                    let ctx = ExecutionContext {
+                        dry_run: false,
+                        working_dir: std::env::current_dir().unwrap_or_else(|_| ".".into()),
+                        isolated_env: None,
+                    };
+                    self.verify_installed_package(*ecosystem, adapter.as_ref(), &meta, &ctx)
+                        .await?
+                }
+                None => VerificationResult::failed(
+                    format!("verify_package {package_id}"),
+                    format!("No {source_adapter:?} adapter is available to check whether {package_id} is installed"),
+                ),
             },
             Step::DownloadArtifact { destination, .. } => {
                 let passed = destination.exists();
@@ -66,6 +152,21 @@ impl Verifier {
                         String::new()
                     },
                 }
+            }
+            Step::CreateIsolatedEnv {
+                kind: IsolationKind::PythonVenv,
+                path,
+            } => self.verify_venv(path).await?,
+            Step::RunVendorInstaller { mc_version, .. } => match crate::paths::minecraft_dir() {
+                Some(dir) => verify_fabric_profile(&dir, mc_version),
+                None => VerificationResult::failed(
+                    "verify_fabric_profile",
+                    "Minecraft Java Edition data folder could not be located",
+                ),
+            },
+            Step::AddDiscoveredToolToPath { binary } => {
+                self.verify_binary_command(&step.id, *binary, &[binary.version_flag().to_string()])
+                    .await?
             }
             Step::CreateIsolatedEnv { path, .. } => {
                 let passed = path.exists();
@@ -95,14 +196,94 @@ impl Verifier {
         Ok(result)
     }
 
+    /// Verifies a package install: first the package manager's own record
+    /// (`winget list`, `pip show`, `npm ls`, `cargo install --list`, mod file present), then the
+    /// tool's version command when a matching `AllowedBinary` is already on PATH.
+    pub async fn verify_installed_package(
+        &self,
+        ecosystem: Ecosystem,
+        adapter: &dyn SourceAdapter,
+        metadata: &PackageMetadata,
+        ctx: &ExecutionContext,
+    ) -> Result<VerificationResult, CoreError> {
+        let mut result = adapter.verify(metadata, ctx).await.map_err(CoreError::Adapter)?;
+        if !result.passed {
+            return Ok(result);
+        }
+        let Some(binary) = binary_for_package(ecosystem, &metadata.package_id) else {
+            return Ok(result);
+        };
+        let paths = self.os_provider.refresh_and_get_path().await?;
+        if self
+            .os_provider
+            .which_in_paths(binary.executable_name(), &paths)
+            .is_none()
+        {
+            result.stdout.push_str(&format!(
+                "\n{} is not on PATH yet; a later step can add it.",
+                binary.executable_name()
+            ));
+            return Ok(result);
+        }
+        let version = self
+            .verify_binary_command("", binary, &[binary.version_flag().to_string()])
+            .await?;
+        Ok(VerificationResult {
+            passed: version.passed,
+            command_run: format!("{}; {}", result.command_run, version.command_run),
+            exit_code: version.exit_code,
+            stdout: format!("{}\n{}", result.stdout, version.stdout).trim().to_string(),
+            stderr: version.stderr,
+        })
+    }
+
+    /// Checks that a venv interpreter exists and runs.
+    pub async fn verify_venv(&self, env_dir: &Path) -> Result<VerificationResult, CoreError> {
+        let python = venv_python(env_dir);
+        if !python.is_file() {
+            return Ok(VerificationResult::failed(
+                format!("{} --version", python.display()),
+                format!("venv interpreter {} is missing", python.display()),
+            ));
+        }
+        let out = self
+            .os_provider
+            .run_command(&python, &["--version".to_string()], &[])
+            .await?;
+        Ok(VerificationResult {
+            passed: out.exit_code == Some(0),
+            command_run: format!("{} --version", python.display()),
+            exit_code: out.exit_code,
+            stdout: out.stdout,
+            stderr: out.stderr,
+        })
+    }
+
     /// Verifies that an allowed binary exists on the refreshed PATH and runs with `args`.
     pub async fn verify_binary_command(
+        &self,
+        step_id: &str,
+        binary: AllowedBinary,
+        args: &[String],
+    ) -> Result<VerificationResult, CoreError> {
+        self.verify_binary_command_in_env(step_id, binary, args, None).await
+    }
+
+    /// Like `verify_binary_command`, but `python` and `pip` resolve inside `isolated_env`
+    /// first when a venv is active.
+    pub async fn verify_binary_command_in_env(
         &self,
         _step_id: &str,
         binary: AllowedBinary,
         args: &[String],
+        isolated_env: Option<&Path>,
     ) -> Result<VerificationResult, CoreError> {
-        let paths = self.os_provider.refresh_and_get_path().await?;
+        let mut paths = self.os_provider.refresh_and_get_path().await?;
+        if let (Some(env), AllowedBinary::Python | AllowedBinary::Pip) = (isolated_env, binary) {
+            if let Some(scripts) = venv_python(env).parent() {
+                paths.insert(0, scripts.to_path_buf());
+            }
+        }
         let bin_name = binary.executable_name();
 
         let binary_path = match self.os_provider.which_in_paths(bin_name, &paths) {

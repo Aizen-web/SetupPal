@@ -1,67 +1,76 @@
 id: minecraft_fabric_1_21
-name: Minecraft 1.21 with Fabric Performance Mods (Sodium, Lithium, FerriteCore)
+name: Modded Minecraft Java 1.21.1 with Fabric (Sodium, Lithium, FerriteCore)
 triggers:
-  - "minecraft 1.21 fabric"
+  - "modded minecraft"
+  - "minecraft java"
+  - "minecraft fabric"
+  - "minecraft mods"
   - "fabric performance"
   - "sodium"
   - "modrinth fabric"
-  - "minecraf fabric"
-summary: "Sets up Eclipse Temurin Java 21 runtime, Fabric installer, and downloads hash-verified Sodium, Lithium, and FerriteCore mods for Minecraft 1.21 from Modrinth."
+summary: "Installs the Eclipse Temurin Java 21 runtime, adds the Fabric loader for Minecraft Java 1.21.1, and downloads checksum-verified Sodium, Lithium, and FerriteCore from Modrinth into your mods folder. Minecraft Java Edition must already be installed and launched once."
 steps:
   - id: step-1
-    description: "Install Eclipse Temurin JDK 21 via Winget"
+    description: "Install Eclipse Temurin JDK 21 via winget"
     step:
       action: install_package
       params:
         ecosystem: winget
         package_id: EclipseAdoptium.Temurin.21.JDK
-        version: "21.0.4+7"
         source_adapter: winget
   - id: step-2
-    description: "Download Fabric installer JAR with SHA-256 verification"
-    step:
-      action: download_artifact
-      params:
-        adapter: official_vendor_url
-        id: fabric-installer
-        version: "1.0.1"
-        destination: "./fabric-installer.jar"
-        expected_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  - id: step-3
-    description: "Download Sodium 0.6.0+mc1.21 from Modrinth"
-    step:
-      action: download_artifact
-      params:
-        adapter: modrinth
-        id: sodium
-        version: "mc1.21-0.6.0"
-        destination: "./mods/sodium-fabric-0.6.0+mc1.21.jar"
-        expected_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  - id: step-4
-    description: "Download Lithium 0.13.0+mc1.21 from Modrinth"
-    step:
-      action: download_artifact
-      params:
-        adapter: modrinth
-        id: lithium
-        version: "mc1.21-0.13.0"
-        destination: "./mods/lithium-fabric-0.13.0+mc1.21.jar"
-        expected_sha256: "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
-  - id: step-5
-    description: "Download FerriteCore 7.0.0-fabric from Modrinth"
-    step:
-      action: download_artifact
-      params:
-        adapter: modrinth
-        id: ferrite-core
-        version: "7.0.0-fabric"
-        destination: "./mods/ferritecore-7.0.0-fabric.jar"
-        expected_sha256: "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
-  - id: step-6
-    description: "Verify Java 21 runtime responds cleanly"
+    description: "Verify the Java 21 runtime responds"
     step:
       action: run_verify_command
       params:
         binary: java
         args:
           - "-version"
+  - id: step-3
+    description: "Download the Fabric installer 1.1.2 from maven.fabricmc.net"
+    step:
+      action: download_artifact
+      params:
+        adapter: official_vendor_url
+        id: fabric-installer
+        version: "1.1.2"
+        destination: "%LOCALAPPDATA%\\SetupPal\\downloads\\fabric-installer-1.1.2.jar"
+        expected_sha256: "61e035bf7bf70153e127440ce34de47c9036f0a2d0c65d1529454bd35ceefe4f"
+  - id: step-4
+    description: "Install the Fabric loader for Minecraft 1.21.1"
+    step:
+      action: run_vendor_installer
+      params:
+        installer: fabric_client
+        mc_version: "1.21.1"
+        installer_path: "%LOCALAPPDATA%\\SetupPal\\downloads\\fabric-installer-1.1.2.jar"
+  - id: step-5
+    description: "Download Sodium 0.6.13 for Minecraft 1.21.1 from Modrinth"
+    step:
+      action: download_artifact
+      params:
+        adapter: modrinth
+        id: sodium
+        version: "mc1.21.1-0.6.13-fabric"
+        destination: "%APPDATA%\\.minecraft\\mods\\sodium-fabric-0.6.13+mc1.21.1.jar"
+        expected_sha256: "e04599514d88e41765f710eeba59e3814909833396bc11b977f48fc2e7e50353"
+  - id: step-6
+    description: "Download Lithium 0.15.2 for Minecraft 1.21.1 from Modrinth"
+    step:
+      action: download_artifact
+      params:
+        adapter: modrinth
+        id: lithium
+        version: "mc1.21.1-0.15.2-fabric"
+        destination: "%APPDATA%\\.minecraft\\mods\\lithium-fabric-0.15.2+mc1.21.1.jar"
+        expected_sha256: "537bc45224e81dd1cbae25c1a972f14dac2456f0f8725ced3ca88ae41d0156d3"
+  - id: step-7
+    description: "Download FerriteCore 7.0.0 for Minecraft 1.21 from Modrinth"
+    step:
+      action: download_artifact
+      params:
+        adapter: modrinth
+        id: ferrite-core
+        version: "7.0.0-fabric"
+        destination: "%APPDATA%\\.minecraft\\mods\\ferritecore-7.0.0-fabric.jar"
+        expected_sha256: "2c31200d1f5de6a3cf5edc4c3d39200636e1e060c4b548dcf8249ef487660323"

@@ -1,49 +1,72 @@
 id: cpp20_dev
-name: Modern C++20 Development Environment (Windows / Cross-Platform)
+name: Modern C++20 Development Environment (LLVM Clang, CMake, Ninja, Git)
 triggers:
   - "c++20"
   - "c++ dev"
   - "cpp20"
   - "c++ toolchain"
-summary: "Installs LLVM/Clang or MSYS2 MinGW-w64 G++, CMake, Ninja, and Git via Winget, updates User PATH, and verifies C++20 compilation."
+  - "c++ development"
+summary: "Installs LLVM Clang, CMake, Ninja, and Git via winget, adds Clang's folder to your User PATH, and verifies that a C++20 program compiles and runs."
 steps:
   - id: step-1
-    description: "Install LLVM Clang C++20 toolchain via Winget"
+    description: "Install the LLVM Clang toolchain via winget"
     step:
       action: install_package
       params:
         ecosystem: winget
         package_id: LLVM.LLVM
-        version: "18.1.8"
         source_adapter: winget
   - id: step-2
-    description: "Install CMake build system generator via Winget"
+    description: "Install the CMake build system via winget"
     step:
       action: install_package
       params:
         ecosystem: winget
         package_id: Kitware.CMake
-        version: "3.30.2"
         source_adapter: winget
   - id: step-3
-    description: "Ensure LLVM bin directory is registered on User PATH"
+    description: "Install the Ninja build tool via winget"
     step:
-      action: add_to_user_path
+      action: install_package
       params:
-        directory: "C:\\\\Program Files\\\\LLVM\\\\bin"
+        ecosystem: winget
+        package_id: Ninja-build.Ninja
+        source_adapter: winget
   - id: step-4
-    description: "Verify clang++ --version responds cleanly"
+    description: "Install Git via winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: Git.Git
+        source_adapter: winget
+  - id: step-5
+    description: "Find clang++ and add its folder to the User PATH"
+    step:
+      action: add_discovered_tool_to_path
+      params:
+        binary: clang
+  - id: step-6
+    description: "Verify clang++ --version responds"
     step:
       action: run_verify_command
       params:
         binary: clang
         args:
           - "--version"
-  - id: step-5
-    description: "Verify cmake --version responds cleanly"
+  - id: step-7
+    description: "Verify cmake --version responds"
     step:
       action: run_verify_command
       params:
         binary: cmake
+        args:
+          - "--version"
+  - id: step-8
+    description: "Verify ninja --version responds"
+    step:
+      action: run_verify_command
+      params:
+        binary: ninja
         args:
           - "--version"

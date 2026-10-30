@@ -46,8 +46,13 @@ pub enum Step {
         adapter: AdapterKind,
         id: String,
         version: String,
+        /// Relative paths resolve against the execution working directory. A leading
+        /// `%APPDATA%`, `%LOCALAPPDATA%`, or `%USERPROFILE%` token expands to that folder.
         destination: PathBuf,
-        expected_sha256: String,
+        /// Real upstream digest pinned by the recipe, or `None` when no checksum is known.
+        /// When present it takes precedence over adapter metadata and is enforced after download.
+        #[serde(default)]
+        expected_sha256: Option<String>,
     },
     VerifyHash {
         file_path: PathBuf,
@@ -64,6 +69,27 @@ pub enum Step {
         binary: AllowedBinary,
         args: Vec<String>,
     },
+    /// Runs a known vendor installer headlessly with a fixed, typed argument set.
+    RunVendorInstaller {
+        installer: VendorInstaller,
+        mc_version: String,
+        /// Installer file downloaded by an earlier `DownloadArtifact` step (same path rules).
+        installer_path: PathBuf,
+    },
+    /// Locates an installed tool on disk (winget install locations, vendor registry keys)
+    /// and adds its directory to the User PATH.
+    AddDiscoveredToolToPath {
+        binary: AllowedBinary,
+    },
+}
+
+/// Closed set of vendor installers SetupPal knows how to run unattended.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum VendorInstaller {
+    /// Fabric mod loader for Minecraft Java Edition, installed into the existing
+    /// launcher data folder: `java -jar <jar> client -dir <.minecraft> -mcversion <v> -noprofile`.
+    FabricClient,
 }
 
 impl Step {
@@ -96,6 +122,10 @@ impl Step {
                     "github.com".to_string(),
                     Some(format!("https://github.com/{package_id}")),
                 ),
+                Ecosystem::Cargo => (
+                    "crates.io".to_string(),
+                    Some(format!("https://crates.io/crates/{package_id}")),
+                ),
                 Ecosystem::Vendor => ("Official Vendor Domain".to_string(), None),
             },
             Self::DownloadArtifact { id, .. } => {
@@ -114,6 +144,13 @@ impl Step {
             Self::AddToUserPath { .. } => ("Windows Registry (HKCU)".to_string(), None),
             Self::CreateIsolatedEnv { .. } => ("Local Isolated Directory".to_string(), None),
             Self::RunVerifyCommand { .. } => ("Local Direct Process Execution".to_string(), None),
+            Self::RunVendorInstaller { installer, .. } => match installer {
+                VendorInstaller::FabricClient => (
+                    "maven.fabricmc.net".to_string(),
+                    Some("https://fabricmc.net/use/installer/".to_string()),
+                ),
+            },
+            Self::AddDiscoveredToolToPath { .. } => ("Windows Registry (HKCU)".to_string(), None),
         }
     }
 }
@@ -127,6 +164,7 @@ pub enum Ecosystem {
     Modrinth,
     GitHub,
     Vendor,
+    Cargo,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
@@ -138,6 +176,7 @@ pub enum AdapterKind {
     Modrinth,
     GitHubReleases,
     OfficialVendorUrl,
+    Cargo,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -163,6 +202,7 @@ pub enum AllowedBinary {
     Winget,
     Cargo,
     Rustc,
+    Ninja,
 }
 
 impl AllowedBinary {
@@ -179,6 +219,7 @@ impl AllowedBinary {
         Self::Cmake,
         Self::Gpp,
         Self::Clang,
+        Self::Ninja,
     ];
 
     pub const fn executable_name(self) -> &'static str {
@@ -195,6 +236,7 @@ impl AllowedBinary {
             Self::Winget => "winget",
             Self::Cargo => "cargo",
             Self::Rustc => "rustc",
+            Self::Ninja => "ninja",
         }
     }
 

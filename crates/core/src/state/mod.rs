@@ -40,6 +40,9 @@ pub enum RollbackData {
         ecosystem: String,
         package_id: String,
         uninstall_command: Option<String>,
+        /// Exact uninstall argv (binary first); preferred over `uninstall_command`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uninstall_argv: Option<Vec<String>>,
     },
     FileDownload {
         destination: PathBuf,
@@ -47,6 +50,20 @@ pub enum RollbackData {
     IsolatedEnv {
         path: PathBuf,
     },
+    /// Files or folders a step created (mod jars, loader profiles, portable tools).
+    CreatedPaths {
+        paths: Vec<PathBuf>,
+    },
+}
+
+fn remove_path(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else if path.exists() {
+        std::fs::remove_file(path)
+    } else {
+        Ok(())
+    }
 }
 
 /// Append-only transaction state logger.
@@ -216,25 +233,54 @@ impl StateLogger {
                     format!("Isolated directory already removed: {} [Post-Undo Verified: Passed]", path.display())
                 }
             }
+            Some(RollbackData::CreatedPaths { paths }) => {
+                if tx.dry_run {
+                    format!(
+                        "[Dry Run] Would delete: {}",
+                        paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+                    )
+                } else {
+                    for p in paths {
+                        remove_path(p)?;
+                    }
+                    let verified = paths.iter().all(|p| !p.exists());
+                    format!(
+                        "Deleted {} [Post-Undo Verified: {}]",
+                        paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "),
+                        if verified { "Passed" } else { "Failed" }
+                    )
+                }
+            }
             Some(RollbackData::PackageInstall {
                 ecosystem,
                 package_id,
                 uninstall_command,
+                uninstall_argv,
             }) => {
+                let argv: Option<Vec<String>> = uninstall_argv.clone().or_else(|| {
+                    uninstall_command
+                        .as_ref()
+                        .map(|c| c.split_whitespace().map(str::to_string).collect())
+                });
+                let cmd_str = argv.as_ref().map(|a| a.join(" "));
                 if tx.dry_run {
                     format!(
                         "[Dry Run] Would uninstall {} ({}) via: {}",
                         package_id,
                         ecosystem,
-                        uninstall_command.as_deref().unwrap_or("none")
+                        cmd_str.as_deref().unwrap_or("none")
                     )
-                } else if let Some(cmd_str) = uninstall_command {
-                    let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-                    if let Some((bin_name, args)) = parts.split_first() {
+                } else if let (Some(argv), Some(cmd_str)) = (argv, cmd_str) {
+                    if let Some((bin_name, args)) = argv.split_first() {
                         let paths = os_provider.refresh_and_get_path().await.unwrap_or_default();
-                        if let Some(bin_path) = os_provider.which_in_paths(bin_name, &paths) {
-                            let arg_strings: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-                            match os_provider.run_command(&bin_path, &arg_strings, &paths).await {
+                        let direct = Path::new(bin_name);
+                        let resolved = if direct.is_absolute() && direct.is_file() {
+                            Some(direct.to_path_buf())
+                        } else {
+                            os_provider.which_in_paths(bin_name, &paths)
+                        };
+                        if let Some(bin_path) = resolved {
+                            match os_provider.run_command(&bin_path, args, &paths).await {
                                 Ok(out) if out.exit_code == Some(0) => {
                                     format!("Successfully uninstalled package {} ({}) [Post-Undo Verified: Passed]", package_id, ecosystem)
                                 }

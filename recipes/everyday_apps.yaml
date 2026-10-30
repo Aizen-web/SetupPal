@@ -1,0 +1,42 @@
+id: everyday_apps
+name: Everyday Apps (7-Zip, VLC, and Git)
+triggers:
+  - "7-zip, vlc, and git"
+  - "everyday apps"
+  - "7-zip"
+  - "7zip"
+  - "vlc"
+summary: "Installs 7-Zip, VLC media player, and Git via winget and checks that each one is registered."
+steps:
+  - id: step-1
+    description: "Install 7-Zip via winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: 7zip.7zip
+        source_adapter: winget
+  - id: step-2
+    description: "Install VLC media player via winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: VideoLAN.VLC
+        source_adapter: winget
+  - id: step-3
+    description: "Install Git via winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: Git.Git
+        source_adapter: winget
+  - id: step-4
+    description: "Verify git --version responds"
+    step:
+      action: run_verify_command
+      params:
+        binary: git
+        args:
+          - "--version"

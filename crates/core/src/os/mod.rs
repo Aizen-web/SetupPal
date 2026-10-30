@@ -1,3 +1,5 @@
+#[cfg(test)]
+pub mod mock;
 pub mod unix;
 pub mod windows;
 
@@ -39,13 +41,32 @@ pub trait OsProvider: Send + Sync {
     /// Restores User PATH to a previous raw value.
     async fn restore_user_path(&self, previous_raw: &str) -> Result<(), CoreError>;
 
-    /// Runs a binary directly (never via a shell interpreter) with explicit arguments.
+    /// Runs a binary directly (never via a shell interpreter) with explicit arguments
+    /// in the process working directory.
     async fn run_command(
         &self,
         binary: &Path,
         args: &[String],
         extra_path: &[PathBuf],
+    ) -> Result<CommandOutput, CoreError> {
+        self.run_command_in_dir(binary, args, extra_path, None).await
+    }
+
+    /// Runs a binary directly (never via a shell interpreter) with explicit arguments.
+    /// `cwd` sets the child's working directory; `None` inherits the current one.
+    async fn run_command_in_dir(
+        &self,
+        binary: &Path,
+        args: &[String],
+        extra_path: &[PathBuf],
+        cwd: Option<&Path>,
     ) -> Result<CommandOutput, CoreError>;
+
+    /// Reads a string value from the Windows registry (`value: None` reads the default value).
+    /// Returns `None` on other platforms or when the key or value does not exist.
+    async fn read_registry_string(&self, _key: &str, _value: Option<&str>) -> Option<String> {
+        None
+    }
 }
 
 /// Default platform provider that delegates to Windows or Unix implementations.
@@ -139,15 +160,28 @@ impl OsProvider for PlatformOsProvider {
         }
     }
 
-    async fn run_command(
+    async fn read_registry_string(&self, key: &str, value: Option<&str>) -> Option<String> {
+        if cfg!(target_os = "windows") {
+            windows::query_registry_string(key, value).await
+        } else {
+            None
+        }
+    }
+
+    async fn run_command_in_dir(
         &self,
         binary: &Path,
         args: &[String],
         extra_path: &[PathBuf],
+        cwd: Option<&Path>,
     ) -> Result<CommandOutput, CoreError> {
         let mut cmd = tokio::process::Command::new(binary);
         cmd.args(args);
         cmd.stdin(std::process::Stdio::null());
+        cmd.kill_on_drop(true);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
 
         if !extra_path.is_empty() {
             if let Ok(joined) = std::env::join_paths(extra_path) {

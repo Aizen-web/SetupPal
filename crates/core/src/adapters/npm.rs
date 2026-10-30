@@ -1,22 +1,20 @@
 use std::path::Path;
 use std::sync::Arc;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::adapters::{
-    AdapterError, ExecutionContext, ExecutionReceipt, FetchedArtifact, PackageMetadata,
-    SourceAdapter, VerificationResult,
+    age_days_since, fetch_with_digests, parse_rfc3339, registry_http_client, AdapterError,
+    ExecutionContext, ExecutionReceipt, FetchedArtifact, PackageMetadata, SourceAdapter,
+    VerificationResult,
 };
 use crate::os::OsProvider;
-use crate::safety::hash::{compute_file_sha256, verify_file_sha256};
-use crate::safety::policy::is_url_domain_allowlisted;
 use crate::types::AdapterKind;
 
 pub const DEFAULT_NPM_BASE_URL: &str = "https://registry.npmjs.org";
 
 /// Native adapter for the Node Package Manager (npm) registry.
-/// Resolves versions, tarballs, integrity digests, and manages package installations.
+/// Installs run in the execution working directory (the user's project folder).
 pub struct NpmAdapter {
     http: reqwest::Client,
     os_provider: Arc<dyn OsProvider>,
@@ -36,32 +34,54 @@ struct NpmResponse {
 
 #[derive(Debug, Deserialize, Clone)]
 struct NpmVersionInfo {
-    #[allow(dead_code)]
-    #[serde(default)]
-    version: String,
     dist: NpmDist,
+    #[serde(default)]
+    scripts: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 struct NpmDist {
     tarball: String,
-    #[allow(dead_code)]
-    #[serde(default)]
-    shasum: Option<String>,
     #[serde(default)]
     integrity: Option<String>,
+}
+
+/// Converts an npm `sha512-<base64>` integrity string into lowercase hex.
+fn integrity_to_sha512_hex(integrity: &str) -> Option<String> {
+    let b64 = integrity.strip_prefix("sha512-")?;
+    let bytes = decode_base64(b64)?;
+    (bytes.len() == 64).then(|| hex::encode(bytes))
+}
+
+fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits = 0;
+    for c in input.bytes() {
+        let val = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => return None,
+        } as u32;
+        buf = (buf << 6) | val;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
 }
 
 impl NpmAdapter {
     pub fn new(os_provider: Arc<dyn OsProvider>) -> Self {
         Self {
-            http: reqwest::Client::builder()
-                .user_agent("SetupPal-Orchestrator/0.1.0")
-                .connect_timeout(std::time::Duration::from_secs(5))
-                .timeout(std::time::Duration::from_secs(30))
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+            http: registry_http_client(30),
             os_provider,
             base_url: DEFAULT_NPM_BASE_URL.to_string(),
         }
@@ -79,62 +99,20 @@ impl NpmAdapter {
         }
     }
 
-    /// Curated metadata fallback for flagship packages (ensures offline reliability & instant response).
-    pub fn known_package_metadata(
-        package_id: &str,
-        version: Option<&str>,
-    ) -> Option<PackageMetadata> {
-        let id_lower = package_id.to_ascii_lowercase();
-        let (resolved_ver, default_hash, download_url, age_days, downloads) = match id_lower.as_str() {
-            "typescript" => (
-                version.unwrap_or("5.6.2"),
-                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "https://registry.npmjs.org/typescript/-/typescript-5.6.2.tgz",
-                300,
-                200_000_000,
-            ),
-            "prettier" => (
-                version.unwrap_or("3.3.3"),
-                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "https://registry.npmjs.org/prettier/-/prettier-3.3.3.tgz",
-                200,
-                150_000_000,
-            ),
-            "eslint" => (
-                version.unwrap_or("9.10.0"),
-                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "https://registry.npmjs.org/eslint/-/eslint-9.10.0.tgz",
-                180,
-                180_000_000,
-            ),
-            _ => return None,
-        };
-
-        Some(PackageMetadata {
-            adapter: AdapterKind::Npm,
-            package_id: package_id.to_string(),
-            resolved_version: resolved_ver.to_string(),
-            published_at: Some(Utc::now()),
-            age_days: Some(age_days),
-            download_count: Some(downloads),
-            download_url: Some(download_url.to_string()),
-            expected_sha256: Some(default_hash.to_string()),
-            expected_sha512: None,
-            install_script_snippet: None,
-        })
+    fn package_spec(metadata: &PackageMetadata) -> String {
+        if metadata.resolved_version.is_empty() || metadata.resolved_version == "latest" {
+            metadata.package_id.clone()
+        } else {
+            format!("{}@{}", metadata.package_id, metadata.resolved_version)
+        }
     }
 
-    fn calculate_age_days(iso_str: Option<&str>) -> Option<u64> {
-        let iso = iso_str?;
-        let parsed = DateTime::parse_from_rfc3339(iso).ok()?;
-        let now = Utc::now();
-        let duration = now.signed_duration_since(parsed.with_timezone(&Utc));
-        let days = duration.num_days();
-        if days >= 0 {
-            Some(days as u64)
-        } else {
-            Some(0)
-        }
+    fn install_script_snippet(scripts: &std::collections::HashMap<String, String>) -> Option<String> {
+        let lifecycle: Vec<String> = ["preinstall", "install", "postinstall"]
+            .iter()
+            .filter_map(|k| scripts.get(*k).map(|v| format!("{k}: {v}")))
+            .collect();
+        (!lifecycle.is_empty()).then(|| lifecycle.join("\n"))
     }
 }
 
@@ -149,21 +127,9 @@ impl SourceAdapter for NpmAdapter {
         package_id: &str,
         version: Option<&str>,
     ) -> Result<PackageMetadata, AdapterError> {
-        if let Some(known) = Self::known_package_metadata(package_id, version) {
-            return Ok(known);
-        }
-
-        let url = format!("{}/{}", self.base_url, package_id);
-
-        let response = match self.http.get(&url).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                if let Some(known) = Self::known_package_metadata(package_id, version) {
-                    return Ok(known);
-                }
-                return Err(AdapterError::Http(e));
-            }
-        };
+        let encoded = package_id.replace('/', "%2F");
+        let url = format!("{}/{}", self.base_url, encoded);
+        let response = self.http.get(&url).send().await?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(AdapterError::PackageNotFound {
@@ -171,72 +137,32 @@ impl SourceAdapter for NpmAdapter {
                 package_id: package_id.to_string(),
             });
         }
+        let body: NpmResponse = response.error_for_status()?.json().await?;
 
-        let resp_body = match response.error_for_status() {
-            Ok(r) => match r.json::<NpmResponse>().await {
-                Ok(data) => data,
-                Err(e) => {
-                    if let Some(known) = Self::known_package_metadata(package_id, version) {
-                        return Ok(known);
-                    }
-                    return Err(AdapterError::Http(e));
-                }
-            },
-            Err(e) => {
-                if let Some(known) = Self::known_package_metadata(package_id, version) {
-                    return Ok(known);
-                }
-                return Err(AdapterError::Http(e));
-            }
+        let resolved_version = match version {
+            Some(v) if !v.is_empty() && v != "latest" => v.to_string(),
+            _ => body.dist_tags.get("latest").cloned().ok_or_else(|| {
+                AdapterError::Other(format!("npm package {package_id} has no `latest` dist-tag"))
+            })?,
         };
 
-        let resolved_version = if let Some(ver) = version {
-            if !ver.is_empty() && ver != "latest" {
-                ver.to_string()
-            } else {
-                resp_body
-                    .dist_tags
-                    .get("latest")
-                    .cloned()
-                    .unwrap_or_else(|| "1.0.0".to_string())
-            }
-        } else {
-            resp_body
-                .dist_tags
-                .get("latest")
-                .cloned()
-                .unwrap_or_else(|| "1.0.0".to_string())
-        };
-
-        let ver_info = resp_body.versions.get(&resolved_version);
-        let download_url = ver_info.map(|v| v.dist.tarball.clone());
-        let expected_sha512 = ver_info.and_then(|v| {
-            v.dist
-                .integrity
-                .as_ref()
-                .filter(|s| s.starts_with("sha512-"))
-                .cloned()
-        });
-
-        let age_days = resp_body
-            .time
-            .get(&resolved_version)
-            .or_else(|| resp_body.time.get("modified"))
-            .and_then(|t| Self::calculate_age_days(Some(t)))
-            .or(Some(180));
-
-        Ok(PackageMetadata {
+        let ver_info = body.versions.get(&resolved_version).ok_or_else(|| AdapterError::PackageNotFound {
             adapter: AdapterKind::Npm,
-            package_id: resp_body.name,
-            resolved_version,
-            published_at: Some(Utc::now()),
-            age_days,
-            download_count: Some(1_000_000),
-            download_url,
-            expected_sha256: None,
-            expected_sha512,
-            install_script_snippet: None,
-        })
+            package_id: format!("{package_id}@{resolved_version}"),
+        })?;
+
+        let published = body.time.get(&resolved_version).map(String::as_str);
+        let mut meta = PackageMetadata::bare(AdapterKind::Npm, body.name.clone(), resolved_version.clone());
+        meta.published_at = parse_rfc3339(published);
+        meta.age_days = age_days_since(published);
+        meta.download_url = Some(ver_info.dist.tarball.clone());
+        meta.expected_sha512 = ver_info
+            .dist
+            .integrity
+            .as_deref()
+            .and_then(integrity_to_sha512_hex);
+        meta.install_script_snippet = Self::install_script_snippet(&ver_info.scripts);
+        Ok(meta)
     }
 
     async fn fetch_artifact(
@@ -245,60 +171,7 @@ impl SourceAdapter for NpmAdapter {
         destination: &Path,
         ctx: &ExecutionContext,
     ) -> Result<FetchedArtifact, AdapterError> {
-        let download_url = metadata.download_url.as_deref().ok_or_else(|| {
-            AdapterError::Other(format!(
-                "npm metadata for {} does not contain a download URL",
-                metadata.package_id
-            ))
-        })?;
-
-        if !is_url_domain_allowlisted(download_url).unwrap_or(false) {
-            return Err(AdapterError::UnapprovedDomain {
-                url: download_url.to_string(),
-            });
-        }
-
-        if ctx.dry_run {
-            return Ok(FetchedArtifact {
-                adapter: AdapterKind::Npm,
-                package_id: metadata.package_id.clone(),
-                version: metadata.resolved_version.clone(),
-                local_path: destination.to_path_buf(),
-                computed_sha256: metadata
-                    .expected_sha256
-                    .clone()
-                    .unwrap_or_else(|| "0".repeat(64)),
-                size_bytes: 1024,
-            });
-        }
-
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let resp = self
-            .http
-            .get(download_url)
-            .send()
-            .await
-            .map_err(AdapterError::Http)?;
-
-        let bytes = resp.bytes().await.map_err(AdapterError::Http)?;
-        std::fs::write(destination, &bytes)?;
-
-        let computed_sha256 = compute_file_sha256(destination)?;
-        if let Some(ref expected) = metadata.expected_sha256 {
-            verify_file_sha256(destination, expected)?;
-        }
-
-        Ok(FetchedArtifact {
-            adapter: AdapterKind::Npm,
-            package_id: metadata.package_id.clone(),
-            version: metadata.resolved_version.clone(),
-            local_path: destination.to_path_buf(),
-            computed_sha256,
-            size_bytes: bytes.len() as u64,
-        })
+        fetch_with_digests(&self.http, metadata, destination, ctx).await
     }
 
     async fn install(
@@ -307,21 +180,25 @@ impl SourceAdapter for NpmAdapter {
         _artifact: Option<&FetchedArtifact>,
         ctx: &ExecutionContext,
     ) -> Result<ExecutionReceipt, AdapterError> {
-        let pkg_spec = if metadata.resolved_version.is_empty() || metadata.resolved_version == "latest" {
-            metadata.package_id.clone()
-        } else {
-            format!("{}@{}", metadata.package_id, metadata.resolved_version)
-        };
+        let pkg_spec = Self::package_spec(metadata);
+        let project = ctx.working_dir.display().to_string();
+        let rollback_hint = Some(format!("npm uninstall {} --prefix {}", metadata.package_id, project));
 
         if ctx.dry_run {
-            return Ok(ExecutionReceipt {
-                adapter: AdapterKind::Npm,
-                package_id: metadata.package_id.clone(),
-                version: metadata.resolved_version.clone(),
-                dry_run: true,
-                changes_made: vec![format!("[Dry Run] Would execute: npm install {}", pkg_spec)],
-                rollback_hint: Some(format!("npm uninstall {}", metadata.package_id)),
-            });
+            return Ok(ExecutionReceipt::new(
+                AdapterKind::Npm,
+                metadata.package_id.clone(),
+                metadata.resolved_version.clone(),
+                true,
+                vec![format!("[Dry Run] Would execute in {project}: npm install {pkg_spec}")],
+                rollback_hint,
+            ));
+        }
+
+        if !ctx.working_dir.is_dir() {
+            return Err(AdapterError::Other(format!(
+                "project folder {project} does not exist"
+            )));
         }
 
         let paths = self
@@ -329,7 +206,6 @@ impl SourceAdapter for NpmAdapter {
             .refresh_and_get_path()
             .await
             .map_err(|e| AdapterError::Other(e.to_string()))?;
-
         let npm_bin = self
             .os_provider
             .which_in_paths("npm", &paths)
@@ -341,10 +217,9 @@ impl SourceAdapter for NpmAdapter {
             "--no-audit".to_string(),
             "--no-fund".to_string(),
         ];
-
         let out = self
             .os_provider
-            .run_command(&npm_bin, &args, &paths)
+            .run_command_in_dir(&npm_bin, &args, &paths, Some(&ctx.working_dir))
             .await
             .map_err(|e| AdapterError::Other(e.to_string()))?;
 
@@ -356,17 +231,24 @@ impl SourceAdapter for NpmAdapter {
             });
         }
 
-        Ok(ExecutionReceipt {
-            adapter: AdapterKind::Npm,
-            package_id: metadata.package_id.clone(),
-            version: metadata.resolved_version.clone(),
-            dry_run: false,
-            changes_made: vec![format!(
-                "Successfully installed {} ({}) via npm",
-                metadata.package_id, metadata.resolved_version
+        Ok(ExecutionReceipt::new(
+            AdapterKind::Npm,
+            metadata.package_id.clone(),
+            metadata.resolved_version.clone(),
+            false,
+            vec![format!(
+                "Installed {} ({}) into {}\\node_modules via npm",
+                metadata.package_id, metadata.resolved_version, project
             )],
-            rollback_hint: Some(format!("npm uninstall {}", metadata.package_id)),
-        })
+            rollback_hint,
+        )
+        .with_uninstall_argv(vec![
+            "npm".to_string(),
+            "uninstall".to_string(),
+            metadata.package_id.clone(),
+            "--prefix".to_string(),
+            project,
+        ]))
     }
 
     async fn verify(
@@ -374,52 +256,89 @@ impl SourceAdapter for NpmAdapter {
         metadata: &PackageMetadata,
         ctx: &ExecutionContext,
     ) -> Result<VerificationResult, AdapterError> {
+        let command_run = format!("npm ls {} --depth=0", metadata.package_id);
         let paths = self
             .os_provider
             .refresh_and_get_path()
             .await
             .map_err(|e| AdapterError::Other(e.to_string()))?;
-
-        let npm_bin = match self.os_provider.which_in_paths("npm", &paths) {
-            Some(b) => b,
-            None => {
-                return Ok(VerificationResult {
-                    passed: ctx.dry_run,
-                    command_run: format!("npm list {}", metadata.package_id),
-                    exit_code: if ctx.dry_run { Some(0) } else { Some(1) },
-                    stdout: if ctx.dry_run {
-                        format!("[Dry Run] Verified {}", metadata.package_id)
-                    } else {
-                        String::new()
-                    },
-                    stderr: if ctx.dry_run {
-                        String::new()
-                    } else {
-                        "npm executable not found".to_string()
-                    },
-                });
-            }
+        let Some(npm_bin) = self.os_provider.which_in_paths("npm", &paths) else {
+            return Ok(VerificationResult::failed(command_run, "npm executable not found"));
         };
 
         let args = vec![
-            "list".to_string(),
+            "ls".to_string(),
             metadata.package_id.clone(),
             "--depth=0".to_string(),
         ];
-
         let out = self
             .os_provider
-            .run_command(&npm_bin, &args, &paths)
+            .run_command_in_dir(&npm_bin, &args, &paths, Some(&ctx.working_dir))
             .await
             .map_err(|e| AdapterError::Other(e.to_string()))?;
 
-        let passed = out.exit_code == Some(0) || out.stdout.contains(&metadata.package_id);
+        let passed = out.exit_code == Some(0) && out.stdout.contains(&format!("{}@", metadata.package_id));
         Ok(VerificationResult {
             passed,
-            command_run: format!("npm list {}", metadata.package_id),
+            command_run: format!("{command_run} (in {})", ctx.working_dir.display()),
             exit_code: out.exit_code,
             stdout: out.stdout,
             stderr: out.stderr,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::os::mock::{ok, MockOsProvider};
+    use std::path::PathBuf;
+
+    #[test]
+    fn integrity_decodes_to_sha512_hex() {
+        // sha512 of the empty string, base64-encoded as npm would publish it.
+        let integrity = "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==";
+        let hexed = integrity_to_sha512_hex(integrity).unwrap();
+        assert!(hexed.starts_with("cf83e1357eefb8bd"));
+        assert_eq!(hexed.len(), 128);
+        assert!(integrity_to_sha512_hex("sha1-abc").is_none());
+    }
+
+    #[tokio::test]
+    async fn install_runs_in_project_dir() {
+        let project = tempfile::tempdir().unwrap();
+        let os = Arc::new(
+            MockOsProvider::new()
+                .with_binary("npm", "C:/mock/npm.cmd")
+                .on("npm", &["install"], ok("added 1 package")),
+        );
+        let adapter = NpmAdapter::new(os.clone());
+        let meta = PackageMetadata::bare(AdapterKind::Npm, "typescript", "5.6.2");
+        let ctx = ExecutionContext {
+            dry_run: false,
+            working_dir: project.path().to_path_buf(),
+            isolated_env: None,
+        };
+        let receipt = adapter.install(&meta, None, &ctx).await.unwrap();
+        let calls = os.calls();
+        assert_eq!(calls[0].cwd.as_deref(), Some(project.path()));
+        assert_eq!(calls[0].args[1], "typescript@5.6.2");
+        let argv = receipt.uninstall_argv.unwrap();
+        assert!(argv.contains(&"--prefix".to_string()));
+    }
+
+    #[tokio::test]
+    async fn verify_requires_package_in_ls_output() {
+        let os = MockOsProvider::new()
+            .with_binary("npm", "C:/mock/npm.cmd")
+            .on("npm", &["ls"], ok("my-app@1.0.0 C:\\proj\n`-- (empty)"));
+        let adapter = NpmAdapter::new(Arc::new(os));
+        let meta = PackageMetadata::bare(AdapterKind::Npm, "typescript", "5.6.2");
+        let ctx = ExecutionContext {
+            dry_run: false,
+            working_dir: PathBuf::from("."),
+            isolated_env: None,
+        };
+        assert!(!adapter.verify(&meta, &ctx).await.unwrap().passed);
     }
 }

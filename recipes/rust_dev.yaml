@@ -5,7 +5,7 @@ triggers:
   - "rustup"
   - "cargo"
   - "systems"
-summary: "Installs Rust toolchain installer via Winget, verifies cargo and rustc compiler toolchains, and registers User environment."
+summary: "Installs rustup and Git via winget, then checks that rustc and cargo respond on the command line."
 steps:
   - id: step-1
     description: "Install Rustup toolchain installer via Winget"
@@ -14,7 +14,6 @@ steps:
       params:
         ecosystem: winget
         package_id: Rustlang.Rustup
-        version: "1.27.1"
         source_adapter: winget
   - id: step-2
     description: "Install Git version control system via Winget"
@@ -23,7 +22,6 @@ steps:
       params:
         ecosystem: winget
         package_id: Git.Git
-        version: "2.46.0"
         source_adapter: winget
   - id: step-3
     description: "Verify rustc --version responds cleanly"

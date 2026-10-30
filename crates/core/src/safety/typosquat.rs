@@ -71,6 +71,26 @@ pub fn top_packages_for_ecosystem(ecosystem: Ecosystem) -> &'static [&'static st
             "Microsoft.VisualStudioCode",
             "Rustlang.Rustup",
             "MSYS2.MSYS2",
+            "Ninja-build.Ninja",
+            "7zip.7zip",
+            "VideoLAN.VLC",
+            "OBSProject.OBSStudio",
+        ],
+        Ecosystem::Cargo => &[
+            "ripgrep",
+            "bat",
+            "fd-find",
+            "tokei",
+            "hyperfine",
+            "just",
+            "zoxide",
+            "starship",
+            "cargo-edit",
+            "cargo-watch",
+            "cargo-nextest",
+            "wasm-pack",
+            "mdbook",
+            "tauri-cli",
         ],
         Ecosystem::Modrinth => &[
             "sodium",
@@ -84,6 +104,10 @@ pub fn top_packages_for_ecosystem(ecosystem: Ecosystem) -> &'static [&'static st
         ],
         Ecosystem::GitHub | Ecosystem::Vendor => &[],
     }
+}
+
+fn winget_publisher(id: &str) -> &str {
+    id.split('.').next().unwrap_or(id)
 }
 
 /// Normalizes common Unicode confusable homoglyphs (e.g. Cyrillic/Greek lookalikes) to standard ASCII.
@@ -179,6 +203,12 @@ pub fn detect_typosquat(ecosystem: Ecosystem, requested_package: &str) -> Option
 
     for &popular in corpus {
         let pop_norm = popular.to_ascii_lowercase();
+
+        // winget publisher namespaces are moderated, so `Python.Python.3.13` is a sibling
+        // of `Python.Python.3.12`, not a lookalike. Only other publishers can squat a name.
+        if ecosystem == Ecosystem::Winget && winget_publisher(&req_norm) == winget_publisher(&pop_norm) {
+            continue;
+        }
 
         // Calculate distance on raw normalized and homoglyph-normalized strings
         let dist_raw = levenshtein(&req_norm, &pop_norm);

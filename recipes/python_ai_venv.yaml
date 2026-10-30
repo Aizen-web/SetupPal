@@ -6,15 +6,23 @@ triggers:
   - "pytorch"
   - "jupyter"
   - "python"
-summary: "Creates an isolated Python venv and installs pinned, hash-verified NumPy, Pandas, and Colorama packages from PyPI."
+summary: "Installs Python 3.12 via winget, creates an isolated venv in %USERPROFILE%\\.venvs\\python-ai, and installs pinned NumPy, Pandas, and Colorama from PyPI into it."
 steps:
+  - id: step-0
+    description: "Install Python 3.12 via winget"
+    step:
+      action: install_package
+      params:
+        ecosystem: winget
+        package_id: Python.Python.3.12
+        source_adapter: winget
   - id: step-1
-    description: "Create isolated Python virtual environment in ./.venv"
+    description: 'Create isolated Python virtual environment in %USERPROFILE%\.venvs\python-ai'
     step:
       action: create_isolated_env
       params:
         kind: python_venv
-        path: "./.venv"
+        path: "%USERPROFILE%\\.venvs\\python-ai"
   - id: step-2
     description: "Install numpy inside isolated environment"
     step:

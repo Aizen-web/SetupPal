@@ -38,10 +38,13 @@ impl Recipe {
                 return true;
             }
 
-            // Word-level fuzzy similarity
-            for word in &words {
-                if strsim::jaro_winkler(word, &trigger_lower) > 0.88 {
-                    return true;
+            // Word-level fuzzy only for single-token triggers. Matching "Development"
+            // against "c++ development" would otherwise steal other recipes' names.
+            if !trigger_lower.contains(char::is_whitespace) {
+                for word in &words {
+                    if strsim::jaro_winkler(word, &trigger_lower) > 0.88 {
+                        return true;
+                    }
                 }
             }
         }
@@ -61,6 +64,17 @@ impl Recipe {
         }
     }
 }
+
+/// Every file in `recipes/`; the `embedded_manifests_cover_recipes_dir` test keeps this in sync.
+const EMBEDDED_MANIFESTS: &[(&str, &str)] = &[
+    ("cpp20_dev.yaml", include_str!("../../../../recipes/cpp20_dev.yaml")),
+    ("everyday_apps.yaml", include_str!("../../../../recipes/everyday_apps.yaml")),
+    ("minecraft_fabric_1_21.yaml", include_str!("../../../../recipes/minecraft_fabric_1_21.yaml")),
+    ("obs_studio.yaml", include_str!("../../../../recipes/obs_studio.yaml")),
+    ("python_ai_venv.yaml", include_str!("../../../../recipes/python_ai_venv.yaml")),
+    ("rust_dev.yaml", include_str!("../../../../recipes/rust_dev.yaml")),
+    ("web_fullstack_ts.yaml", include_str!("../../../../recipes/web_fullstack_ts.yaml")),
+];
 
 /// Manages curated YAML setup recipes with built-in embedded defaults
 /// so the binary works even if invoked outside the repository working directory.
@@ -103,13 +117,8 @@ impl RecipeStore {
     }
 
     pub fn embedded_recipes() -> Result<Vec<Recipe>, CoreError> {
-        let raw_manifests = [
-            include_str!("../../../../recipes/cpp20_dev.yaml"),
-            include_str!("../../../../recipes/python_ai_venv.yaml"),
-            include_str!("../../../../recipes/minecraft_fabric_1_21.yaml"),
-        ];
-        let mut list = Vec::with_capacity(raw_manifests.len());
-        for yaml in raw_manifests {
+        let mut list = Vec::with_capacity(EMBEDDED_MANIFESTS.len());
+        for (_, yaml) in EMBEDDED_MANIFESTS {
             list.push(serde_yaml::from_str::<Recipe>(yaml)?);
         }
         Ok(list)
@@ -121,5 +130,96 @@ impl RecipeStore {
 
     pub fn list(&self) -> &[Recipe] {
         &self.recipes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::safety::policy::{evaluate_step_policy, is_placeholder_sha256};
+    use crate::types::{AdapterKind, Ecosystem, Step};
+
+    fn recipes_dir() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../recipes")
+    }
+
+    fn yaml_files() -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(recipes_dir())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".yaml") || n.ends_with(".yml"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn embedded_manifests_cover_recipes_dir() {
+        let embedded: Vec<String> = EMBEDDED_MANIFESTS.iter().map(|(n, _)| n.to_string()).collect();
+        assert_eq!(embedded, yaml_files());
+        assert_eq!(RecipeStore::embedded_recipes().unwrap().len(), yaml_files().len());
+    }
+
+    #[test]
+    fn every_recipe_file_parses_and_matches_embedded_copy() {
+        let embedded = RecipeStore::embedded_recipes().unwrap();
+        for name in yaml_files() {
+            let raw = std::fs::read_to_string(recipes_dir().join(&name)).unwrap();
+            let recipe: Recipe = serde_yaml::from_str(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(embedded.contains(&recipe), "{name} differs from its embedded copy");
+        }
+    }
+
+    #[test]
+    fn recipes_pass_policy_and_carry_no_placeholder_or_stale_pins() {
+        for recipe in RecipeStore::embedded_recipes().unwrap() {
+            let mut ids = std::collections::HashSet::new();
+            for s in &recipe.steps {
+                assert!(ids.insert(&s.id), "{}: duplicate step id {}", recipe.id, s.id);
+                let violations = evaluate_step_policy(&s.step, &s.description);
+                assert!(violations.is_empty(), "{} {}: {violations:?}", recipe.id, s.id);
+                match &s.step {
+                    Step::DownloadArtifact { expected_sha256: Some(h), .. } => {
+                        assert!(!is_placeholder_sha256(h), "{} {}", recipe.id, s.id);
+                    }
+                    Step::InstallPackage {
+                        ecosystem: Ecosystem::Winget,
+                        version,
+                        source_adapter: AdapterKind::Winget,
+                        ..
+                    } => assert!(version.is_none(), "{} {}: winget pins go stale", recipe.id, s.id),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recipe_names_route_back_to_their_recipe() {
+        let store = RecipeStore::load_from_dir_or_embedded(Path::new("no-such-dir")).unwrap();
+        for r in store.list() {
+            assert_eq!(store.find_matching(&r.name).map(|m| m.id.as_str()), Some(r.id.as_str()), "{}", r.name);
+        }
+    }
+
+    #[test]
+    fn launcher_requests_do_not_match_a_recipe() {
+        let store = RecipeStore::load_from_dir_or_embedded(Path::new("no-such-dir")).unwrap();
+        for goal in ["install Steam", "set up Roblox", "install Fortnite", "get the Epic Games launcher"] {
+            assert!(store.find_matching(goal).is_none(), "{goal}");
+        }
+    }
+
+    #[test]
+    fn non_dev_recipes_match_their_starters() {
+        let store = RecipeStore::load_from_dir_or_embedded(Path::new("no-such-dir")).unwrap();
+        for (goal, id) in [
+            ("Modded Minecraft Java with Fabric", "minecraft_fabric_1_21"),
+            ("7-Zip, VLC, and Git", "everyday_apps"),
+            ("OBS Studio", "obs_studio"),
+        ] {
+            assert_eq!(store.find_matching(goal).map(|r| r.id.as_str()), Some(id), "{goal}");
+        }
     }
 }

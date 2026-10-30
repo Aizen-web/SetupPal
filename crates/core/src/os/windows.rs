@@ -70,6 +70,42 @@ async fn query_reg_path_value(reg_key: &str) -> Result<String, CoreError> {
     })
 }
 
+/// Reads a `REG_SZ` / `REG_EXPAND_SZ` value via `reg.exe query` (`value: None` reads `(Default)`).
+pub async fn query_registry_string(reg_key: &str, value: Option<&str>) -> Option<String> {
+    let mut cmd = Command::new("reg");
+    cmd.arg("query").arg(reg_key);
+    match value {
+        Some(name) => cmd.args(["/v", name]),
+        None => cmd.arg("/ve"),
+    };
+    let out = cmd.output().await.ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    extract_reg_value(&String::from_utf8_lossy(&out.stdout), value.unwrap_or("(Default)"))
+}
+
+/// Extracts the data of `value_name` from `reg.exe query` output lines of the form
+/// `    <name>    REG_SZ    <data>`.
+pub fn extract_reg_value(reg_stdout: &str, value_name: &str) -> Option<String> {
+    let name_lower = value_name.to_ascii_lowercase();
+    for line in reg_stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.to_ascii_lowercase().starts_with(&name_lower) {
+            continue;
+        }
+        for kind in ["REG_EXPAND_SZ", "REG_SZ"] {
+            if let Some(idx) = trimmed.find(kind) {
+                let data = trimmed[idx + kind.len()..].trim();
+                if !data.is_empty() {
+                    return Some(expand_windows_env_vars(data));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Parses the `reg.exe query <KEY> /v Path` output format:
 /// `    Path    REG_EXPAND_SZ    C:\\Windows\\system32;C:\\Windows;...`
 pub fn extract_reg_query_value(reg_stdout: &str) -> Option<String> {

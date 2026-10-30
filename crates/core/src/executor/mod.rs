@@ -1,20 +1,24 @@
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::adapters::pypi::venv_python;
 use crate::adapters::{
-    AdapterRegistry, ExecutionContext, ExecutionReceipt, VerificationResult,
+    AdapterError, AdapterRegistry, ExecutionContext, ExecutionReceipt, SourceAdapter,
+    VerificationResult,
 };
 use crate::config::CoreError;
 use crate::events::{AgentEvent, EventBus};
 use crate::os::OsProvider;
+use crate::paths::{minecraft_dir, resolve_step_path};
+use crate::safety::hash::verify_file_sha256;
 use crate::safety::{PlanSafetyReport, RiskRating};
 use crate::state::{RollbackData, StateLogger, TransactionRecord};
-use crate::types::{Plan, PlannedStep, Step};
-use crate::verifier::Verifier;
+use crate::types::{AdapterKind, AllowedBinary, IsolationKind, Plan, PlannedStep, Step, VendorInstaller};
+use crate::verifier::{verify_fabric_profile, Verifier};
 
 /// Categories of software installs that can be narrowly trusted per SECURITY.md.
 /// "An optional 'don't ask me about this kind of thing again' checkbox,
@@ -31,8 +35,11 @@ pub enum TrustCategory {
 #[derive(Debug, Clone)]
 pub struct ExecutionOptions {
     pub dry_run: bool,
+    /// Runs Green steps without asking. When false, a live run halts at the first Green
+    /// step that is not in a trusted category.
     pub auto_approve_green: bool,
     pub allow_yellow: bool,
+    /// Base folder for relative step paths and npm installs (the user's project folder).
     pub working_dir: PathBuf,
     pub trusted_categories: HashSet<TrustCategory>,
 }
@@ -63,11 +70,11 @@ impl ExecutionOptions {
                 ..
             } => self.trusted_categories.contains(&TrustCategory::LocalNpmModules),
             Step::CreateIsolatedEnv {
-                kind: crate::types::IsolationKind::PythonVenv,
+                kind: IsolationKind::PythonVenv,
                 ..
             } => self.trusted_categories.contains(&TrustCategory::IsolatedPythonVenv),
             Step::DownloadArtifact {
-                adapter: crate::types::AdapterKind::GitHubReleases,
+                adapter: AdapterKind::GitHubReleases,
                 ..
             } => self.trusted_categories.contains(&TrustCategory::OfficialGitHubRelease),
             _ => false,
@@ -83,6 +90,10 @@ pub struct PlanExecutionSummary {
     pub step_results: Vec<StepExecutionResult>,
     pub overall_passed: bool,
     pub toolchain_verification: Option<VerificationResult>,
+    /// Step the run stopped at because it needs user approval (Green without
+    /// auto-approve, or Yellow without `allow_yellow`).
+    #[serde(default)]
+    pub halted_at_step_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -93,11 +104,52 @@ pub struct StepExecutionResult {
     pub blocked_reason: Option<String>,
     pub receipt: Option<ExecutionReceipt>,
     pub verification: Option<VerificationResult>,
+    /// Real error text (including installer stderr) when the step failed while running.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl StepExecutionResult {
+    fn not_run(step: &PlannedStep, reason: String) -> Self {
+        Self {
+            step_id: step.id.clone(),
+            description: step.description.clone(),
+            executed: false,
+            blocked_reason: Some(reason),
+            receipt: None,
+            verification: None,
+            error: None,
+        }
+    }
+
+    fn done(step: &PlannedStep, receipt: ExecutionReceipt, verification: Option<VerificationResult>) -> Self {
+        Self {
+            step_id: step.id.clone(),
+            description: step.description.clone(),
+            executed: true,
+            blocked_reason: None,
+            receipt: Some(receipt),
+            verification,
+            error: None,
+        }
+    }
+
+    /// True when the step ran, raised no error, and any verification passed.
+    pub fn succeeded(&self) -> bool {
+        self.executed && self.error.is_none() && self.verification.as_ref().is_none_or(|v| v.passed)
+    }
+}
+
+/// Mutable state threaded through the steps of one plan run.
+#[derive(Debug, Default)]
+struct RunState {
+    /// venv created by an earlier `CreateIsolatedEnv` step; pip and python use it.
+    isolated_env: Option<PathBuf>,
 }
 
 /// Zero-Trust Plan Executor.
 /// Enforces hard safety gates (NEVER executes Red; requires confirmation for Yellow;
-/// auto-approves Green when requested; records every transaction to state log).
+/// runs Green only when auto-approved or trusted; records every transaction to state log).
 pub struct Executor {
     adapters: AdapterRegistry,
     os_provider: Arc<dyn OsProvider>,
@@ -132,117 +184,118 @@ impl Executor {
     ) -> Result<PlanExecutionSummary, CoreError> {
         let mut step_results = Vec::new();
         let mut all_succeeded = true;
+        let mut halted_at_step_id = None;
+        let mut run = RunState::default();
 
         for step in &plan.steps {
-            // Find corresponding safety report
             let step_safety = safety_report
                 .step_reports
                 .iter()
                 .find(|r| r.step_id == step.id);
-
             let rating = step_safety.map(|s| s.rating).unwrap_or(RiskRating::Yellow);
+            let reasons = step_safety.map(|s| s.reasons.clone()).unwrap_or_default();
 
             // 1. Hard Red Block
             if rating == RiskRating::Red {
                 let reason = format!(
                     "BLOCKED by Zero-Trust Safety Engine: Step '{}' scored RED risk. (Reasons: {})",
                     step.id,
-                    step_safety
-                        .map(|s| s.reasons.join("; "))
-                        .unwrap_or_else(|| "Critical threat detected".to_string())
+                    if reasons.is_empty() {
+                        "Critical threat detected".to_string()
+                    } else {
+                        reasons.join("; ")
+                    }
                 );
-
                 self.events.emit(AgentEvent::StepExecutionBlocked {
                     step_id: step.id.clone(),
                     reason: reason.clone(),
                 });
-
-                step_results.push(StepExecutionResult {
-                    step_id: step.id.clone(),
-                    description: step.description.clone(),
-                    executed: false,
-                    blocked_reason: Some(reason),
-                    receipt: None,
-                    verification: None,
-                });
-
+                step_results.push(StepExecutionResult::not_run(step, reason));
                 all_succeeded = false;
-                // Never proceed past a hard Red block
                 break;
             }
 
             // 2. Yellow Caution Gate
             if rating == RiskRating::Yellow && !options.allow_yellow {
                 let reason = format!(
-                    "Confirmation required: Step '{}' scored YELLOW risk. Re-run with --allow-yellow or approve step. Reasons: {}",
+                    "Confirmation required: Step '{}' scored YELLOW risk. Approve this step to continue. Reasons: {}",
                     step.id,
-                    step_safety
-                        .map(|s| s.reasons.join("; "))
-                        .unwrap_or_default()
+                    reasons.join("; ")
                 );
-
                 self.events.emit(AgentEvent::StepApprovalRequired {
                     step_id: step.id.clone(),
                     rating: RiskRating::Yellow,
-                    reasons: step_safety.map(|s| s.reasons.clone()).unwrap_or_default(),
+                    reasons,
                 });
-
-                self.events.emit(AgentEvent::StepExecutionBlocked {
-                    step_id: step.id.clone(),
-                    reason: reason.clone(),
-                });
-
-                step_results.push(StepExecutionResult {
-                    step_id: step.id.clone(),
-                    description: step.description.clone(),
-                    executed: false,
-                    blocked_reason: Some(reason),
-                    receipt: None,
-                    verification: None,
-                });
-
+                step_results.push(StepExecutionResult::not_run(step, reason));
+                halted_at_step_id = Some(step.id.clone());
                 all_succeeded = false;
                 break;
             }
 
-            // 3. Green Approval Gate (if live execution and not auto-approved and not in a trusted category)
-            let is_trusted_green = options.is_step_trusted(&step.step);
-            if rating == RiskRating::Green && !options.dry_run && !options.auto_approve_green && !is_trusted_green {
+            // 3. Green Approval Gate: live runs halt unless auto-approved or trusted.
+            if rating == RiskRating::Green
+                && !options.dry_run
+                && !options.auto_approve_green
+                && !options.is_step_trusted(&step.step)
+            {
                 self.events.emit(AgentEvent::StepApprovalRequired {
                     step_id: step.id.clone(),
                     rating: RiskRating::Green,
-                    reasons: vec!["Awaiting user confirmation (--yes to auto-approve)".to_string()],
+                    reasons: vec!["Awaiting your approval for this safe step".to_string()],
+                });
+                step_results.push(StepExecutionResult::not_run(
+                    step,
+                    format!("Awaiting approval: Step '{}' is safe but needs your go-ahead.", step.id),
+                ));
+                halted_at_step_id = Some(step.id.clone());
+                all_succeeded = false;
+                break;
+            }
+
+            let step_result = match self.execute_single_step(plan, step, options, &mut run).await {
+                Ok(result) => result,
+                Err(e) => StepExecutionResult {
+                    step_id: step.id.clone(),
+                    description: step.description.clone(),
+                    executed: true,
+                    blocked_reason: None,
+                    receipt: None,
+                    verification: None,
+                    error: Some(e.to_string()),
+                },
+            };
+
+            if let Some(err) = &step_result.error {
+                self.events.emit(AgentEvent::StepExecutionFailed {
+                    step_id: step.id.clone(),
+                    error: err.clone(),
+                });
+            } else if let Some(v) = step_result.verification.as_ref().filter(|v| !v.passed) {
+                self.events.emit(AgentEvent::StepExecutionFailed {
+                    step_id: step.id.clone(),
+                    error: format!("Verification failed: {} {}", v.command_run, v.stderr).trim().to_string(),
                 });
             }
 
-            // Execute the step
-            let step_result = self.execute_single_step(plan, step, options).await?;
-            if !step_result.executed
-                || step_result
-                    .verification
-                    .as_ref()
-                    .map(|v| !v.passed)
-                    .unwrap_or(false)
-            {
-                all_succeeded = false;
-            }
+            let ok = step_result.succeeded();
             step_results.push(step_result);
-
-            if !all_succeeded {
+            if !ok {
+                all_succeeded = false;
                 break;
             }
         }
 
         // 4. Goal-level post-install verification for C++ toolchain goals
-        let is_cpp_goal = plan.goal.to_ascii_lowercase().contains("c++")
-            || plan.goal.to_ascii_lowercase().contains("cpp");
+        let goal_lower = plan.goal.to_ascii_lowercase();
+        let is_cpp_goal = goal_lower.contains("c++") || goal_lower.contains("cpp");
 
-        let toolchain_verification = if all_succeeded && is_cpp_goal {
+        let toolchain_verification = if all_succeeded && is_cpp_goal && !options.dry_run {
             let res = self
                 .verifier
                 .verify_cpp_toolchain(&format!("{}-cpp-verify", plan.plan_id))
                 .await?;
-            if !res.passed && !options.dry_run {
+            if !res.passed {
                 all_succeeded = false;
             }
             Some(res)
@@ -257,7 +310,81 @@ impl Executor {
             step_results,
             overall_passed: all_succeeded,
             toolchain_verification,
+            halted_at_step_id,
         })
+    }
+
+    fn adapter_for(&self, kind: AdapterKind, step: &PlannedStep) -> Result<Arc<dyn SourceAdapter>, CoreError> {
+        self.adapters.get(kind).ok_or_else(|| {
+            CoreError::Validation(format!(
+                "No adapter registered for {:?} required by step {}",
+                kind, step.id
+            ))
+        })
+    }
+
+    fn record(
+        &self,
+        plan: &Plan,
+        step: &PlannedStep,
+        options: &ExecutionOptions,
+        action_summary: String,
+        receipt: &ExecutionReceipt,
+        rollback_data: Option<RollbackData>,
+    ) -> Result<(), CoreError> {
+        self.state_logger.record_transaction(&TransactionRecord {
+            tx_id: Uuid::new_v4().to_string(),
+            timestamp: Utc::now(),
+            plan_id: plan.plan_id.clone(),
+            goal: plan.goal.clone(),
+            step_id: step.id.clone(),
+            action_summary,
+            step: step.step.clone(),
+            dry_run: options.dry_run,
+            changes_made: receipt.changes_made.clone(),
+            rollback_hint: receipt.rollback_hint.clone(),
+            rollback_data,
+            rolled_back_tx_id: None,
+        })
+    }
+
+    /// Adds `directory` to the User PATH and records a rollback transaction for it.
+    async fn add_path_entry(
+        &self,
+        plan: &Plan,
+        step: &PlannedStep,
+        options: &ExecutionOptions,
+        directory: &Path,
+    ) -> Result<ExecutionReceipt, CoreError> {
+        let receipt = ExecutionReceipt::new(
+            AdapterKind::Winget,
+            "PATH",
+            "registry",
+            options.dry_run,
+            vec![if options.dry_run {
+                format!("[Dry Run] Would register {} on User PATH", directory.display())
+            } else {
+                format!("Registered {} on User PATH and refreshed process environment", directory.display())
+            }],
+            Some(format!("Remove {} from PATH", directory.display())),
+        );
+        if options.dry_run {
+            return Ok(receipt);
+        }
+        let previous_path = self.os_provider.add_to_user_path(directory).await?;
+        self.os_provider.refresh_and_get_path().await?;
+        self.record(
+            plan,
+            step,
+            options,
+            format!("Added {} to User PATH", directory.display()),
+            &receipt,
+            Some(RollbackData::PathBackup {
+                previous_path,
+                added_directory: directory.to_path_buf(),
+            }),
+        )?;
+        Ok(receipt)
     }
 
     async fn execute_single_step(
@@ -265,6 +392,7 @@ impl Executor {
         plan: &Plan,
         step: &PlannedStep,
         options: &ExecutionOptions,
+        run: &mut RunState,
     ) -> Result<StepExecutionResult, CoreError> {
         self.events.emit(AgentEvent::StepExecutionStarted {
             step_id: step.id.clone(),
@@ -275,29 +403,22 @@ impl Executor {
         let exec_ctx = ExecutionContext {
             dry_run: options.dry_run,
             working_dir: options.working_dir.clone(),
-            isolated_env: None,
+            isolated_env: run.isolated_env.clone(),
         };
 
-        match &step.step {
+        let result = match &step.step {
             Step::InstallPackage {
                 ecosystem,
                 package_id,
                 version,
                 source_adapter,
             } => {
-                let adapter = self.adapters.get(*source_adapter).ok_or_else(|| {
-                    CoreError::Validation(format!(
-                        "No adapter registered for {:?} required by step {}",
-                        source_adapter, step.id
-                    ))
-                })?;
-
+                let adapter = self.adapter_for(*source_adapter, step)?;
                 let metadata = adapter
                     .resolve_metadata(package_id, version.as_deref())
                     .await
                     .map_err(CoreError::Adapter)?;
-
-                let receipt = adapter
+                let mut receipt = adapter
                     .install(&metadata, None, &exec_ctx)
                     .await
                     .map_err(CoreError::Adapter)?;
@@ -306,208 +427,144 @@ impl Executor {
                     self.os_provider.refresh_and_get_path().await?;
                 }
 
-                // Log state transaction
-                let tx = TransactionRecord {
-                    tx_id: Uuid::new_v4().to_string(),
-                    timestamp: Utc::now(),
-                    plan_id: plan.plan_id.clone(),
-                    goal: plan.goal.clone(),
-                    step_id: step.id.clone(),
-                    action_summary: format!(
-                        "Installed package {}@{} via {:?}",
-                        package_id, metadata.resolved_version, source_adapter
-                    ),
-                    step: step.step.clone(),
-                    dry_run: options.dry_run,
-                    changes_made: receipt.changes_made.clone(),
-                    rollback_hint: receipt.rollback_hint.clone(),
-                    rollback_data: Some(RollbackData::PackageInstall {
+                let rollback_data = if !receipt.created_paths.is_empty() {
+                    Some(RollbackData::CreatedPaths {
+                        paths: receipt.created_paths.clone(),
+                    })
+                } else {
+                    Some(RollbackData::PackageInstall {
                         ecosystem: format!("{ecosystem:?}"),
                         package_id: package_id.clone(),
                         uninstall_command: receipt.rollback_hint.clone(),
-                    }),
-                    rolled_back_tx_id: None,
+                        uninstall_argv: receipt.uninstall_argv.clone(),
+                    })
                 };
-                self.state_logger.record_transaction(&tx)?;
+                self.record(
+                    plan,
+                    step,
+                    options,
+                    format!(
+                        "Installed package {}@{} via {:?}",
+                        package_id, metadata.resolved_version, source_adapter
+                    ),
+                    &receipt,
+                    rollback_data,
+                )?;
+
+                for dir in receipt.path_entries.clone() {
+                    let path_receipt = self.add_path_entry(plan, step, options, &dir).await?;
+                    receipt.changes_made.extend(path_receipt.changes_made);
+                }
 
                 self.events.emit(AgentEvent::StepExecutionCompleted {
                     step_id: step.id.clone(),
                     receipt: receipt.clone(),
                 });
 
-                Ok(StepExecutionResult {
-                    step_id: step.id.clone(),
-                    description: step.description.clone(),
-                    executed: true,
-                    blocked_reason: None,
-                    receipt: Some(receipt),
-                    verification: None,
-                })
+                let verification = if options.dry_run {
+                    None
+                } else {
+                    Some(
+                        self.verifier
+                            .verify_installed_package(*ecosystem, adapter.as_ref(), &metadata, &exec_ctx)
+                            .await?,
+                    )
+                };
+                StepExecutionResult::done(step, receipt, verification)
             }
 
             Step::AddToUserPath { directory } => {
-                let (changes, rollback_data) = if options.dry_run {
-                    (
-                        vec![format!(
-                            "[Dry Run] Would register {} on User PATH and refresh process environment",
-                            directory.display()
-                        )],
-                        None,
-                    )
-                } else {
-                    let prev_raw = self.os_provider.add_to_user_path(directory).await?;
-                    self.os_provider.refresh_and_get_path().await?;
-                    (
-                        vec![format!(
-                            "Registered {} on User PATH and refreshed process environment",
-                            directory.display()
-                        )],
-                        Some(RollbackData::PathBackup {
-                            previous_path: prev_raw,
-                            added_directory: directory.clone(),
-                        }),
-                    )
-                };
-
-                let receipt = ExecutionReceipt {
-                    adapter: crate::types::AdapterKind::Winget,
-                    package_id: "PATH".to_string(),
-                    version: "registry".to_string(),
-                    dry_run: options.dry_run,
-                    changes_made: changes,
-                    rollback_hint: Some(format!("Remove {} from PATH", directory.display())),
-                };
-
-                let tx = TransactionRecord {
-                    tx_id: Uuid::new_v4().to_string(),
-                    timestamp: Utc::now(),
-                    plan_id: plan.plan_id.clone(),
-                    goal: plan.goal.clone(),
-                    step_id: step.id.clone(),
-                    action_summary: format!("Added {} to User PATH", directory.display()),
-                    step: step.step.clone(),
-                    dry_run: options.dry_run,
-                    changes_made: receipt.changes_made.clone(),
-                    rollback_hint: receipt.rollback_hint.clone(),
-                    rollback_data,
-                    rolled_back_tx_id: None,
-                };
-                self.state_logger.record_transaction(&tx)?;
-
+                let directory = resolve_step_path(directory, &options.working_dir)?;
+                let receipt = self.add_path_entry(plan, step, options, &directory).await?;
                 self.events.emit(AgentEvent::StepExecutionCompleted {
                     step_id: step.id.clone(),
                     receipt: receipt.clone(),
                 });
-
-                // Verify directory on path
-                let verification = if !options.dry_run {
-                    Some(
-                        self.verifier
-                            .verify_directory_on_path(&step.id, directory)
-                            .await?,
-                    )
-                } else {
+                let verification = if options.dry_run {
                     None
+                } else {
+                    Some(self.verifier.verify_directory_on_path(&step.id, &directory).await?)
                 };
+                StepExecutionResult::done(step, receipt, verification)
+            }
 
-                Ok(StepExecutionResult {
-                    step_id: step.id.clone(),
-                    description: step.description.clone(),
-                    executed: true,
-                    blocked_reason: None,
-                    receipt: Some(receipt),
-                    verification,
-                })
+            Step::AddDiscoveredToolToPath { binary } => {
+                self.add_discovered_tool(plan, step, options, *binary).await?
             }
 
             Step::RunVerifyCommand { binary, args } => {
+                let env = run.isolated_env.as_deref();
                 let verification = if options.dry_run {
                     let paths = self.os_provider.refresh_and_get_path().await?;
-                    if self
-                        .os_provider
-                        .which_in_paths(binary.executable_name(), &paths)
-                        .is_some()
-                    {
-                        self.verifier
-                            .verify_binary_command(&step.id, *binary, args)
-                            .await?
+                    let present = env.is_some_and(|e| venv_python(e).is_file())
+                        || self
+                            .os_provider
+                            .which_in_paths(binary.executable_name(), &paths)
+                            .is_some();
+                    if present {
+                        Some(
+                            self.verifier
+                                .verify_binary_command_in_env(&step.id, *binary, args, env)
+                                .await?,
+                        )
                     } else {
-                        VerificationResult {
-                            passed: true,
-                            command_run: format!("[Dry Run] {} {}", binary.executable_name(), args.join(" ")),
-                            exit_code: Some(0),
-                            stdout: format!(
-                                "[Dry Run] Verification for '{}' simulated (deferred to post-install)",
-                                binary.executable_name()
-                            ),
-                            stderr: String::new(),
-                        }
+                        None
                     }
                 } else {
-                    self.verifier
-                        .verify_binary_command(&step.id, *binary, args)
-                        .await?
+                    Some(
+                        self.verifier
+                            .verify_binary_command_in_env(&step.id, *binary, args, env)
+                            .await?,
+                    )
                 };
 
-                let receipt = ExecutionReceipt {
-                    adapter: crate::types::AdapterKind::Winget,
-                    package_id: binary.executable_name().to_string(),
-                    version: "verify".to_string(),
-                    dry_run: options.dry_run,
-                    changes_made: vec![format!(
-                        "Executed verification check: {} {}",
-                        binary.executable_name(),
-                        args.join(" ")
-                    )],
-                    rollback_hint: None,
-                };
-
+                let receipt = ExecutionReceipt::new(
+                    AdapterKind::Winget,
+                    binary.executable_name(),
+                    "verify",
+                    options.dry_run,
+                    vec![match &verification {
+                        Some(_) => format!(
+                            "Executed verification check: {} {}",
+                            binary.executable_name(),
+                            args.join(" ")
+                        ),
+                        None => format!(
+                            "[Dry Run] {} is not installed yet; check deferred to the live run",
+                            binary.executable_name()
+                        ),
+                    }],
+                    None,
+                );
                 self.events.emit(AgentEvent::StepExecutionCompleted {
                     step_id: step.id.clone(),
                     receipt: receipt.clone(),
                 });
-
-                Ok(StepExecutionResult {
-                    step_id: step.id.clone(),
-                    description: step.description.clone(),
-                    executed: true,
-                    blocked_reason: None,
-                    receipt: Some(receipt),
-                    verification: Some(verification),
-                })
+                StepExecutionResult::done(step, receipt, verification)
             }
 
             Step::VerifyHash {
                 file_path,
                 expected_sha256,
             } => {
+                let file_path = resolve_step_path(file_path, &options.working_dir)?;
                 let verification = self
                     .verifier
-                    .verify_hash_step(&step.id, file_path, expected_sha256)
+                    .verify_hash_step(&step.id, &file_path, expected_sha256)
                     .await?;
-
-                let receipt = ExecutionReceipt {
-                    adapter: crate::types::AdapterKind::Winget,
-                    package_id: file_path.to_string_lossy().to_string(),
-                    version: "sha256".to_string(),
-                    dry_run: options.dry_run,
-                    changes_made: vec![format!("Verified SHA-256 for {}", file_path.display())],
-                    rollback_hint: None,
-                };
-
+                let receipt = ExecutionReceipt::new(
+                    AdapterKind::Winget,
+                    file_path.to_string_lossy().to_string(),
+                    "sha256",
+                    options.dry_run,
+                    vec![format!("Checked SHA-256 for {}", file_path.display())],
+                    None,
+                );
                 self.events.emit(AgentEvent::StepExecutionCompleted {
                     step_id: step.id.clone(),
                     receipt: receipt.clone(),
                 });
-
-                Ok(StepExecutionResult {
-                    step_id: step.id.clone(),
-                    description: step.description.clone(),
-                    executed: true,
-                    blocked_reason: None,
-                    receipt: Some(receipt),
-                    verification: Some(verification),
-                })
+                StepExecutionResult::done(step, receipt, Some(verification))
             }
 
             Step::DownloadArtifact {
@@ -517,126 +574,448 @@ impl Executor {
                 destination,
                 expected_sha256,
             } => {
-                let source_adapter = self.adapters.get(*adapter).ok_or_else(|| {
-                    CoreError::Validation(format!(
-                        "No adapter registered for {:?} required by step {}",
-                        adapter, step.id
-                    ))
-                })?;
-
-                let metadata = source_adapter
+                let destination = resolve_step_path(destination, &options.working_dir)?;
+                let source_adapter = self.adapter_for(*adapter, step)?;
+                let mut metadata = source_adapter
                     .resolve_metadata(id, Some(version))
                     .await
                     .map_err(CoreError::Adapter)?;
+                if let Some(pinned) = expected_sha256 {
+                    metadata.expected_sha256 = Some(pinned.trim().to_ascii_lowercase());
+                }
+
+                if options.dry_run {
+                    let receipt = ExecutionReceipt::new(
+                        *adapter,
+                        id.clone(),
+                        metadata.resolved_version.clone(),
+                        true,
+                        vec![format!(
+                            "[Dry Run] Would download {} {} to {} and check its {}",
+                            id,
+                            metadata.resolved_version,
+                            destination.display(),
+                            if metadata.has_upstream_digest() {
+                                "official checksum"
+                            } else {
+                                "checksum (none published: the live run will refuse it)"
+                            }
+                        )],
+                        Some(format!("delete {}", destination.display())),
+                    );
+                    self.events.emit(AgentEvent::StepExecutionCompleted {
+                        step_id: step.id.clone(),
+                        receipt: receipt.clone(),
+                    });
+                    return Ok(StepExecutionResult::done(step, receipt, None));
+                }
+
+                if !metadata.has_upstream_digest() {
+                    return Err(CoreError::Adapter(AdapterError::Other(format!(
+                        "No upstream checksum available for {id}; refusing to accept an unverified download"
+                    ))));
+                }
 
                 let artifact = source_adapter
-                    .fetch_artifact(&metadata, destination, &exec_ctx)
+                    .fetch_artifact(&metadata, &destination, &exec_ctx)
                     .await
                     .map_err(CoreError::Adapter)?;
 
-                let receipt = ExecutionReceipt {
-                    adapter: *adapter,
-                    package_id: id.clone(),
-                    version: version.clone(),
-                    dry_run: options.dry_run,
-                    changes_made: vec![format!(
-                        "Downloaded artifact to {} (SHA-256: {})",
-                        destination.display(),
-                        expected_sha256
+                let verification = enforce_download_hash(
+                    &artifact.local_path,
+                    metadata.expected_sha256.as_deref(),
+                    artifact.computed_sha256.as_deref(),
+                )?;
+
+                let receipt = ExecutionReceipt::new(
+                    *adapter,
+                    id.clone(),
+                    metadata.resolved_version.clone(),
+                    false,
+                    vec![format!(
+                        "Downloaded {} {} to {} ({})",
+                        id,
+                        metadata.resolved_version,
+                        artifact.local_path.display(),
+                        verification.stdout
                     )],
-                    rollback_hint: Some(format!("delete {}", destination.display())),
-                };
-
-                if !options.dry_run {
-                    let tx = TransactionRecord {
-                        tx_id: Uuid::new_v4().to_string(),
-                        timestamp: Utc::now(),
-                        plan_id: plan.plan_id.clone(),
-                        goal: plan.goal.clone(),
-                        step_id: step.id.clone(),
-                        action_summary: format!("Downloaded artifact {}", destination.display()),
-                        step: step.step.clone(),
-                        dry_run: options.dry_run,
-                        changes_made: receipt.changes_made.clone(),
-                        rollback_hint: receipt.rollback_hint.clone(),
-                        rollback_data: Some(RollbackData::FileDownload {
-                            destination: destination.clone(),
-                        }),
-                        rolled_back_tx_id: None,
-                    };
-                    self.state_logger.record_transaction(&tx)?;
-                }
-
+                    Some(format!("delete {}", artifact.local_path.display())),
+                );
+                self.record(
+                    plan,
+                    step,
+                    options,
+                    format!("Downloaded artifact {}", artifact.local_path.display()),
+                    &receipt,
+                    Some(RollbackData::FileDownload {
+                        destination: artifact.local_path.clone(),
+                    }),
+                )?;
                 self.events.emit(AgentEvent::StepExecutionCompleted {
                     step_id: step.id.clone(),
                     receipt: receipt.clone(),
                 });
-
-                Ok(StepExecutionResult {
-                    step_id: step.id.clone(),
-                    description: step.description.clone(),
-                    executed: true,
-                    blocked_reason: None,
-                    receipt: Some(receipt),
-                    verification: Some(VerificationResult {
-                        passed: if options.dry_run { true } else { artifact.local_path.exists() },
-                        command_run: format!("fetch {}", destination.display()),
-                        exit_code: Some(0),
-                        stdout: "Downloaded artifact OK".to_string(),
-                        stderr: String::new(),
-                    }),
-                })
+                StepExecutionResult::done(step, receipt, Some(verification))
             }
 
             Step::CreateIsolatedEnv { kind, path } => {
-                if !options.dry_run && !path.exists() {
-                    std::fs::create_dir_all(path)?;
+                let path = resolve_step_path(path, &options.working_dir)?;
+                self.create_isolated_env(plan, step, options, *kind, &path, run).await?
+            }
+
+            Step::RunVendorInstaller {
+                installer,
+                mc_version,
+                installer_path,
+            } => {
+                let installer_path = resolve_step_path(installer_path, &options.working_dir)?;
+                match installer {
+                    VendorInstaller::FabricClient => {
+                        self.run_fabric_installer(plan, step, options, mc_version, &installer_path)
+                            .await?
+                    }
                 }
+            }
+        };
 
-                let receipt = ExecutionReceipt {
-                    adapter: crate::types::AdapterKind::OfficialVendorUrl,
-                    package_id: format!("{kind:?}"),
-                    version: "1.0".to_string(),
-                    dry_run: options.dry_run,
-                    changes_made: vec![format!(
-                        "Created isolated environment at {}",
-                        path.display()
-                    )],
-                    rollback_hint: Some(format!("rmdir {}", path.display())),
-                };
+        Ok(result)
+    }
 
-                if !options.dry_run {
-                    let tx = TransactionRecord {
-                        tx_id: Uuid::new_v4().to_string(),
-                        timestamp: Utc::now(),
-                        plan_id: plan.plan_id.clone(),
-                        goal: plan.goal.clone(),
-                        step_id: step.id.clone(),
-                        action_summary: format!("Created isolated env at {}", path.display()),
-                        step: step.step.clone(),
-                        dry_run: options.dry_run,
-                        changes_made: receipt.changes_made.clone(),
-                        rollback_hint: receipt.rollback_hint.clone(),
-                        rollback_data: Some(RollbackData::IsolatedEnv { path: path.clone() }),
-                        rolled_back_tx_id: None,
-                    };
-                    self.state_logger.record_transaction(&tx)?;
-                }
+    async fn create_isolated_env(
+        &self,
+        plan: &Plan,
+        step: &PlannedStep,
+        options: &ExecutionOptions,
+        kind: IsolationKind,
+        path: &Path,
+        run: &mut RunState,
+    ) -> Result<StepExecutionResult, CoreError> {
+        let rollback_hint = Some(format!("rmdir {}", path.display()));
 
+        if kind == IsolationKind::IsolatedDirectory {
+            let existed = path.exists();
+            if !options.dry_run && !existed {
+                std::fs::create_dir_all(path)?;
+            }
+            let receipt = ExecutionReceipt::new(
+                AdapterKind::OfficialVendorUrl,
+                "IsolatedDirectory",
+                "1",
+                options.dry_run,
+                vec![format!("Prepared isolated directory {}", path.display())],
+                rollback_hint,
+            );
+            if !options.dry_run && !existed {
+                self.record(
+                    plan,
+                    step,
+                    options,
+                    format!("Created isolated directory {}", path.display()),
+                    &receipt,
+                    Some(RollbackData::IsolatedEnv { path: path.to_path_buf() }),
+                )?;
+            }
+            self.events.emit(AgentEvent::StepExecutionCompleted {
+                step_id: step.id.clone(),
+                receipt: receipt.clone(),
+            });
+            return Ok(StepExecutionResult::done(step, receipt, None));
+        }
+
+        run.isolated_env = Some(path.to_path_buf());
+        if options.dry_run {
+            let receipt = ExecutionReceipt::new(
+                AdapterKind::PyPI,
+                "PythonVenv",
+                "venv",
+                true,
+                vec![format!("[Dry Run] Would run: python -m venv {}", path.display())],
+                rollback_hint,
+            );
+            self.events.emit(AgentEvent::StepExecutionCompleted {
+                step_id: step.id.clone(),
+                receipt: receipt.clone(),
+            });
+            return Ok(StepExecutionResult::done(step, receipt, None));
+        }
+
+        let already_present = venv_python(path).is_file();
+        let mut changes = Vec::new();
+        if already_present {
+            changes.push(format!("Reusing existing venv at {}", path.display()));
+        } else {
+            let paths = self.os_provider.refresh_and_get_path().await?;
+            let python = self
+                .os_provider
+                .which_in_paths(AllowedBinary::Python.executable_name(), &paths)
+                .or_else(|| self.os_provider.which_in_paths("python3", &paths))
+                .ok_or_else(|| CoreError::Os("Python executable not found; install Python first".to_string()))?;
+            let args = vec![
+                "-m".to_string(),
+                "venv".to_string(),
+                path.to_string_lossy().to_string(),
+            ];
+            let out = self.os_provider.run_command(&python, &args, &paths).await?;
+            if out.exit_code != Some(0) {
+                return Err(CoreError::Adapter(AdapterError::CommandFailed {
+                    exit_code: out.exit_code,
+                    stdout: out.stdout,
+                    stderr: out.stderr,
+                }));
+            }
+            changes.push(format!("Created Python venv at {} with {}", path.display(), python.display()));
+        }
+
+        let receipt = ExecutionReceipt::new(
+            AdapterKind::PyPI,
+            "PythonVenv",
+            "venv",
+            false,
+            changes,
+            rollback_hint,
+        );
+        if !already_present {
+            self.record(
+                plan,
+                step,
+                options,
+                format!("Created isolated env at {}", path.display()),
+                &receipt,
+                Some(RollbackData::IsolatedEnv { path: path.to_path_buf() }),
+            )?;
+        }
+        self.events.emit(AgentEvent::StepExecutionCompleted {
+            step_id: step.id.clone(),
+            receipt: receipt.clone(),
+        });
+        let verification = self.verifier.verify_venv(path).await?;
+        Ok(StepExecutionResult::done(step, receipt, Some(verification)))
+    }
+
+    async fn run_fabric_installer(
+        &self,
+        plan: &Plan,
+        step: &PlannedStep,
+        options: &ExecutionOptions,
+        mc_version: &str,
+        installer_path: &Path,
+    ) -> Result<StepExecutionResult, CoreError> {
+        let mc_dir = minecraft_dir()
+            .ok_or_else(|| CoreError::Config("cannot locate the Minecraft data folder".to_string()))?;
+        let args = vec![
+            "-jar".to_string(),
+            installer_path.to_string_lossy().to_string(),
+            "client".to_string(),
+            "-dir".to_string(),
+            mc_dir.to_string_lossy().to_string(),
+            "-mcversion".to_string(),
+            mc_version.to_string(),
+            "-noprofile".to_string(),
+        ];
+
+        if options.dry_run {
+            let receipt = ExecutionReceipt::new(
+                AdapterKind::OfficialVendorUrl,
+                "fabric-installer",
+                mc_version,
+                true,
+                vec![format!("[Dry Run] Would run: java {}", args.join(" "))],
+                None,
+            );
+            self.events.emit(AgentEvent::StepExecutionCompleted {
+                step_id: step.id.clone(),
+                receipt: receipt.clone(),
+            });
+            return Ok(StepExecutionResult::done(step, receipt, None));
+        }
+
+        if !mc_dir.is_dir() {
+            return Err(CoreError::Validation(format!(
+                "Minecraft Java Edition is not set up at {}. Open the Minecraft Launcher and play {mc_version} once, then retry.",
+                mc_dir.display()
+            )));
+        }
+        if !installer_path.is_file() {
+            return Err(CoreError::Validation(format!(
+                "Fabric installer {} is missing; the download step must run first",
+                installer_path.display()
+            )));
+        }
+
+        let paths = self.os_provider.refresh_and_get_path().await?;
+        let java = self
+            .os_provider
+            .which_in_paths(AllowedBinary::Java.executable_name(), &paths)
+            .ok_or_else(|| CoreError::Os("java executable not found; install a Java runtime first".to_string()))?;
+
+        let versions_dir = mc_dir.join("versions");
+        let before = list_dir_names(&versions_dir);
+        let out = self
+            .os_provider
+            .run_command_in_dir(&java, &args, &paths, Some(&mc_dir))
+            .await?;
+        if out.exit_code != Some(0) {
+            return Err(CoreError::Adapter(AdapterError::CommandFailed {
+                exit_code: out.exit_code,
+                stdout: out.stdout,
+                stderr: out.stderr,
+            }));
+        }
+        let created: Vec<PathBuf> = list_dir_names(&versions_dir)
+            .difference(&before)
+            .map(|n| versions_dir.join(n))
+            .collect();
+
+        let mut receipt = ExecutionReceipt::new(
+            AdapterKind::OfficialVendorUrl,
+            "fabric-installer",
+            mc_version,
+            false,
+            vec![format!(
+                "Installed Fabric loader for Minecraft {mc_version} into {}",
+                mc_dir.display()
+            )],
+            (!created.is_empty()).then(|| {
+                format!(
+                    "delete {}",
+                    created.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+                )
+            }),
+        );
+        receipt.created_paths = created.clone();
+        self.record(
+            plan,
+            step,
+            options,
+            format!("Ran Fabric installer for Minecraft {mc_version}"),
+            &receipt,
+            (!created.is_empty()).then_some(RollbackData::CreatedPaths { paths: created }),
+        )?;
+        self.events.emit(AgentEvent::StepExecutionCompleted {
+            step_id: step.id.clone(),
+            receipt: receipt.clone(),
+        });
+        let verification = verify_fabric_profile(&mc_dir, mc_version);
+        Ok(StepExecutionResult::done(step, receipt, Some(verification)))
+    }
+
+    async fn add_discovered_tool(
+        &self,
+        plan: &Plan,
+        step: &PlannedStep,
+        options: &ExecutionOptions,
+        binary: AllowedBinary,
+    ) -> Result<StepExecutionResult, CoreError> {
+        let name = binary.executable_name();
+        let version_args = [binary.version_flag().to_string()];
+        let paths = self.os_provider.refresh_and_get_path().await?;
+
+        if self.os_provider.which_in_paths(name, &paths).is_some() {
+            let receipt = ExecutionReceipt::new(
+                AdapterKind::Winget,
+                "PATH",
+                "registry",
+                options.dry_run,
+                vec![format!("{name} is already on PATH; nothing to change")],
+                None,
+            );
+            self.events.emit(AgentEvent::StepExecutionCompleted {
+                step_id: step.id.clone(),
+                receipt: receipt.clone(),
+            });
+            let verification = self.verifier.verify_binary_command(&step.id, binary, &version_args).await?;
+            return Ok(StepExecutionResult::done(step, receipt, Some(verification)));
+        }
+
+        let dir = match crate::discovery::discover_tool_dir(self.os_provider.as_ref(), binary).await {
+            Some(dir) => dir,
+            None if options.dry_run => {
+                let receipt = ExecutionReceipt::new(
+                    AdapterKind::Winget,
+                    "PATH",
+                    "registry",
+                    true,
+                    vec![format!("[Dry Run] Would locate {name} after install and add its folder to the User PATH")],
+                    None,
+                );
                 self.events.emit(AgentEvent::StepExecutionCompleted {
                     step_id: step.id.clone(),
                     receipt: receipt.clone(),
                 });
-
-                Ok(StepExecutionResult {
-                    step_id: step.id.clone(),
-                    description: step.description.clone(),
-                    executed: true,
-                    blocked_reason: None,
-                    receipt: Some(receipt),
-                    verification: None,
-                })
+                return Ok(StepExecutionResult::done(step, receipt, None));
             }
-        }
+            None => {
+                return Err(CoreError::Os(format!(
+                    "Could not find {name} in its registry install key, default install folders, or winget packages"
+                )))
+            }
+        };
+
+        let receipt = self.add_path_entry(plan, step, options, &dir).await?;
+        self.events.emit(AgentEvent::StepExecutionCompleted {
+            step_id: step.id.clone(),
+            receipt: receipt.clone(),
+        });
+        let verification = if options.dry_run {
+            None
+        } else {
+            Some(self.verifier.verify_binary_command(&step.id, binary, &version_args).await?)
+        };
+        Ok(StepExecutionResult::done(step, receipt, verification))
     }
 }
+
+fn list_dir_names(dir: &Path) -> BTreeSet<String> {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Final hash gate for a downloaded file. With a SHA-256 the file must match it (and is
+/// deleted when it does not); otherwise the adapter must already have enforced a published
+/// SHA-512. Returns a passed verification only when a digest matched.
+fn enforce_download_hash(
+    path: &Path,
+    expected_sha256: Option<&str>,
+    computed_sha256: Option<&str>,
+) -> Result<VerificationResult, CoreError> {
+    match expected_sha256 {
+        Some(expected) => match verify_file_sha256(path, expected) {
+            Ok(actual) => Ok(VerificationResult {
+                passed: true,
+                command_run: format!("sha256 {}", path.display()),
+                exit_code: Some(0),
+                stdout: format!("SHA-256 matched {actual}"),
+                stderr: String::new(),
+            }),
+            Err(e) => {
+                let _ = std::fs::remove_file(path);
+                Err(CoreError::Adapter(e))
+            }
+        },
+        None => match computed_sha256 {
+            Some(actual) if path.is_file() => Ok(VerificationResult {
+                passed: true,
+                command_run: format!("sha512 {}", path.display()),
+                exit_code: Some(0),
+                stdout: format!("SHA-512 matched the published digest (SHA-256 {actual})"),
+                stderr: String::new(),
+            }),
+            _ => {
+                let _ = std::fs::remove_file(path);
+                Err(CoreError::Adapter(AdapterError::Other(format!(
+                    "{} was not verified against any published checksum",
+                    path.display()
+                ))))
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests;
