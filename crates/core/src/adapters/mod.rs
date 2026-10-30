@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 use crate::safety::hash::{compute_file_sha256, compute_file_sha512};
 use crate::safety::policy::is_url_domain_allowlisted;
@@ -87,11 +88,40 @@ pub struct FetchedArtifact {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
     pub dry_run: bool,
     pub working_dir: PathBuf,
     pub isolated_env: Option<PathBuf>,
+    /// Cancels the in-flight OS command when the user hits Stop / Esc.
+    #[serde(skip)]
+    pub cancel: CancellationToken,
+}
+
+impl PartialEq for ExecutionContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.dry_run == other.dry_run
+            && self.working_dir == other.working_dir
+            && self.isolated_env == other.isolated_env
+    }
+}
+
+impl Eq for ExecutionContext {}
+
+impl ExecutionContext {
+    pub fn new(dry_run: bool, working_dir: PathBuf, isolated_env: Option<PathBuf>) -> Self {
+        Self {
+            dry_run,
+            working_dir,
+            isolated_env,
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = cancel;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

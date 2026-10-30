@@ -64,6 +64,10 @@ pub enum AgentEvent {
         step_id: String,
         error: String,
     },
+    ExecutionCancelled {
+        run_id: String,
+        step_id: String,
+    },
     VerificationStarted {
         step_id: String,
     },

@@ -6,6 +6,7 @@ pub mod windows;
 
 use std::path::{Path, PathBuf};
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 use crate::config::CoreError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +50,8 @@ pub trait OsProvider: Send + Sync {
         args: &[String],
         extra_path: &[PathBuf],
     ) -> Result<CommandOutput, CoreError> {
-        self.run_command_in_dir(binary, args, extra_path, None).await
+        self.run_command_cancellable(binary, args, extra_path, None, None)
+            .await
     }
 
     /// Runs a binary directly (never via a shell interpreter) with explicit arguments.
@@ -60,6 +62,19 @@ pub trait OsProvider: Send + Sync {
         args: &[String],
         extra_path: &[PathBuf],
         cwd: Option<&Path>,
+    ) -> Result<CommandOutput, CoreError> {
+        self.run_command_cancellable(binary, args, extra_path, cwd, None)
+            .await
+    }
+
+    /// Like `run_command_in_dir`, but aborts the child when `cancel` fires (`kill_on_drop`).
+    async fn run_command_cancellable(
+        &self,
+        binary: &Path,
+        args: &[String],
+        extra_path: &[PathBuf],
+        cwd: Option<&Path>,
+        cancel: Option<&CancellationToken>,
     ) -> Result<CommandOutput, CoreError>;
 
     /// Reads a string value from the Windows registry (`value: None` reads the default value).
@@ -168,16 +183,19 @@ impl OsProvider for PlatformOsProvider {
         }
     }
 
-    async fn run_command_in_dir(
+    async fn run_command_cancellable(
         &self,
         binary: &Path,
         args: &[String],
         extra_path: &[PathBuf],
         cwd: Option<&Path>,
+        cancel: Option<&CancellationToken>,
     ) -> Result<CommandOutput, CoreError> {
         let mut cmd = tokio::process::Command::new(binary);
         cmd.args(args);
         cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
         cmd.kill_on_drop(true);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
@@ -189,14 +207,40 @@ impl OsProvider for PlatformOsProvider {
             }
         }
 
-        // Hard execution timeout (5 minutes) to prevent runaway or hanging processes
+        let child = cmd.spawn()?;
         let timeout_duration = std::time::Duration::from_secs(300);
-        let out = match tokio::time::timeout(timeout_duration, cmd.output()).await {
+        let label = binary.display().to_string();
+        let mut join = tokio::spawn(async move {
+            tokio::time::timeout(timeout_duration, child.wait_with_output()).await
+        });
+
+        let timed = if let Some(token) = cancel {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => {
+                    join.abort();
+                    let _ = (&mut join).await;
+                    return Err(CoreError::Os(format!("Command '{label}' was cancelled")));
+                }
+                result = &mut join => match result {
+                    Ok(inner) => inner,
+                    Err(_) => {
+                        return Err(CoreError::Os(format!("Command '{label}' task failed")));
+                    }
+                },
+            }
+        } else {
+            match join.await {
+                Ok(inner) => inner,
+                Err(_) => return Err(CoreError::Os(format!("Command '{label}' task failed"))),
+            }
+        };
+
+        let out = match timed {
             Ok(output_res) => output_res?,
             Err(_) => {
                 return Err(CoreError::Os(format!(
-                    "Command '{}' timed out after {} seconds",
-                    binary.display(),
+                    "Command '{label}' timed out after {} seconds",
                     timeout_duration.as_secs()
                 )));
             }

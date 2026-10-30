@@ -94,12 +94,26 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 events.clone(),
             );
 
+            let allow_yellow_steps = if allow_yellow {
+                safety_report
+                    .step_reports
+                    .iter()
+                    .filter(|r| r.rating == installer_core::RiskRating::Yellow)
+                    .map(|r| r.step_id.clone())
+                    .collect()
+            } else {
+                std::collections::HashSet::new()
+            };
             let options = ExecutionOptions {
                 dry_run: effective_dry_run,
                 auto_approve_green: yes,
-                allow_yellow,
+                approved_step_ids: std::collections::HashSet::new(),
+                allow_yellow_steps,
+                start_at_step_id: None,
                 working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 trusted_categories: std::collections::HashSet::new(),
+                cancel: tokio_util::sync::CancellationToken::new(),
+                run_id: String::new(),
             };
 
             let execution_summary = executor

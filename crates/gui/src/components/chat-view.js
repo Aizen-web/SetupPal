@@ -6,7 +6,6 @@
 
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
-import { simulation } from '../state/simulation.js';
 import { bridge } from '../api/bridge.js';
 import { pixelVoice } from '../mascot/voicelines.js';
 import { createPixelSvg } from '../mascot/pixel.js';
@@ -225,11 +224,51 @@ function renderEmptyState() {
   `;
 }
 
+function renderManualGuide(guide) {
+  if (!guide) return '';
+  const alts = Array.isArray(guide.alternatives) ? guide.alternatives : [];
+  const steps = Array.isArray(guide.steps) ? guide.steps : [];
+  return `
+    <section class="plan-card manual-guide-card" aria-labelledby="manual-guide-title">
+      <div class="plan-card-head">
+        <div class="plan-card-head-text">
+          <h2 class="plan-title" id="manual-guide-title">Manual setup guide</h2>
+          <p class="plan-subtitle">SetupPal only does unattended terminal setup. ${esc(guide.item || 'This app')} needs a manual install${guide.reason ? `: ${esc(typeof guide.reason === 'string' ? guide.reason : '')}` : ''}.</p>
+        </div>
+      </div>
+      ${steps.length ? `<ol class="plan-steps-list">${steps.map((s, i) => `
+        <li class="step-row"><div class="step-left"><span class="step-number">${i + 1}</span><div class="step-info"><div class="step-title">${esc(s)}</div></div></div></li>
+      `).join('')}</ol>` : ''}
+      ${alts.length ? `
+        <div class="manual-alt-row">
+          <div class="plan-meta">SetupPal can install instead</div>
+          <div class="starter-pills" role="group" aria-label="Alternatives">
+            ${alts.map(a => `
+              <button type="button" class="starter-pill manual-alt-chip" data-prompt="${esc(typeof a === 'string' ? a : a)}">
+                <span class="starter-pill-copy"><span class="starter-pill-title">${esc(typeof a === 'string' ? a : a)}</span></span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </section>
+  `;
+}
+
 function renderPlanCard(plan) {
   if (!plan?.tasks?.length) return '';
 
   const review = plan.tasks.filter(t => t.verdict === 'YELLOW' || t.verdict === 'RED').length;
+  const approvedCount = plan.tasks.filter(t => {
+    if (t.verdict === 'RED') return false;
+    if (t.verdict === 'YELLOW') return Boolean(t.approved);
+    return t.approved !== false;
+  }).length;
+  const heldId = plan.haltedAt;
   const meta = `${plan.tasks.length} step${plan.tasks.length === 1 ? '' : 's'}${review ? ` · ${review} need${review === 1 ? 's' : ''} a look` : ''}`;
+  const approveLabel = heldId
+    ? 'Approve and continue'
+    : `Run ${approvedCount} approved step${approvedCount === 1 ? '' : 's'}`;
 
   return `
     <section class="plan-card" aria-labelledby="plan-card-title">
@@ -249,9 +288,13 @@ function renderPlanCard(plan) {
           const showWhy = (t.verdict === 'YELLOW' || t.verdict === 'RED') && (reasons.length || t.verdictTitle);
           const whyOpen = chatUi.whyOpen.has(String(t.id));
           const whyId = `why-${esc(t.id)}`;
+          const isRed = t.verdict === 'RED';
+          const isYellow = t.verdict === 'YELLOW';
+          const isGreen = t.verdict === 'GREEN';
+          const checked = isGreen ? t.approved !== false : Boolean(t.approved);
 
           return `
-            <li class="step-row" data-task-id="${esc(t.id)}">
+            <li class="step-row ${t.status === 'held' ? 'is-held' : ''}" data-task-id="${esc(t.id)}">
               <div class="step-left">
                 <span class="step-number" aria-hidden="true">${esc(t.num)}</span>
                 <div class="step-info">
@@ -266,6 +309,19 @@ function renderPlanCard(plan) {
                       ${reasons.length ? `<ul>${reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
                     </div>
                   ` : ''}
+                  ${isRed ? `<div class="step-blocked-label">Blocked</div>` : ''}
+                  ${isYellow ? `
+                    <label class="step-approve-row">
+                      <input type="checkbox" class="step-approve-cb" data-step-id="${esc(t.id)}" ${checked ? 'checked' : ''} />
+                      <span>Approve this step</span>
+                    </label>
+                  ` : ''}
+                  ${isGreen ? `
+                    <label class="step-approve-row">
+                      <input type="checkbox" class="step-approve-cb" data-step-id="${esc(t.id)}" ${checked ? 'checked' : ''} />
+                      <span>Include this safe step</span>
+                    </label>
+                  ` : ''}
                 </div>
               </div>
               ${verdictBadge(t.verdict)}
@@ -275,7 +331,7 @@ function renderPlanCard(plan) {
       </ol>
 
       <div class="plan-actions-row">
-        <button id="btn-approve-plan" class="btn-approve" type="button">Approve safe steps</button>
+        <button id="btn-approve-plan" class="btn-approve" type="button" ${approvedCount === 0 && !heldId ? 'disabled' : ''}>${esc(approveLabel)}</button>
         ${review ? `<button id="btn-review-yellow" class="btn-review-link" type="button">Review warnings</button>` : ''}
       </div>
 
@@ -416,6 +472,7 @@ export function renderChatView(container) {
               </div>
             ` : renderEmptyState()}
             ${renderPlanCard(plan)}
+            ${!plan?.tasks?.length ? renderManualGuide(state.manualGuide) : ''}
           </div>
         `}
       </div>
@@ -495,16 +552,42 @@ function bindHeader(container) {
 }
 
 function bindPlanCard(container, plan) {
+  container.querySelectorAll('.step-approve-cb').forEach(cb => {
+    cb.onchange = () => {
+      const id = cb.getAttribute('data-step-id');
+      store.setState(s => {
+        const tasks = (s.activePlan?.tasks || []).map(t =>
+          t.id === id ? { ...t, approved: cb.checked } : t
+        );
+        return { ...s, activePlan: s.activePlan ? { ...s.activePlan, tasks } : null };
+      });
+      sounds.play('ui.click');
+      renderChatView(container);
+    };
+  });
+
   const btnApprove = container.querySelector('#btn-approve-plan');
   if (btnApprove) {
     btnApprove.onclick = () => {
       const trustWinget = container.querySelector('#trust-winget-checkbox')?.checked;
       const categories = trustWinget ? ['verified_winget'] : [];
-      bridge.approveAndRunPlan(categories);
+      const tasks = store.getState().activePlan?.tasks || [];
+      const approvedStepIds = tasks
+        .filter(t => t.verdict === 'GREEN' && t.approved !== false)
+        .map(t => t.id);
+      const allowYellowSteps = tasks
+        .filter(t => t.verdict === 'YELLOW' && t.approved)
+        .map(t => t.id);
+      const startAtStepId = plan?.haltedAt || null;
+      bridge.approveAndRunPlan({
+        trustedCategories: categories,
+        approvedStepIds,
+        allowYellowSteps,
+        startAtStepId,
+      });
     };
   }
 
-  // Expand every YELLOW/RED "Why?" row
   const btnReview = container.querySelector('#btn-review-yellow');
   if (btnReview) {
     btnReview.onclick = () => {
@@ -523,6 +606,13 @@ function bindPlanCard(container, plan) {
       else chatUi.whyOpen.add(id);
       sounds.play('ui.click');
       renderChatView(container);
+    };
+  });
+
+  container.querySelectorAll('.manual-alt-chip').forEach(btn => {
+    btn.onclick = () => {
+      const prompt = btn.getAttribute('data-prompt');
+      if (prompt) bridge.submitGoal(prompt);
     };
   });
 }
@@ -754,7 +844,7 @@ function bindComposer(container, prevValue) {
 
   if (btnStop) btnStop.onclick = () => {
     if (store.getState().isChatGenerating) bridge.stopChat();
-    else simulation.stopRun();
+    else bridge.cancelRun();
   };
 }
 

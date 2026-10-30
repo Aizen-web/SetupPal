@@ -198,11 +198,8 @@ mod tests {
     #[tokio::test]
     async fn install_never_claims_success() {
         let meta = PackageMetadata::bare(AdapterKind::OfficialVendorUrl, FABRIC_INSTALLER_ID, "1.1.2");
-        let ctx = ExecutionContext {
-            dry_run: true,
-            working_dir: ".".into(),
-            isolated_env: None,
-        };
+        let ctx = ExecutionContext::new(true, ".".into(), None,
+        );
         assert!(adapter().install(&meta, None, &ctx).await.is_err());
     }
 }

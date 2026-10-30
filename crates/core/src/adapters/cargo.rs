@@ -174,7 +174,7 @@ impl SourceAdapter for CargoAdapter {
         let (cargo_bin, paths) = self.locate_cargo().await?;
         let out = self
             .os_provider
-            .run_command(&cargo_bin, &args, &paths)
+            .run_command_cancellable(&cargo_bin, &args, &paths, None, Some(&ctx.cancel))
             .await
             .map_err(|e| AdapterError::Other(e.to_string()))?;
         if out.exit_code != Some(0) {

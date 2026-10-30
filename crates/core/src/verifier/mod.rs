@@ -122,11 +122,8 @@ impl Verifier {
                             meta = resolved;
                         }
                     }
-                    let ctx = ExecutionContext {
-                        dry_run: false,
-                        working_dir: std::env::current_dir().unwrap_or_else(|_| ".".into()),
-                        isolated_env: None,
-                    };
+                    let ctx = ExecutionContext::new(false, std::env::current_dir().unwrap_or_else(|_| ".".into()), None,
+                    );
                     self.verify_installed_package(*ecosystem, adapter.as_ref(), &meta, &ctx)
                         .await?
                 }

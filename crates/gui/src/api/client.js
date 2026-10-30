@@ -119,11 +119,15 @@ class ApiClient {
     }
   }
 
-  async createPlan(goal, untrustedReadme = null) {
+  async createPlan(goal, { untrustedReadme = null, context = null } = {}) {
     const res = await fetch(`${API_BASE}/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goal, untrusted_readme: untrustedReadme }),
+      body: JSON.stringify({
+        goal,
+        untrusted_readme: untrustedReadme,
+        context: context || null,
+      }),
     });
     if (!res.ok) {
       const text = await res.text();
@@ -132,16 +136,29 @@ class ApiClient {
     return await res.json();
   }
 
-  async executePlan({ planId = null, dryRun = false, autoApproveGreen = true, allowYellow = false, customPlan = null, trustedCategories = [] } = {}) {
+  async executePlan({
+    runId = null,
+    planId = null,
+    dryRun = false,
+    autoApproveGreen = null,
+    approvedStepIds = [],
+    allowYellowSteps = [],
+    startAtStepId = null,
+    projectDir = null,
+    trustedCategories = [],
+  } = {}) {
     const res = await fetch(`${API_BASE}/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        run_id: runId,
         plan_id: planId,
         dry_run: dryRun,
         auto_approve_green: autoApproveGreen,
-        allow_yellow: allowYellow,
-        custom_plan: customPlan,
+        approved_step_ids: approvedStepIds,
+        allow_yellow_steps: allowYellowSteps,
+        start_at_step_id: startAtStepId,
+        project_dir: projectDir,
         trusted_categories: trustedCategories,
         ...executePrefsPayload(),
       }),
@@ -149,6 +166,19 @@ class ApiClient {
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Plan execution failed (${res.status}): ${text}`);
+    }
+    return await res.json();
+  }
+
+  async cancelExecute(runId) {
+    const res = await fetch(`${API_BASE}/execute/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: runId }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Cancel failed (${res.status}): ${text}`);
     }
     return await res.json();
   }

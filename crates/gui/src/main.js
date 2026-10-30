@@ -9,7 +9,6 @@ import './styles/components.css';
 import './styles/chat.css';
 
 import { store } from './state/store.js';
-import { simulation } from './state/simulation.js';
 import { bridge } from './api/bridge.js';
 import { renderSidebar } from './components/sidebar.js';
 import { renderChatView } from './components/chat-view.js';
@@ -107,7 +106,7 @@ function initApp() {
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || e.defaultPrevented || isModalOpen()) return;
     if (store.getState().isChatGenerating) bridge.stopChat();
-    else simulation.stopRun();
+    else if (store.runActive || bridge.activeRunId) bridge.cancelRun();
   });
 
   bridge.init();

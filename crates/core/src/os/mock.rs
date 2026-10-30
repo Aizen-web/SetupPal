@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::CoreError;
 use crate::os::{CommandOutput, OsProvider};
@@ -191,13 +192,20 @@ impl OsProvider for MockOsProvider {
         Ok(())
     }
 
-    async fn run_command_in_dir(
+    async fn run_command_cancellable(
         &self,
         binary: &Path,
         args: &[String],
         _extra_path: &[PathBuf],
         cwd: Option<&Path>,
+        cancel: Option<&CancellationToken>,
     ) -> Result<CommandOutput, CoreError> {
+        if cancel.is_some_and(|t| t.is_cancelled()) {
+            return Err(CoreError::Os(format!(
+                "Command '{}' was cancelled",
+                binary.display()
+            )));
+        }
         if let Ok(mut c) = self.calls.lock() {
             c.push(RecordedCommand {
                 binary: binary.to_path_buf(),

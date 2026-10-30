@@ -272,7 +272,7 @@ impl SourceAdapter for WingetAdapter {
 
         let out = self
             .os_provider
-            .run_command(&winget_bin, &args, &paths)
+            .run_command_cancellable(&winget_bin, &args, &paths, None, Some(&ctx.cancel))
             .await
             .map_err(|e| AdapterError::Other(e.to_string()))?;
 
@@ -376,11 +376,8 @@ mod tests {
             .on("winget", &["list"], fail(1, "No installed package found matching input criteria."));
         let adapter = WingetAdapter::new(Arc::new(os));
         let meta = PackageMetadata::bare(AdapterKind::Winget, "Git.Git", "latest");
-        let ctx = ExecutionContext {
-            dry_run: false,
-            working_dir: PathBuf::from("."),
-            isolated_env: None,
-        };
+        let ctx = ExecutionContext::new(false, PathBuf::from("."), None,
+        );
         assert!(!adapter.verify(&meta, &ctx).await.unwrap().passed);
     }
 

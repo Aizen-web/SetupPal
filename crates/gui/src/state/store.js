@@ -26,6 +26,7 @@ function createNewConversation(title = DEFAULT_TITLE) {
     updatedAt: Date.now(),
     chatMessages: [],
     activePlan: null,
+    manualGuide: null,
     terminalLogs: [],
   };
 }
@@ -120,6 +121,7 @@ class Store {
 
       // Active plan and terminal log (restored from the active conversation)
       activePlan: activeConv.activePlan || null,
+      manualGuide: activeConv.manualGuide || null,
       terminalTab: 'terminal', // 'terminal' | 'chat' (Hacker mode tab strip)
       terminalLogs: activeConv.terminalLogs || [],
 
@@ -228,12 +230,13 @@ class Store {
       let changed = false;
       const convs = this.state.conversations.map(c => {
         if (c.id === this.state.activeConversationId) {
-          if (c.chatMessages !== this.state.chatMessages || c.activePlan !== this.state.activePlan || c.terminalLogs !== this.state.terminalLogs) {
+          if (c.chatMessages !== this.state.chatMessages || c.activePlan !== this.state.activePlan || c.manualGuide !== this.state.manualGuide || c.terminalLogs !== this.state.terminalLogs) {
             changed = true;
             return {
               ...c,
               chatMessages: this.state.chatMessages,
               activePlan: this.state.activePlan,
+              manualGuide: this.state.manualGuide,
               terminalLogs: (this.state.terminalLogs || []).slice(-100),
               updatedAt: Date.now()
             };
@@ -255,7 +258,7 @@ class Store {
     const s = this.state;
     return (s.conversations || []).map(c => (
       c.id === s.activeConversationId
-        ? { ...c, chatMessages: s.chatMessages, activePlan: s.activePlan, terminalLogs: s.terminalLogs, updatedAt: Date.now() }
+        ? { ...c, chatMessages: s.chatMessages, activePlan: s.activePlan, manualGuide: s.manualGuide, terminalLogs: s.terminalLogs, updatedAt: Date.now() }
         : c
     ));
   }
@@ -271,6 +274,7 @@ class Store {
       chatMessages: [],
       isChatGenerating: false,
       activePlan: null,
+      manualGuide: null,
       terminalLogs: newConv.terminalLogs,
       activePage: 'chats',
       recentChats: toRecent(allConvs, newConv.id),
@@ -298,6 +302,7 @@ class Store {
       chatMessages: targetConv.chatMessages || [],
       isChatGenerating: (targetConv.chatMessages || []).some(message => message.isStreaming),
       activePlan: targetConv.activePlan || null,
+      manualGuide: targetConv.manualGuide || null,
       terminalLogs: targetConv.terminalLogs || [],
       activePage: 'chats',
       recentChats: toRecent(updatedConvs, targetConv.id),
@@ -332,6 +337,7 @@ class Store {
       chatMessages: nextConv.chatMessages || [],
       isChatGenerating: (nextConv.chatMessages || []).some(message => message.isStreaming),
       activePlan: nextConv.activePlan || null,
+      manualGuide: nextConv.manualGuide || null,
       terminalLogs: nextConv.terminalLogs || [],
       recentChats: toRecent(remaining, nextActiveId),
     });

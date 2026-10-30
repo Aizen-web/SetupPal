@@ -522,11 +522,7 @@ mod tests {
         let mut meta = PackageMetadata::bare(AdapterKind::GitHubReleases, "acme/widget", "v1.0");
         meta.download_url = Some("https://github.com/acme/widget/releases/download/v1.0/WidgetSetup.exe".to_string());
         for dry_run in [true, false] {
-            let ctx = ExecutionContext {
-                dry_run,
-                working_dir: ".".into(),
-                isolated_env: None,
-            };
+            let ctx = ExecutionContext::new(dry_run, ".".into(), None);
             let err = adapter.install(&meta, None, &ctx).await.unwrap_err();
             assert!(err.to_string().contains("no unattended install path"));
         }
@@ -537,11 +533,8 @@ mod tests {
         let adapter = GitHubReleasesAdapter::new(Arc::new(MockOsProvider::new()));
         let mut meta = PackageMetadata::bare(AdapterKind::GitHubReleases, "acme/widget", "v1.0");
         meta.download_url = Some("https://github.com/acme/widget/releases/download/v1.0/widget-win64.zip".to_string());
-        let ctx = ExecutionContext {
-            dry_run: false,
-            working_dir: ".".into(),
-            isolated_env: None,
-        };
+        let ctx = ExecutionContext::new(false, ".".into(), None,
+        );
         let err = adapter.install(&meta, None, &ctx).await.unwrap_err();
         assert!(err.to_string().contains("no checksum"));
     }

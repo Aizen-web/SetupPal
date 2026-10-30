@@ -2,6 +2,9 @@
 //!
 //! Exposes installer_core domain logic to the modern UI frontend via HTTP & Server-Sent Events (SSE).
 
+mod intent;
+
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -15,18 +18,22 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tokio_stream::{Stream, StreamExt};
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use installer_core::llm::{ConfigKeyStore, KeyStore, ProviderClient, ProviderKind, ResolvedProvider};
 use installer_core::{
-    AllowedBinary, CoreConfig, EventBus,
-    PlanSafetyReport, Planner, PlatformOsProvider, RecipeStore,
-    SafetyEngine, StateLogger, SystemProfile, SystemScanner, OsProvider, Plan,
+    check_plan, first_manual, manual_guide, apply_to_safety_report, AllowedBinary, CoreConfig,
+    EventBus, ExecutionOptions, FailureContext, Healer, LlmClient, PlanSafetyReport, Planner,
+    PlatformOsProvider, RecipeStore, RiskRating, SafetyEngine, StateLogger, SystemProfile,
+    SystemScanner, TrustCategory, OsProvider, Plan,
 };
+use intent::{IntentStreamFilter, SetupIntent};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -40,7 +47,12 @@ pub struct AppState {
     pub llm: Arc<ProviderClient>,
     pub planner: Arc<Planner>,
     pub state_logger: StateLogger,
-    pub current_plan: Arc<RwLock<Option<(Plan, PlanSafetyReport)>>>,
+    /// Server-side plans keyed by `plan_id` (never trust a client-supplied plan body).
+    pub plans: Arc<RwLock<HashMap<String, (Plan, PlanSafetyReport)>>>,
+    /// Active execute runs keyed by client `run_id`.
+    pub runs: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Last safety level reported by a client (for `/api/health`).
+    pub safety_level: Arc<RwLock<String>>,
 }
 
 /// Reads provider keys per request (local `.env`, then process environment, then startup config)
@@ -90,7 +102,9 @@ async fn main() -> anyhow::Result<()> {
         llm,
         planner,
         state_logger,
-        current_plan: Arc::new(RwLock::new(None)),
+        plans: Arc::new(RwLock::new(HashMap::new())),
+        runs: Arc::new(Mutex::new(HashMap::new())),
+        safety_level: Arc::new(RwLock::new("strict".to_string())),
     };
 
     let cors = CorsLayer::new()
@@ -105,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/chat/stream", post(chat_stream_handler))
         .route("/api/plan", post(plan_handler))
         .route("/api/execute", post(execute_handler))
+        .route("/api/execute/cancel", post(cancel_execute_handler))
         .route("/api/history", get(history_handler))
         .route("/api/history/export", get(history_export_handler))
         .route("/api/undo", post(undo_handler))
@@ -172,11 +187,12 @@ async fn health_handler(
     let has_tavily_key =
         resolve_env_key("TAVILY_API_KEY", state.config.tavily_api_key.as_deref()).is_some();
 
+    let safety_level = state.safety_level.read().await.clone();
     let mut health = serde_json::json!({
         "status": "ok",
         "app": "SetupPal Zero-Trust Backend",
         "version": "0.1.0",
-        "safety_level": "strict",
+        "safety_level": safety_level,
         "deterministic_gates": true,
         "has_tavily_key": has_tavily_key,
     });
@@ -450,7 +466,7 @@ fn describe_provider_status(status: StatusCode, model: &str) -> String {
 }
 
 /// Reported in the context viewer so a reply can be traced to the prompt that produced it.
-const PROMPT_VERSION: &str = "v21-pixel-broad-scope";
+const PROMPT_VERSION: &str = "v22-intent-block";
 
 const STATIC_SYSTEM_PROMPT: &str = "\
 Role\n\
@@ -461,17 +477,20 @@ SetupPal can set up anything that installs unattended from the command line (sil
 Apps that need a GUI launcher, store login, or DRM (Steam, Epic Games, Riot, Battle.net, Roblox, Minecraft Bedrock, and similar) are out of scope.\n\
 \n\
 How to work\n\
-- Answer the user's latest message, using the whole conversation. Short replies like `php` or `the second one` continue the current topic.\n\
-- Each message comes with facts about this PC. Use them and never invent facts. If something is already installed, say so and give its version.\n\
-- Greeting or broad request (like \"set up my PC\"): ask what they want set up, and offer 2 to 4 concrete options that fit this PC, recommending one.\n\
-- Clear request: give the plan right away. Ask only when the answer changes the plan (for example, which version).\n\
-- A plan is a short numbered list: what gets installed, its source (winget, npm, pip, ...), and the command that checks it. Then say nothing is installed until they approve.\n\
+- Answer the latest message using the whole conversation. Short replies like `php` continue the topic.\n\
+- Each message includes PC facts. Use them; never invent facts. If something is installed, say its version.\n\
+- Greeting or broad request: ask what they want set up, offer 2 to 4 options that fit this PC, recommend one.\n\
+- Clear request: give the plan right away. Ask only when the answer changes the plan.\n\
+- A plan is a short numbered list: what gets installed, its source, and the check command. Nothing installs until they approve.\n\
 \n\
 Manual setup guide\n\
-If the request is out of scope, start with **Manual setup guide**. In one line, say SetupPal only does unattended terminal setup and why this app needs a manual install. Give short numbered steps using the official source. End with \"SetupPal can install instead:\" and 2 to 4 related options.\n\
+If out of scope, start with **Manual setup guide**. Say SetupPal only does unattended terminal setup and why this needs a manual install. Give short numbered steps. End with \"SetupPal can install instead:\" and 2 to 4 options.\n\
+\n\
+Ending a reply\n\
+When the user has agreed on what to install, end with one fenced setuppal-intent JSON block (`kind` install with `goal`, or `kind` manual with `item` and `reason`). Never output that block while still asking a question.\n\
 \n\
 Style\n\
-Plain words, short replies, markdown allowed, bold the key point. Don't introduce yourself unless asked. Never claim you installed or checked anything; SetupPal does that after approval. Never send an empty reply.";
+Plain words, short replies, markdown allowed, bold the key point. Don't introduce yourself unless asked. Never claim you installed or checked anything. Never send an empty reply.";
 
 /// Plain-text facts about this PC. Minecraft details are only added when the chat is about Minecraft.
 fn format_host_facts(
@@ -696,7 +715,15 @@ async fn chat_stream_handler(
         )
         .await
         {
-            Ok(reply) => {
+            Ok((reply, intent)) => {
+                if let Some(intent) = intent {
+                    let _ = send_chat_event(
+                        &sender,
+                        "message.intent",
+                        serde_json::json!({ "intent": intent }),
+                    )
+                    .await;
+                }
                 let _ = send_chat_event(
                     &sender,
                     "message.end",
@@ -762,7 +789,7 @@ async fn call_ai_chat_stream(
     host_facts: &str,
     max_tokens: u32,
     sender: &ChatSseSender,
-) -> Result<String, String> {
+) -> Result<(String, Option<SetupIntent>), String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(120))
@@ -822,7 +849,7 @@ async fn call_ai_chat_stream(
     let mut body = response.bytes_stream();
     let mut pending = Vec::<u8>::new();
     let mut data_lines = Vec::<String>::new();
-    let mut reply = String::new();
+    let mut filter = IntentStreamFilter::new();
     let mut complete = false;
     loop {
         let next_chunk = tokio::select! {
@@ -838,7 +865,7 @@ async fn call_ai_chat_stream(
             if line.last() == Some(&b'\r') {
                 line.pop();
             }
-            if consume_chat_sse_line(&line, &mut data_lines, &mut reply, sender).await? {
+            if consume_chat_sse_line(&line, &mut data_lines, &mut filter, sender).await? {
                 complete = true;
                 break;
             }
@@ -849,22 +876,32 @@ async fn call_ai_chat_stream(
     }
 
     if !complete && !pending.is_empty() {
-        consume_chat_sse_line(&pending, &mut data_lines, &mut reply, sender).await?;
+        consume_chat_sse_line(&pending, &mut data_lines, &mut filter, sender).await?;
     }
     if !complete && !data_lines.is_empty() {
         let final_line = [];
-        consume_chat_sse_line(&final_line, &mut data_lines, &mut reply, sender).await?;
+        consume_chat_sse_line(&final_line, &mut data_lines, &mut filter, sender).await?;
     }
+
+    let (reply, intent_result) = filter.finish();
+    let intent = match intent_result {
+        Ok(intent) => intent,
+        Err(kind) => {
+            warn!(?kind, "setuppal-intent block present but failed validation");
+            None
+        }
+    };
+
     if !reply.chars().any(char::is_alphanumeric) {
         return Err("AI provider returned no usable reply text. Please try again.".to_string());
     }
-    Ok(reply)
+    Ok((reply, intent))
 }
 
 async fn consume_chat_sse_line(
     line: &[u8],
     data_lines: &mut Vec<String>,
-    reply: &mut String,
+    filter: &mut IntentStreamFilter,
     sender: &ChatSseSender,
 ) -> Result<bool, String> {
     if line.is_empty() {
@@ -886,8 +923,10 @@ async fn consume_chat_sse_line(
             .and_then(serde_json::Value::as_str)
             .filter(|text| !text.is_empty())
         {
-            reply.push_str(text);
-            send_chat_event(sender, "message.delta", serde_json::json!({ "text": text })).await?;
+            let forward = filter.push(text);
+            if !forward.is_empty() {
+                send_chat_event(sender, "message.delta", serde_json::json!({ "text": forward })).await?;
+            }
         }
         return Ok(false);
     }
@@ -905,6 +944,19 @@ async fn consume_chat_sse_line(
 struct PlanRequest {
     goal: String,
     untrusted_readme: Option<String>,
+    /// Compact conversation summary for the LLM planner only (max 1,500 chars).
+    context: Option<String>,
+}
+
+fn uniquify_plan_id(plan: &mut Plan) {
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    if plan.plan_id.starts_with("plan-recipe-") {
+        plan.plan_id = format!("{}-{}", plan.plan_id, suffix);
+    } else if !plan.plan_id.contains('-') || plan.plan_id.len() < 12 {
+        plan.plan_id = format!("plan-{}-{}", plan.plan_id, suffix);
+    } else {
+        plan.plan_id = format!("{}-{}", plan.plan_id, suffix);
+    }
 }
 
 async fn plan_handler(
@@ -918,29 +970,57 @@ async fn plan_handler(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let plan = state
+    let context = req
+        .context
+        .as_deref()
+        .map(|c| {
+            let t = c.trim();
+            if t.chars().count() > 1500 {
+                t.chars().take(1500).collect::<String>()
+            } else {
+                t.to_string()
+            }
+        })
+        .filter(|c| !c.is_empty());
+
+    let mut plan = state
         .planner
-        .create_plan(&req.goal, &profile, req.untrusted_readme.as_deref())
+        .create_plan_with_context(
+            &req.goal,
+            &profile,
+            req.untrusted_readme.as_deref(),
+            context.as_deref(),
+        )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let safety_report = state
+    uniquify_plan_id(&mut plan);
+
+    let install_checks = check_plan(&plan, state.os_provider.as_ref()).await;
+    if let Some(manual) = first_manual(&install_checks) {
+        let installer_core::Installability::ManualOnly { reason, detail } = &manual.installability
+        else {
+            unreachable!("first_manual only returns ManualOnly");
+        };
+        let guide = manual_guide(&manual.item, *reason, detail, &state.recipes);
+        return Ok(Json(serde_json::json!(guide)));
+    }
+
+    let mut safety_report = state
         .safety_engine
         .evaluate_plan(&plan)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    apply_to_safety_report(&install_checks, &mut safety_report);
     let step_metadata = create_metadata_for_plan(&plan, &safety_report);
-    state.events.emit(installer_core::AgentEvent::PlanGenerated {
-        plan: Box::new(plan.clone()),
-    });
 
-    state.events.emit(installer_core::AgentEvent::SafetyCheckCompleted {
-        report: Box::new(safety_report.clone()),
-    });
-
-    // Cache current plan for subsequent execute calls
-    *state.current_plan.write().await = Some((plan.clone(), safety_report.clone()));
+    state
+        .plans
+        .write()
+        .await
+        .insert(plan.plan_id.clone(), (plan.clone(), safety_report.clone()));
 
     Ok(Json(serde_json::json!({
+        "kind": "plan",
         "plan": plan,
         "safety": safety_report,
         "profile": profile,
@@ -950,43 +1030,135 @@ async fn plan_handler(
 
 #[derive(Debug, Deserialize)]
 struct ExecuteRequest {
-    #[allow(dead_code)]
+    run_id: Option<String>,
     plan_id: Option<String>,
     dry_run: Option<bool>,
     auto_approve_green: Option<bool>,
-    allow_yellow: Option<bool>,
+    approved_step_ids: Option<Vec<String>>,
+    allow_yellow_steps: Option<Vec<String>>,
+    start_at_step_id: Option<String>,
+    project_dir: Option<String>,
+    trusted_categories: Option<Vec<TrustCategory>>,
+    safety_level: Option<String>,
+    /// Ignored when `plan_id` is already stored server-side.
     custom_plan: Option<Plan>,
-    trusted_categories: Option<Vec<installer_core::TrustCategory>>,
+}
+
+fn resolve_auto_approve_green(req: &ExecuteRequest) -> bool {
+    if let Some(explicit) = req.auto_approve_green {
+        return explicit;
+    }
+    match req.safety_level.as_deref() {
+        Some("strict") => false,
+        Some("relaxed") | Some("balanced") => true,
+        _ => false,
+    }
 }
 
 async fn execute_handler(
     State(state): State<AppState>,
     Json(req): Json<ExecuteRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (plan, safety_report) = match req.custom_plan {
-        Some(p) => {
-            let s = state
-                .safety_engine
-                .evaluate_plan(&p)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            (p, s)
-        }
-        None => {
-            let guard = state.current_plan.read().await;
-            match guard.as_ref() {
-                Some((p, s)) => (p.clone(), s.clone()),
-                None => {
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        "No plan to execute. Ask for a plan first.".to_string(),
-                    ))
-                }
+    if let Some(level) = req.safety_level.as_deref() {
+        let normalized = match level {
+            "strict" | "balanced" | "relaxed" => level,
+            _ => "strict",
+        };
+        *state.safety_level.write().await = normalized.to_string();
+    }
+
+    let plan_id = req.plan_id.clone().filter(|id| !id.trim().is_empty());
+    let (plan, _cached_safety) = if let Some(id) = &plan_id {
+        let guard = state.plans.read().await;
+        match guard.get(id) {
+            Some((p, s)) => (p.clone(), s.clone()),
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!("Unknown plan_id `{id}`."),
+                ));
             }
         }
+    } else if let Some(p) = req.custom_plan.clone() {
+        // Legacy fallback only when the server never issued a plan_id.
+        let s = state
+            .safety_engine
+            .evaluate_plan(&p)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        state
+            .plans
+            .write()
+            .await
+            .insert(p.plan_id.clone(), (p.clone(), s.clone()));
+        (p, s)
+    } else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "plan_id is required.".to_string(),
+        ));
     };
 
+    // Fresh safety verdicts right before execution.
+    let mut safety_report = state
+        .safety_engine
+        .evaluate_plan(&plan)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let install_checks = check_plan(&plan, state.os_provider.as_ref()).await;
+    apply_to_safety_report(&install_checks, &mut safety_report);
+    state
+        .plans
+        .write()
+        .await
+        .insert(plan.plan_id.clone(), (plan.clone(), safety_report.clone()));
+
+    let run_id = req
+        .run_id
+        .clone()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let cancel = CancellationToken::new();
+    {
+        let mut runs = state.runs.lock().await;
+        runs.insert(run_id.clone(), cancel.clone());
+    }
+
     info!("Executing plan '{}': {}", plan.plan_id, plan.goal);
+
+    let working_dir = req
+        .project_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let options = ExecutionOptions {
+        dry_run: req.dry_run.unwrap_or(false),
+        auto_approve_green: resolve_auto_approve_green(&req),
+        approved_step_ids: req
+            .approved_step_ids
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        allow_yellow_steps: req
+            .allow_yellow_steps
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        start_at_step_id: req.start_at_step_id.clone(),
+        working_dir,
+        trusted_categories: req
+            .trusted_categories
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        cancel: cancel.clone(),
+        run_id: run_id.clone(),
+    };
 
     let verifier = installer_core::Verifier::new(state.os_provider.clone(), state.events.clone());
     let adapters = installer_core::AdapterRegistry::with_system_defaults(state.os_provider.clone());
@@ -998,28 +1170,162 @@ async fn execute_handler(
         state.events.clone(),
     );
 
-    let options = installer_core::ExecutionOptions {
-        dry_run: req.dry_run.unwrap_or(false),
-        auto_approve_green: req.auto_approve_green.unwrap_or(true),
-        allow_yellow: req.allow_yellow.unwrap_or(false),
-        working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        trusted_categories: req
-            .trusted_categories
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
+    let summary = match executor.execute_plan(&plan, &safety_report, &options).await {
+        Ok(summary) => summary,
+        Err(e) => {
+            state.runs.lock().await.remove(&run_id);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+        }
     };
 
-    let summary = executor
-        .execute_plan(&plan, &safety_report, &options)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut remediation = None;
+    let failed = summary
+        .step_results
+        .iter()
+        .find(|r| r.status == installer_core::StepRunStatus::Failed);
+    if let Some(failed_step) = failed {
+        if !summary.cancelled && !cancel.is_cancelled() {
+            let profile = match state.scanner.scan().await {
+                Ok(p) => p,
+                Err(_) => SystemProfile {
+                    os_name: state.os_provider.os_name(),
+                    os_version: String::new(),
+                    arch: state.os_provider.arch(),
+                    free_disk_bytes: 0,
+                    gpu_detected: None,
+                    installed_tools: vec![],
+                    active_path_entries: vec![],
+                },
+            };
+            let successful: Vec<_> = plan
+                .steps
+                .iter()
+                .take_while(|s| s.id != failed_step.step_id)
+                .cloned()
+                .collect();
+            let failure = FailureContext::new(
+                failed_step.step_id.clone(),
+                failed_step.verification.as_ref().and_then(|v| v.exit_code),
+                failed_step
+                    .verification
+                    .as_ref()
+                    .map(|v| v.stdout.clone())
+                    .unwrap_or_default(),
+                failed_step
+                    .error
+                    .clone()
+                    .or_else(|| {
+                        failed_step
+                            .verification
+                            .as_ref()
+                            .map(|v| v.stderr.clone())
+                    })
+                    .unwrap_or_default(),
+                profile,
+                successful,
+                1,
+            );
+            let llm: Arc<dyn LlmClient> = state.llm.clone();
+            let healer = Healer::new(llm, state.safety_engine.clone(), state.events.clone())
+                .with_max_attempts(1);
+            if let Ok(Some((mut rem_plan, rem_safety))) =
+                healer.diagnose_and_propose(&plan.goal, &failure).await
+            {
+                uniquify_plan_id(&mut rem_plan);
+                state.plans.write().await.insert(
+                    rem_plan.plan_id.clone(),
+                    (rem_plan.clone(), rem_safety.clone()),
+                );
+                let has_yellow = rem_safety
+                    .step_reports
+                    .iter()
+                    .any(|r| r.rating == RiskRating::Yellow);
+                let is_red = rem_safety.overall_rating == RiskRating::Red;
+                let meta = create_metadata_for_plan(&rem_plan, &rem_safety);
+                if is_red {
+                    remediation = Some(serde_json::json!({
+                        "kind": "plan",
+                        "plan": rem_plan,
+                        "safety": rem_safety,
+                        "step_metadata": meta,
+                        "blocked": true,
+                    }));
+                } else if has_yellow || !options.auto_approve_green {
+                    remediation = Some(serde_json::json!({
+                        "kind": "plan",
+                        "plan": rem_plan,
+                        "safety": rem_safety,
+                        "step_metadata": meta,
+                    }));
+                } else {
+                    let rem_options = ExecutionOptions {
+                        approved_step_ids: rem_plan.steps.iter().map(|s| s.id.clone()).collect(),
+                        allow_yellow_steps: std::collections::HashSet::new(),
+                        start_at_step_id: None,
+                        run_id: format!("{run_id}-heal"),
+                        cancel: cancel.clone(),
+                        ..options.clone()
+                    };
+                    match executor
+                        .execute_plan(&rem_plan, &rem_safety, &rem_options)
+                        .await
+                    {
+                        Ok(rem_summary) => {
+                            remediation = Some(serde_json::json!({
+                                "kind": "plan",
+                                "plan": rem_plan,
+                                "safety": rem_safety,
+                                "step_metadata": meta,
+                                "summary": rem_summary,
+                                "auto_ran": true,
+                            }));
+                        }
+                        Err(e) => {
+                            warn!("Remediation execute failed: {e}");
+                            remediation = Some(serde_json::json!({
+                                "kind": "plan",
+                                "plan": rem_plan,
+                                "safety": rem_safety,
+                                "step_metadata": meta,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    state.runs.lock().await.remove(&run_id);
 
     Ok(Json(serde_json::json!({
         "plan": plan,
         "safety": safety_report,
         "summary": summary,
+        "remediation": remediation,
+        "run_id": run_id,
     })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CancelExecuteRequest {
+    run_id: String,
+}
+
+async fn cancel_execute_handler(
+    State(state): State<AppState>,
+    Json(req): Json<CancelExecuteRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let runs = state.runs.lock().await;
+    match runs.get(&req.run_id) {
+        Some(token) => {
+            token.cancel();
+            Ok(Json(serde_json::json!({ "status": "cancelling" })))
+        }
+        None => Err((
+            StatusCode::NOT_FOUND,
+            "Unknown or finished run_id.".to_string(),
+        )),
+    }
 }
 async fn history_handler(
     State(state): State<AppState>,
@@ -1224,6 +1530,7 @@ mod prompt_tests {
         assert!(!STATIC_SYSTEM_PROMPT.contains("Byte"));
         assert!(!STATIC_SYSTEM_PROMPT.contains("Mochi"));
         assert!(STATIC_SYSTEM_PROMPT.contains("Manual setup guide"));
+        assert!(STATIC_SYSTEM_PROMPT.contains("setuppal-intent"));
         assert!(STATIC_SYSTEM_PROMPT.split_whitespace().count() <= 350);
     }
 

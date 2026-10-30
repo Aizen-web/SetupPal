@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::adapters::pypi::venv_python;
@@ -36,12 +37,21 @@ pub enum TrustCategory {
 pub struct ExecutionOptions {
     pub dry_run: bool,
     /// Runs Green steps without asking. When false, a live run halts at the first Green
-    /// step that is not in a trusted category.
+    /// step that is neither in `approved_step_ids` nor a trusted category.
     pub auto_approve_green: bool,
-    pub allow_yellow: bool,
+    /// Green step IDs the user explicitly approved for this run.
+    pub approved_step_ids: HashSet<String>,
+    /// Yellow step IDs the user explicitly approved for this run.
+    pub allow_yellow_steps: HashSet<String>,
+    /// Skip steps before this ID (already recorded); used after approving a held step.
+    pub start_at_step_id: Option<String>,
     /// Base folder for relative step paths and npm installs (the user's project folder).
     pub working_dir: PathBuf,
     pub trusted_categories: HashSet<TrustCategory>,
+    /// Cancels the run between steps and aborts in-flight OS commands.
+    pub cancel: CancellationToken,
+    /// Client-generated run id; included in `ExecutionCancelled` events.
+    pub run_id: String,
 }
 
 impl Default for ExecutionOptions {
@@ -49,9 +59,13 @@ impl Default for ExecutionOptions {
         Self {
             dry_run: true,
             auto_approve_green: false,
-            allow_yellow: false,
+            approved_step_ids: HashSet::new(),
+            allow_yellow_steps: HashSet::new(),
+            start_at_step_id: None,
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             trusted_categories: HashSet::new(),
+            cancel: CancellationToken::new(),
+            run_id: String::new(),
         }
     }
 }
@@ -82,6 +96,17 @@ impl ExecutionOptions {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StepRunStatus {
+    Done,
+    Failed,
+    Blocked,
+    Held,
+    Skipped,
+    Cancelled,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlanExecutionSummary {
     pub plan_id: String,
@@ -91,9 +116,12 @@ pub struct PlanExecutionSummary {
     pub overall_passed: bool,
     pub toolchain_verification: Option<VerificationResult>,
     /// Step the run stopped at because it needs user approval (Green without
-    /// auto-approve, or Yellow without `allow_yellow`).
+    /// auto-approve, or Yellow not in `allow_yellow_steps`).
     #[serde(default)]
     pub halted_at_step_id: Option<String>,
+    /// True when the run stopped because the cancel token fired.
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -107,10 +135,16 @@ pub struct StepExecutionResult {
     /// Real error text (including installer stderr) when the step failed while running.
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default = "default_step_status")]
+    pub status: StepRunStatus,
+}
+
+fn default_step_status() -> StepRunStatus {
+    StepRunStatus::Done
 }
 
 impl StepExecutionResult {
-    fn not_run(step: &PlannedStep, reason: String) -> Self {
+    fn not_run(step: &PlannedStep, reason: String, status: StepRunStatus) -> Self {
         Self {
             step_id: step.id.clone(),
             description: step.description.clone(),
@@ -119,6 +153,7 @@ impl StepExecutionResult {
             receipt: None,
             verification: None,
             error: None,
+            status,
         }
     }
 
@@ -131,12 +166,16 @@ impl StepExecutionResult {
             receipt: Some(receipt),
             verification,
             error: None,
+            status: StepRunStatus::Done,
         }
     }
 
     /// True when the step ran, raised no error, and any verification passed.
     pub fn succeeded(&self) -> bool {
-        self.executed && self.error.is_none() && self.verification.as_ref().is_none_or(|v| v.passed)
+        self.executed
+            && self.error.is_none()
+            && self.status == StepRunStatus::Done
+            && self.verification.as_ref().is_none_or(|v| v.passed)
     }
 }
 
@@ -185,9 +224,39 @@ impl Executor {
         let mut step_results = Vec::new();
         let mut all_succeeded = true;
         let mut halted_at_step_id = None;
+        let mut cancelled = false;
         let mut run = RunState::default();
+        let mut started = options.start_at_step_id.is_none();
 
         for step in &plan.steps {
+            if !started {
+                if options.start_at_step_id.as_deref() == Some(step.id.as_str()) {
+                    started = true;
+                } else {
+                    step_results.push(StepExecutionResult::not_run(
+                        step,
+                        "Skipped (already completed or waiting to resume)".to_string(),
+                        StepRunStatus::Skipped,
+                    ));
+                    continue;
+                }
+            }
+
+            if options.cancel.is_cancelled() {
+                self.events.emit(AgentEvent::ExecutionCancelled {
+                    run_id: options.run_id.clone(),
+                    step_id: step.id.clone(),
+                });
+                step_results.push(StepExecutionResult::not_run(
+                    step,
+                    "Cancelled by user".to_string(),
+                    StepRunStatus::Cancelled,
+                ));
+                all_succeeded = false;
+                cancelled = true;
+                break;
+            }
+
             let step_safety = safety_report
                 .step_reports
                 .iter()
@@ -195,7 +264,7 @@ impl Executor {
             let rating = step_safety.map(|s| s.rating).unwrap_or(RiskRating::Yellow);
             let reasons = step_safety.map(|s| s.reasons.clone()).unwrap_or_default();
 
-            // 1. Hard Red Block
+            // 1. Hard Red Block — never runs, even if listed in approval sets.
             if rating == RiskRating::Red {
                 let reason = format!(
                     "BLOCKED by Zero-Trust Safety Engine: Step '{}' scored RED risk. (Reasons: {})",
@@ -210,13 +279,17 @@ impl Executor {
                     step_id: step.id.clone(),
                     reason: reason.clone(),
                 });
-                step_results.push(StepExecutionResult::not_run(step, reason));
+                step_results.push(StepExecutionResult::not_run(
+                    step,
+                    reason,
+                    StepRunStatus::Blocked,
+                ));
                 all_succeeded = false;
                 break;
             }
 
-            // 2. Yellow Caution Gate
-            if rating == RiskRating::Yellow && !options.allow_yellow {
+            // 2. Yellow Caution Gate — only when this step id was explicitly approved.
+            if rating == RiskRating::Yellow && !options.allow_yellow_steps.contains(&step.id) {
                 let reason = format!(
                     "Confirmation required: Step '{}' scored YELLOW risk. Approve this step to continue. Reasons: {}",
                     step.id,
@@ -227,18 +300,21 @@ impl Executor {
                     rating: RiskRating::Yellow,
                     reasons,
                 });
-                step_results.push(StepExecutionResult::not_run(step, reason));
+                step_results.push(StepExecutionResult::not_run(
+                    step,
+                    reason,
+                    StepRunStatus::Held,
+                ));
                 halted_at_step_id = Some(step.id.clone());
                 all_succeeded = false;
                 break;
             }
 
-            // 3. Green Approval Gate: live runs halt unless auto-approved or trusted.
-            if rating == RiskRating::Green
-                && !options.dry_run
-                && !options.auto_approve_green
-                && !options.is_step_trusted(&step.step)
-            {
+            // 3. Green Approval Gate: live runs halt unless auto-approved, listed, or trusted.
+            let green_ok = options.auto_approve_green
+                || options.approved_step_ids.contains(&step.id)
+                || options.is_step_trusted(&step.step);
+            if rating == RiskRating::Green && !options.dry_run && !green_ok {
                 self.events.emit(AgentEvent::StepApprovalRequired {
                     step_id: step.id.clone(),
                     rating: RiskRating::Green,
@@ -246,35 +322,69 @@ impl Executor {
                 });
                 step_results.push(StepExecutionResult::not_run(
                     step,
-                    format!("Awaiting approval: Step '{}' is safe but needs your go-ahead.", step.id),
+                    format!(
+                        "Awaiting approval: Step '{}' is safe but needs your go-ahead.",
+                        step.id
+                    ),
+                    StepRunStatus::Held,
                 ));
                 halted_at_step_id = Some(step.id.clone());
                 all_succeeded = false;
                 break;
             }
 
-            let step_result = match self.execute_single_step(plan, step, options, &mut run).await {
+            let mut step_result = match self.execute_single_step(plan, step, options, &mut run).await {
                 Ok(result) => result,
-                Err(e) => StepExecutionResult {
-                    step_id: step.id.clone(),
-                    description: step.description.clone(),
-                    executed: true,
-                    blocked_reason: None,
-                    receipt: None,
-                    verification: None,
-                    error: Some(e.to_string()),
-                },
+                Err(e) => {
+                    let msg = e.to_string();
+                    let status = if options.cancel.is_cancelled()
+                        || msg.to_ascii_lowercase().contains("cancelled")
+                    {
+                        StepRunStatus::Cancelled
+                    } else {
+                        StepRunStatus::Failed
+                    };
+                    StepExecutionResult {
+                        step_id: step.id.clone(),
+                        description: step.description.clone(),
+                        executed: true,
+                        blocked_reason: None,
+                        receipt: None,
+                        verification: None,
+                        error: Some(msg),
+                        status,
+                    }
+                }
             };
 
+            if step_result.status == StepRunStatus::Cancelled || options.cancel.is_cancelled() {
+                step_result.status = StepRunStatus::Cancelled;
+                self.events.emit(AgentEvent::ExecutionCancelled {
+                    run_id: options.run_id.clone(),
+                    step_id: step.id.clone(),
+                });
+                step_results.push(step_result);
+                all_succeeded = false;
+                cancelled = true;
+                break;
+            }
+
             if let Some(err) = &step_result.error {
+                step_result.status = StepRunStatus::Failed;
                 self.events.emit(AgentEvent::StepExecutionFailed {
                     step_id: step.id.clone(),
                     error: err.clone(),
                 });
             } else if let Some(v) = step_result.verification.as_ref().filter(|v| !v.passed) {
+                step_result.status = StepRunStatus::Failed;
+                step_result.error = Some(
+                    format!("Verification failed: {} {}", v.command_run, v.stderr)
+                        .trim()
+                        .to_string(),
+                );
                 self.events.emit(AgentEvent::StepExecutionFailed {
                     step_id: step.id.clone(),
-                    error: format!("Verification failed: {} {}", v.command_run, v.stderr).trim().to_string(),
+                    error: step_result.error.clone().unwrap_or_default(),
                 });
             }
 
@@ -308,9 +418,10 @@ impl Executor {
             goal: plan.goal.clone(),
             dry_run: options.dry_run,
             step_results,
-            overall_passed: all_succeeded,
+            overall_passed: all_succeeded && !cancelled,
             toolchain_verification,
             halted_at_step_id,
+            cancelled,
         })
     }
 
@@ -400,11 +511,12 @@ impl Executor {
             dry_run: options.dry_run,
         });
 
-        let exec_ctx = ExecutionContext {
-            dry_run: options.dry_run,
-            working_dir: options.working_dir.clone(),
-            isolated_env: run.isolated_env.clone(),
-        };
+        let exec_ctx = ExecutionContext::new(
+            options.dry_run,
+            options.working_dir.clone(),
+            run.isolated_env.clone(),
+        )
+        .with_cancel(options.cancel.clone());
 
         let result = match &step.step {
             Step::InstallPackage {
@@ -755,7 +867,10 @@ impl Executor {
                 "venv".to_string(),
                 path.to_string_lossy().to_string(),
             ];
-            let out = self.os_provider.run_command(&python, &args, &paths).await?;
+            let out = self
+                .os_provider
+                .run_command_cancellable(&python, &args, &paths, None, Some(&options.cancel))
+                .await?;
             if out.exit_code != Some(0) {
                 return Err(CoreError::Adapter(AdapterError::CommandFailed {
                     exit_code: out.exit_code,
@@ -852,7 +967,7 @@ impl Executor {
         let before = list_dir_names(&versions_dir);
         let out = self
             .os_provider
-            .run_command_in_dir(&java, &args, &paths, Some(&mc_dir))
+            .run_command_cancellable(&java, &args, &paths, Some(&mc_dir), Some(&options.cancel))
             .await?;
         if out.exit_code != Some(0) {
             return Err(CoreError::Adapter(AdapterError::CommandFailed {

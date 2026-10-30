@@ -5,15 +5,74 @@
 
 import { apiClient } from './client.js';
 import { store } from '../state/store.js';
-import { setLastContext, motionReduced } from '../state/prefs.js';
+import { setLastContext, motionReduced, getSafetyLevel } from '../state/prefs.js';
 import { sounds } from '../audio/sound-engine.js';
 import { pixelVoice } from '../mascot/voicelines.js';
 import confetti from 'canvas-confetti';
+
+/** Map `/api/plan` (or remediation) JSON into the UI `activePlan` shape. */
+export function toActivePlan(data) {
+  const plan = data?.plan;
+  const safety = data?.safety;
+  const metaList = Array.isArray(data?.step_metadata) ? data.step_metadata : [];
+  if (!plan?.steps?.length) return null;
+
+  const stepReport = (id) =>
+    (safety?.step_reports || []).find(r => r.step_id === id) || null;
+
+  return {
+    planId: plan.plan_id,
+    title: plan.goal,
+    subtitle: plan.summary,
+    status: 'ready',
+    tasks: plan.steps.map((s, i) => {
+      const report = stepReport(s.id);
+      const meta = metaList.find(m => m.step_id === s.id) || {};
+      const rating = (report?.rating || 'yellow').toLowerCase();
+      const verdict = rating.toUpperCase();
+      return {
+        id: s.id,
+        num: i + 1,
+        title: s.description,
+        sourceDomain: meta.source_domain || '',
+        sourceUrl: meta.source_url || '',
+        verdict,
+        verdictTitle: meta.verdict_title || '',
+        verdictDesc: meta.verdict_desc || '',
+        reasons: Array.isArray(report?.reasons) ? report.reasons : [],
+        status: verdict === 'RED' ? 'blocked' : 'waiting',
+        approved: verdict === 'GREEN',
+      };
+    }),
+  };
+}
+
+function conversationSummary(messages, limit = 1400) {
+  const lines = (messages || [])
+    .filter(m => m && !m.isStreaming && !m.failed)
+    .slice(-8)
+    .map(m => {
+      const role = m.sender === 'user' ? 'User' : 'Assistant';
+      const text = String(m.text || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+      return `${role}: ${text}`;
+    });
+  let out = lines.join('\n');
+  if (out.length > limit) out = out.slice(-limit);
+  return out;
+}
+
+function escChat(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 export class BackendBridge {
   constructor() {
     this.isBackendOnline = false;
     this.activeExecutionPlan = null;
+    this.activeRunId = null;
     this.chatControllers = new Map();
     this.chatQueues = new Map();
     this._connectionPromise = new Promise(resolve => {
@@ -73,6 +132,20 @@ export class BackendBridge {
 
       case 'scan_completed':
         if (payload?.profile) {
+          const tools = payload.profile.installed_tools || [];
+          if (tools.length) {
+            store.setState(s => ({
+              ...s,
+              terminalLogs: [
+                ...s.terminalLogs,
+                {
+                  id: Date.now() + Math.random(),
+                  text: `~ detected ${tools.length} installed tool${tools.length === 1 ? '' : 's'}`,
+                  type: 'info',
+                },
+              ],
+            }));
+          }
           store.setMascotState('idle', pixelVoice.line('idle'));
         }
         break;
@@ -85,9 +158,24 @@ export class BackendBridge {
         store.setMascotState('speaking', pixelVoice.line('thinking'));
         break;
 
-      case 'plan_generated':
+      case 'plan_generated': {
+        const stepCount = payload?.plan?.steps?.length ?? 0;
         pixelVoice.trigger('plan_ready');
+        if (stepCount) {
+          store.setState(s => ({
+            ...s,
+            terminalLogs: [
+              ...s.terminalLogs,
+              {
+                id: Date.now() + Math.random(),
+                text: `~ plan ready with ${stepCount} step${stepCount === 1 ? '' : 's'}`,
+                type: 'info',
+              },
+            ],
+          }));
+        }
         break;
+      }
 
       case 'safety_check_started':
         store.setMascotState('scanning', pixelVoice.line('diagnosing'));
@@ -174,12 +262,82 @@ export class BackendBridge {
           });
           return {
             ...s,
+            activePlan: s.activePlan ? { ...s.activePlan, tasks } : s.activePlan,
             terminalLogs: [
               ...s.terminalLogs,
               { id: Date.now() + Math.random(), text: `⛔ BLOCKED: ${payload?.reason}`, type: 'error' }
             ]
           };
         });
+        break;
+
+      case 'step_execution_failed':
+        sounds.play('error');
+        store.setMascotState('error', pixelVoice.line('error'));
+        store.setState(s => {
+          const tasks = (s.activePlan?.tasks || []).map(t => {
+            if (t.id === payload?.step_id) return { ...t, status: 'failed' };
+            return t;
+          });
+          return {
+            ...s,
+            activePlan: s.activePlan ? { ...s.activePlan, tasks, status: 'failed' } : s.activePlan,
+            terminalLogs: [
+              ...s.terminalLogs,
+              { id: Date.now() + Math.random(), text: `✗ [${payload?.step_id}] ${payload?.error || 'failed'}`, type: 'error' }
+            ]
+          };
+        });
+        break;
+
+      case 'execution_cancelled':
+        store.setState(s => {
+          const tasks = (s.activePlan?.tasks || []).map(t => {
+            if (t.id === payload?.step_id || t.status === 'running') {
+              return { ...t, status: 'cancelled' };
+            }
+            return t;
+          });
+          return {
+            ...s,
+            activePlan: s.activePlan ? { ...s.activePlan, tasks, status: 'cancelled' } : s.activePlan,
+            terminalLogs: [
+              ...s.terminalLogs,
+              { id: Date.now() + Math.random(), text: `■ cancelled at ${payload?.step_id || 'step'}`, type: 'yellow' }
+            ]
+          };
+        });
+        store.endRun();
+        store.setMascotState('idle', pixelVoice.line('stopped'));
+        break;
+
+      case 'self_heal_triggered':
+        store.setMascotState('diagnosing', pixelVoice.line('diagnosing'));
+        store.setState(s => ({
+          ...s,
+          terminalLogs: [
+            ...s.terminalLogs,
+            {
+              id: Date.now() + Math.random(),
+              text: `~ self-heal: diagnosing ${payload?.failed_step_id || 'failed step'} (attempt ${payload?.attempt || 1})`,
+              type: 'info',
+            },
+          ],
+        }));
+        break;
+
+      case 'self_heal_plan_proposed':
+        store.setState(s => ({
+          ...s,
+          terminalLogs: [
+            ...s.terminalLogs,
+            {
+              id: Date.now() + Math.random(),
+              text: `~ self-heal: remediation plan proposed (${payload?.remediation_plan?.steps?.length || 0} steps)`,
+              type: 'info',
+            },
+          ],
+        }));
         break;
 
       case 'step_approval_required':
@@ -212,15 +370,24 @@ export class BackendBridge {
         }));
         break;
 
-      case 'verification_completed':
+      case 'verification_completed': {
+        const passed = payload?.result?.passed !== false;
+        const cmd = payload?.result?.command_run || 'check';
         store.setState(s => ({
           ...s,
           terminalLogs: [
             ...s.terminalLogs,
-            { id: Date.now() + Math.random(), text: `✓ verification check passed: ${JSON.stringify(payload?.result?.command_run || 'OK')}`, type: 'green' }
-          ]
+            {
+              id: Date.now() + Math.random(),
+              text: passed
+                ? `✓ verification passed: ${cmd}`
+                : `✗ verification failed: ${cmd} — ${payload?.result?.stderr || ''}`.trim(),
+              type: passed ? 'green' : 'error',
+            },
+          ],
         }));
         break;
+      }
 
       case 'transaction_recorded':
         this.refreshHistory();
@@ -261,6 +428,19 @@ export class BackendBridge {
 
   stopChat(conversationId = store.getState().activeConversationId) {
     this.chatControllers.get(conversationId)?.abort();
+  }
+
+  async cancelRun() {
+    if (!this.activeRunId) {
+      store.endRun();
+      return;
+    }
+    try {
+      await apiClient.cancelExecute(this.activeRunId);
+    } catch (err) {
+      console.warn('Cancel request failed:', err);
+      store.endRun();
+    }
   }
 
   async runChatTurn(goal, conversationId) {
@@ -304,6 +484,7 @@ export class BackendBridge {
     let pendingText = '';
     let frame = null;
     let completed = null;
+    let intent = null;
     const flush = () => {
       frame = null;
       reply = pendingText;
@@ -349,6 +530,9 @@ export class BackendBridge {
           if (event.type === 'message.delta' && typeof event.text === 'string') {
             pendingText += event.text;
             if (frame === null) frame = requestAnimationFrame(flush);
+          } else if (event.type === 'message.intent') {
+            intent = event.intent || null;
+            console.log('[SetupPal] message.intent', intent);
           } else if (event.type === 'message.end') {
             completed = event;
           } else if (event.type === 'message.error') {
@@ -369,6 +553,7 @@ export class BackendBridge {
         text: reply,
         options: [],
         isStreaming: false,
+        intent: intent || null,
       });
       store.persistConversations();
       if (store.getState().activeConversationId === conversationId) {
@@ -376,13 +561,20 @@ export class BackendBridge {
           ...s,
           isChatGenerating: false,
           chatMessages: s.chatMessages.map(message =>
-            message.id === assistantId ? { ...message, text: reply, isStreaming: false } : message
+            message.id === assistantId
+              ? { ...message, text: reply, isStreaming: false, intent: intent || null }
+              : message
           ),
         }));
       }
       sounds.play('msg.receive');
       pixelVoice.trigger('questions_asked');
-      return { reply, context: completed.context || null };
+
+      if (intent) {
+        await this.handleIntent(conversationId, intent, store.getConversationMessages(conversationId));
+      }
+
+      return { reply, context: completed.context || null, intent };
     } catch (error) {
       if (frame !== null) {
         cancelAnimationFrame(frame);
@@ -436,7 +628,104 @@ export class BackendBridge {
     }
   }
 
-  async approveAndRunPlan(trustedCategories = []) {
+  async handleIntent(conversationId, intent, historyMessages = []) {
+    if (!intent?.kind) return;
+
+    if (intent.kind === 'manual') {
+      const alts = Array.isArray(intent.alternatives) ? intent.alternatives : [];
+      store.setState(s => {
+        if (s.activeConversationId !== conversationId) return s;
+        return {
+          ...s,
+          activePlan: null,
+          manualGuide: {
+            item: intent.item,
+            reason: intent.reason,
+            alternatives: alts,
+          },
+        };
+      });
+      // Persist manual guide on the conversation via activePlan-null + message intent already stored.
+      store.persistConversations();
+      return;
+    }
+
+    if (intent.kind !== 'install' || !intent.goal) return;
+
+    try {
+      if (!this.isBackendOnline) await this.waitForConnection(3000);
+      const data = await apiClient.createPlan(intent.goal, {
+        context: conversationSummary(historyMessages),
+      });
+
+      if (data?.kind === 'manual' || (data?.item && data?.reason && !data?.plan)) {
+        store.setState(s => {
+          if (s.activeConversationId !== conversationId) return s;
+          return {
+            ...s,
+            activePlan: null,
+            manualGuide: {
+              item: data.item,
+              reason: data.detail || data.reason,
+              alternatives: data.alternatives || [],
+              steps: data.steps || [],
+            },
+          };
+        });
+        store.persistConversations();
+        return;
+      }
+
+      const activePlan = toActivePlan(data);
+      if (!activePlan) return;
+      this.activeExecutionPlan = data.plan;
+      store.setState(s => {
+        if (s.activeConversationId !== conversationId) {
+          // Still persist onto the originating conversation.
+          return s;
+        }
+        return {
+          ...s,
+          activePlan,
+          manualGuide: null,
+          tasksOpen: true,
+        };
+      });
+      // Ensure conversation snapshot gets the plan.
+      store.setState(s => s);
+      store.persistConversations();
+    } catch (err) {
+      console.error('Plan from intent failed:', err);
+      store.setState(s => ({
+        ...s,
+        chatMessages: [
+          ...s.chatMessages,
+          {
+            id: 'a_' + Date.now(),
+            sender: 'assistant',
+            text: `**Could not build a plan:** ${err.message}`,
+            options: [],
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            planAttached: false,
+          },
+        ],
+      }));
+    }
+  }
+
+  /**
+   * @param {object} opts
+   * @param {string[]} [opts.trustedCategories]
+   * @param {string[]} [opts.approvedStepIds]
+   * @param {string[]} [opts.allowYellowSteps]
+   * @param {string|null} [opts.startAtStepId]
+   */
+  async approveAndRunPlan({
+    trustedCategories = [],
+    approvedStepIds = null,
+    allowYellowSteps = null,
+    startAtStepId = null,
+  } = {}) {
     sounds.play('ui.click');
     pixelVoice.trigger('plan_approve');
     store.beginRun();
@@ -445,59 +734,175 @@ export class BackendBridge {
       await this.waitForConnection(3000);
     }
 
-    try {
-      if (!this.activeExecutionPlan) {
-        const initialGoal = store.getState().activePlan?.title || "Web and TypeScript development stack";
-        const data = await apiClient.createPlan(initialGoal);
-        this.activeExecutionPlan = data.plan;
-      }
-
-      const result = await apiClient.executePlan({
-        planId: this.activeExecutionPlan?.plan_id,
-        dryRun: false,
-        autoApproveGreen: true,
-        allowYellow: false,
-        customPlan: this.activeExecutionPlan,
-        trustedCategories: trustedCategories
-      });
-
-      console.log("Plan execution finished:", result);
-
-      // Celebration
-      sounds.play('task.all_done');
-      sounds.play('celebrate');
-      pixelVoice.trigger('completed');
-
-      if (!motionReduced()) {
-        try {
-          confetti({
-            particleCount: 85,
-            spread: 65,
-            origin: { y: 0.6 },
-            colors: ['#39FF14', '#E6E0FF', '#E9B949', '#5CFF3A']
-          });
-        } catch (e) {}
-      }
-
+    const active = store.getState().activePlan;
+    const planId = active?.planId || this.activeExecutionPlan?.plan_id;
+    if (!planId) {
+      store.endRun();
+      store.setMascotState('error', pixelVoice.line('error'));
       store.setState(s => ({
         ...s,
-        activePlan: { ...s.activePlan, status: 'completed' },
+        chatMessages: [
+          ...s.chatMessages,
+          {
+            id: 'a_' + Date.now(),
+            sender: 'assistant',
+            text: '**Error:** No plan is ready to run. Ask SetupPal to set something up first.',
+            options: [],
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            planAttached: false,
+          },
+        ],
+      }));
+      return null;
+    }
+
+    const tasks = active?.tasks || [];
+    const greenIds = approvedStepIds
+      ?? tasks.filter(t => t.verdict === 'GREEN' && t.approved !== false).map(t => t.id);
+    const yellowIds = allowYellowSteps
+      ?? tasks.filter(t => t.verdict === 'YELLOW' && t.approved).map(t => t.id);
+
+    const safety = getSafetyLevel();
+    const autoApproveGreen = safety !== 'strict';
+    const runId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `run-${Date.now()}`;
+    this.activeRunId = runId;
+
+    try {
+      const result = await apiClient.executePlan({
+        runId,
+        planId,
+        dryRun: false,
+        autoApproveGreen,
+        approvedStepIds: greenIds,
+        allowYellowSteps: yellowIds,
+        startAtStepId,
+        trustedCategories,
+      });
+
+      console.log('Plan execution finished:', result);
+      this.activeRunId = null;
+
+      const summary = result?.summary;
+      const cancelled = Boolean(summary?.cancelled);
+      const halted = Boolean(summary?.halted_at_step_id);
+      const passed = Boolean(summary?.overall_passed);
+
+      if (result?.remediation?.plan && !result.remediation.auto_ran) {
+        const remPlan = toActivePlan(result.remediation);
+        if (remPlan) {
+          this.activeExecutionPlan = result.remediation.plan;
+          store.setState(s => ({
+            ...s,
+            activePlan: { ...remPlan, status: 'ready' },
+            terminalLogs: [
+              ...s.terminalLogs,
+              {
+                id: Date.now() + Math.random(),
+                text: result.remediation.blocked
+                  ? '~ remediation scored RED and will not run'
+                  : '~ remediation plan ready — review and approve to continue',
+                type: result.remediation.blocked ? 'error' : 'yellow',
+              },
+            ],
+          }));
+          store.persistConversations();
+        }
+      }
+
+      if (cancelled) {
+        store.setState(s => ({
+          ...s,
+          activePlan: s.activePlan ? { ...s.activePlan, status: 'cancelled' } : s.activePlan,
+        }));
+        store.endRun();
+        store.setMascotState('idle', pixelVoice.line('stopped'));
+        this.refreshHistory();
+        return result;
+      }
+
+      if (halted) {
+        const heldId = summary.halted_at_step_id;
+        store.setState(s => {
+          const tasksNext = (s.activePlan?.tasks || []).map(t => {
+            if (t.id === heldId) return { ...t, status: 'held' };
+            return t;
+          });
+          return {
+            ...s,
+            activePlan: s.activePlan
+              ? { ...s.activePlan, status: 'ready', tasks: tasksNext, haltedAt: heldId }
+              : s.activePlan,
+          };
+        });
+        store.endRun();
+        pixelVoice.trigger('warning_held');
+        this.refreshHistory();
+        return result;
+      }
+
+      if (passed) {
+        sounds.play('task.all_done');
+        sounds.play('celebrate');
+        pixelVoice.trigger('completed');
+        if (!motionReduced()) {
+          try {
+            confetti({
+              particleCount: 85,
+              spread: 65,
+              origin: { y: 0.6 },
+              colors: ['#39FF14', '#E6E0FF', '#E9B949', '#5CFF3A'],
+            });
+          } catch (e) { /* ignore */ }
+        }
+        store.setState(s => ({
+          ...s,
+          activePlan: { ...s.activePlan, status: 'completed' },
+          terminalLogs: [
+            ...s.terminalLogs,
+            { id: Date.now() + 99, text: '✓ ALL APPROVED TASKS EXECUTED AND VERIFIED CLEANLY', type: 'green' },
+          ],
+        }));
+        this.refreshHistory();
+        setTimeout(() => {
+          store.endRun();
+          store.setMascotState('idle', pixelVoice.line('idle'));
+        }, 4000);
+        return result;
+      }
+
+      // Failed overall
+      const failed = (summary?.step_results || []).find(r => r.status === 'failed' || r.error);
+      const stderr = String(failed?.error || failed?.verification?.stderr || 'A step failed.')
+        .slice(0, 600);
+      sounds.play('error');
+      store.endRun();
+      store.setMascotState('error', pixelVoice.line('error'));
+      store.setState(s => ({
+        ...s,
+        activePlan: s.activePlan ? { ...s.activePlan, status: 'failed' } : s.activePlan,
+        chatMessages: [
+          ...s.chatMessages,
+          {
+            id: 'a_' + Date.now(),
+            sender: 'assistant',
+            text: `**Step failed:** ${escChat(stderr)}`,
+            options: [],
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            planAttached: false,
+          },
+        ],
         terminalLogs: [
           ...s.terminalLogs,
-          { id: Date.now() + 99, text: '✓ ALL APPROVED TASKS EXECUTED AND VERIFIED CLEANLY', type: 'green' }
-        ]
+          { id: Date.now() + Math.random(), text: `✗ ${stderr}`, type: 'error' },
+        ],
       }));
-
       this.refreshHistory();
-
-      setTimeout(() => {
-        store.endRun();
-        store.setMascotState('idle', pixelVoice.line('idle'));
-      }, 4000);
-
       return result;
     } catch (err) {
-      console.error("Plan execution failed:", err);
+      console.error('Plan execution failed:', err);
+      this.activeRunId = null;
       sounds.play('error');
       store.endRun();
       store.setMascotState('error', pixelVoice.line('error'));
@@ -511,10 +916,11 @@ export class BackendBridge {
             text: `**Error:** ${err.message}`,
             options: [],
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            planAttached: false
-          }
-        ]
+            planAttached: false,
+          },
+        ],
       }));
+      return null;
     }
   }
 

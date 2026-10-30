@@ -219,7 +219,13 @@ impl SourceAdapter for NpmAdapter {
         ];
         let out = self
             .os_provider
-            .run_command_in_dir(&npm_bin, &args, &paths, Some(&ctx.working_dir))
+            .run_command_cancellable(
+                &npm_bin,
+                &args,
+                &paths,
+                Some(&ctx.working_dir),
+                Some(&ctx.cancel),
+            )
             .await
             .map_err(|e| AdapterError::Other(e.to_string()))?;
 
@@ -314,11 +320,8 @@ mod tests {
         );
         let adapter = NpmAdapter::new(os.clone());
         let meta = PackageMetadata::bare(AdapterKind::Npm, "typescript", "5.6.2");
-        let ctx = ExecutionContext {
-            dry_run: false,
-            working_dir: project.path().to_path_buf(),
-            isolated_env: None,
-        };
+        let ctx = ExecutionContext::new(false, project.path().to_path_buf(), None,
+        );
         let receipt = adapter.install(&meta, None, &ctx).await.unwrap();
         let calls = os.calls();
         assert_eq!(calls[0].cwd.as_deref(), Some(project.path()));
@@ -334,11 +337,8 @@ mod tests {
             .on("npm", &["ls"], ok("my-app@1.0.0 C:\\proj\n`-- (empty)"));
         let adapter = NpmAdapter::new(Arc::new(os));
         let meta = PackageMetadata::bare(AdapterKind::Npm, "typescript", "5.6.2");
-        let ctx = ExecutionContext {
-            dry_run: false,
-            working_dir: PathBuf::from("."),
-            isolated_env: None,
-        };
+        let ctx = ExecutionContext::new(false, PathBuf::from("."), None,
+        );
         assert!(!adapter.verify(&meta, &ctx).await.unwrap().passed);
     }
 }

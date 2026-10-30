@@ -26,11 +26,15 @@ pub use adapters::{
     PyPIAdapter, SourceAdapter, VendorUrlAdapter, VerificationResult, WingetAdapter,
 };
 pub use installability::{
-    Installability, ManualGuide, ManualReason, StepInstallability,
+    apply_to_safety_report, check_plan, first_manual, manual_guide, Installability, ManualGuide,
+    ManualReason, StepInstallability,
 };
 pub use config::{CoreConfig, CoreError};
 pub use events::{AgentEvent, EventBus};
-pub use executor::{ExecutionOptions, Executor, PlanExecutionSummary, StepExecutionResult, TrustCategory};
+pub use executor::{
+    ExecutionOptions, Executor, PlanExecutionSummary, StepExecutionResult, StepRunStatus,
+    TrustCategory,
+};
 pub use healer::{FailureContext, Healer};
 pub use llm::{LlmClient, NimClient};
 pub use os::{CommandOutput, OsProvider, PlatformOsProvider};

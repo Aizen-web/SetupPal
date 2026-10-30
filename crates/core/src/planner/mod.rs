@@ -30,6 +30,19 @@ impl Planner {
         profile: &SystemProfile,
         untrusted_context: Option<&str>,
     ) -> Result<Plan, CoreError> {
+        self.create_plan_with_context(goal, profile, untrusted_context, None)
+            .await
+    }
+
+    /// Like `create_plan`, but `conversation_context` is appended to the LLM prompt only
+    /// (never treated as untrusted README context, so recipe matching still runs).
+    pub async fn create_plan_with_context(
+        &self,
+        goal: &str,
+        profile: &SystemProfile,
+        untrusted_context: Option<&str>,
+        conversation_context: Option<&str>,
+    ) -> Result<Plan, CoreError> {
         let trimmed_goal = goal.trim();
         if trimmed_goal.is_empty() {
             return Err(CoreError::Validation("goal must not be empty".to_string()));
@@ -54,16 +67,24 @@ impl Planner {
             }
         }
 
-        // 2. Fall back to NVIDIA NIM with JSON Schema enforcement
+        // 2. Fall back to the pinned provider with JSON Schema enforcement
         self.events.emit(AgentEvent::LlmPlanningFallback {
             goal: trimmed_goal.to_string(),
             model: self.llm.model_name().to_string(),
         });
 
-        let plan = self
+        let llm_goal = match conversation_context.map(str::trim).filter(|c| !c.is_empty()) {
+            Some(ctx) => format!(
+                "{trimmed_goal}\n\nConversation summary (for planning only):\n{ctx}"
+            ),
+            None => trimmed_goal.to_string(),
+        };
+
+        let mut plan = self
             .llm
-            .propose_plan(trimmed_goal, profile, untrusted_context)
+            .propose_plan(&llm_goal, profile, untrusted_context)
             .await?;
+        plan.goal = trimmed_goal.to_string();
 
         self.validate_plan_structure(&plan)?;
 

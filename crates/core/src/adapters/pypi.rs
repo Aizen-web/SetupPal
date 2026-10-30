@@ -219,7 +219,7 @@ impl SourceAdapter for PyPIAdapter {
         ];
         let out = self
             .os_provider
-            .run_command(&python_bin, &args, &paths)
+            .run_command_cancellable(&python_bin, &args, &paths, None, Some(&ctx.cancel))
             .await
             .map_err(|e| AdapterError::Other(e.to_string()))?;
 
@@ -315,11 +315,8 @@ mod tests {
         );
         let adapter = PyPIAdapter::new(os.clone());
         let meta = PackageMetadata::bare(AdapterKind::PyPI, "numpy", "2.1.1");
-        let ctx = ExecutionContext {
-            dry_run: false,
-            working_dir: PathBuf::from("."),
-            isolated_env: Some(env.path().to_path_buf()),
-        };
+        let ctx = ExecutionContext::new(false, PathBuf::from("."), Some(env.path().to_path_buf()),
+        );
         adapter.install(&meta, None, &ctx).await.unwrap();
         assert_eq!(os.calls()[0].binary, py);
     }
@@ -330,11 +327,8 @@ mod tests {
         let os = Arc::new(MockOsProvider::new().with_binary("python", "C:/global/python.exe"));
         let adapter = PyPIAdapter::new(os.clone());
         let meta = PackageMetadata::bare(AdapterKind::PyPI, "numpy", "2.1.1");
-        let ctx = ExecutionContext {
-            dry_run: false,
-            working_dir: PathBuf::from("."),
-            isolated_env: Some(env.path().to_path_buf()),
-        };
+        let ctx = ExecutionContext::new(false, PathBuf::from("."), Some(env.path().to_path_buf()),
+        );
         assert!(adapter.install(&meta, None, &ctx).await.is_err());
         assert!(os.calls().is_empty());
     }
