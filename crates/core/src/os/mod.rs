@@ -249,6 +249,8 @@ impl OsProvider for PlatformOsProvider {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
         cmd.kill_on_drop(true);
+        #[cfg(windows)]
+        windows::hide_console(&mut cmd);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
@@ -261,7 +263,11 @@ impl OsProvider for PlatformOsProvider {
 
         // Job Object kills the whole tree (msiexec, unins000, …) on timeout/cancel/drop.
         let job = job::KillOnCloseJob::create();
+        #[cfg(windows)]
+        let _silent = windows::SilentChildGuard::enter();
         let mut child = cmd.spawn()?;
+        #[cfg(windows)]
+        drop(_silent);
         if let Some(ref job) = job {
             #[cfg(windows)]
             {

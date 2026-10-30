@@ -1,11 +1,65 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tokio::process::Command;
 
 use crate::config::CoreError;
 
 pub const HKCU_ENV_KEY: &str = r"HKCU\Environment";
 pub const HKLM_ENV_KEY: &str = r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+/// Inherited by child processes. Stops Windows from leaving a modal
+/// "was unable to start correctly" box up when a helper such as nvidia-smi fails to load.
+const SILENT_CHILD_ERRORS: u32 = 0x0001 | 0x0002 | 0x8000;
+
+static SILENT_DEPTH: Mutex<u32> = Mutex::new(0);
+static SILENT_PREVIOUS: Mutex<u32> = Mutex::new(0);
+
+/// Process-wide error mode while at least one helper is being spawned.
+pub(crate) struct SilentChildGuard;
+
+impl SilentChildGuard {
+    pub(crate) fn enter() -> Self {
+        let mut depth = SILENT_DEPTH.lock().unwrap_or_else(|poison| poison.into_inner());
+        if *depth == 0 {
+            let previous = unsafe { windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode(SILENT_CHILD_ERRORS) };
+            *SILENT_PREVIOUS.lock().unwrap_or_else(|poison| poison.into_inner()) = previous;
+        }
+        *depth += 1;
+        Self
+    }
+}
+
+impl Drop for SilentChildGuard {
+    fn drop(&mut self) {
+        let mut depth = SILENT_DEPTH.lock().unwrap_or_else(|poison| poison.into_inner());
+        *depth = depth.saturating_sub(1);
+        if *depth == 0 {
+            let previous = *SILENT_PREVIOUS.lock().unwrap_or_else(|poison| poison.into_inner());
+            unsafe { windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode(previous) };
+        }
+    }
+}
+
+pub(crate) fn hide_console(cmd: &mut Command) {
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+/// Runs a helper with no console window. A tool that cannot start fails the call
+/// instead of popping a dialog that blocks the chat.
+async fn hidden_output(mut cmd: Command) -> std::io::Result<std::process::Output> {
+    hide_console(&mut cmd);
+    cmd.kill_on_drop(true);
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    let child = {
+        let _silent = SilentChildGuard::enter();
+        cmd.spawn()?
+    };
+    child.wait_with_output().await
+}
 
 /// Queries `reg.exe query` for both `HKLM` (System) and `HKCU` (User) `Path` values,
 /// merges them with the current process `PATH`, expands `%USERPROFILE%` / `%SystemRoot%`
@@ -51,10 +105,9 @@ pub async fn read_windows_registry_path() -> Result<Vec<PathBuf>, CoreError> {
 }
 
 async fn query_reg_path_value(reg_key: &str) -> Result<String, CoreError> {
-    let out = Command::new("reg")
-        .args(["query", reg_key, "/v", "Path"])
-        .output()
-        .await?;
+    let mut cmd = Command::new("reg");
+    cmd.args(["query", reg_key, "/v", "Path"]);
+    let out = hidden_output(cmd).await?;
 
     if !out.status.success() {
         return Err(CoreError::Os(format!(
@@ -79,7 +132,7 @@ pub async fn query_registry_string(reg_key: &str, value: Option<&str>) -> Option
         Some(name) => cmd.args(["/v", name]),
         None => cmd.arg("/ve"),
     };
-    let out = cmd.output().await.ok()?;
+    let out = hidden_output(cmd).await.ok()?;
     if !out.status.success() {
         return None;
     }
@@ -178,7 +231,9 @@ fn replace_case_insensitive(haystack: &str, needle: &str, replacement: &str) -> 
 }
 
 pub async fn query_windows_version() -> String {
-    if let Ok(out) = Command::new("cmd").args(["/C", "ver"]).output().await {
+    let mut cmd = Command::new("cmd");
+    cmd.args(["/C", "ver"]);
+    if let Ok(out) = hidden_output(cmd).await {
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !s.is_empty() {
             return s;
@@ -187,24 +242,26 @@ pub async fn query_windows_version() -> String {
     "Windows".to_string()
 }
 
+/// GPU name from Windows, not `nvidia-smi`. That tool fails to load on some
+/// driver installs and Windows then shows a modal 0xc0000142 dialog.
 pub async fn detect_windows_gpu() -> Option<String> {
-    if let Ok(out) = Command::new("nvidia-smi")
-        .args(["--query-gpu=name", "--format=csv,noheader"])
-        .output()
-        .await
-    {
-        if out.status.success() {
-            let gpu = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .next()?
-                .trim()
-                .to_string();
-            if !gpu.is_empty() {
-                return Some(gpu);
-            }
-        }
+    let mut cmd = Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Get-CimInstance Win32_VideoController | Where-Object { $_.Name -and $_.Name -notmatch 'Microsoft Basic Display' } | Select-Object -ExpandProperty Name",
+    ]);
+    let out = hidden_output(cmd).await.ok()?;
+    if !out.status.success() {
+        return None;
     }
-    None
+    let gpu = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?
+        .to_string();
+    if gpu.is_empty() { None } else { Some(gpu) }
 }
 
 /// Letter of the drive that holds `target_dir` (falling back to the system drive).
@@ -234,11 +291,9 @@ fn drive_letter_for(target_dir: &Path) -> char {
 pub async fn query_windows_free_disk(target_dir: &Path) -> u64 {
     let letter = drive_letter_for(target_dir);
     let script = format!("(Get-PSDrive -Name {letter} -PSProvider FileSystem).Free");
-    match Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output()
-        .await
-    {
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    match hidden_output(cmd).await {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
             .trim()
             .parse::<u64>()
@@ -284,20 +339,19 @@ pub async fn add_to_windows_user_path(directory: &Path) -> Result<String, CoreEr
             .collect::<Vec<_>>()
             .join(";");
 
-        let out = Command::new("reg")
-            .args([
-                "add",
-                HKCU_ENV_KEY,
-                "/v",
-                "Path",
-                "/t",
-                "REG_EXPAND_SZ",
-                "/d",
-                &new_path_val,
-                "/f",
-            ])
-            .output()
-            .await?;
+        let mut cmd = Command::new("reg");
+        cmd.args([
+            "add",
+            HKCU_ENV_KEY,
+            "/v",
+            "Path",
+            "/t",
+            "REG_EXPAND_SZ",
+            "/d",
+            &new_path_val,
+            "/f",
+        ]);
+        let out = hidden_output(cmd).await?;
 
         if !out.status.success() {
             return Err(CoreError::Os(format!(
@@ -327,11 +381,9 @@ pub async fn blocking_installer_message() -> Option<String> {
 }
 
 async fn tasklist_running(image: &str, label: &str) -> Option<String> {
-    let out = Command::new("tasklist")
-        .args(["/FI", &format!("IMAGENAME eq {image}"), "/FO", "CSV", "/NH"])
-        .output()
-        .await
-        .ok()?;
+    let mut cmd = Command::new("tasklist");
+    cmd.args(["/FI", &format!("IMAGENAME eq {image}"), "/FO", "CSV", "/NH"]);
+    let out = hidden_output(cmd).await.ok()?;
     if !out.status.success() {
         return None;
     }
@@ -359,20 +411,19 @@ pub async fn restore_windows_user_path(previous_raw: &str) -> Result<(), CoreErr
         .collect::<Vec<_>>()
         .join(";");
 
-    let out = Command::new("reg")
-        .args([
-            "add",
-            HKCU_ENV_KEY,
-            "/v",
-            "Path",
-            "/t",
-            "REG_EXPAND_SZ",
-            "/d",
-            &cleaned,
-            "/f",
-        ])
-        .output()
-        .await?;
+    let mut cmd = Command::new("reg");
+    cmd.args([
+        "add",
+        HKCU_ENV_KEY,
+        "/v",
+        "Path",
+        "/t",
+        "REG_EXPAND_SZ",
+        "/d",
+        &cleaned,
+        "/f",
+    ]);
+    let out = hidden_output(cmd).await?;
 
     if !out.status.success() {
         return Err(CoreError::Os(format!(
