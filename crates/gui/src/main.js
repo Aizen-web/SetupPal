@@ -13,7 +13,7 @@ import { store } from './state/store.js';
 import { bridge } from './api/bridge.js';
 import { renderSidebar } from './components/sidebar.js';
 import { renderChatView } from './components/chat-view.js';
-import { updateStreamingMessage } from './components/chat-message.js';
+import { updateStreamingMessage, updateTerminalModelStream } from './components/chat-message.js';
 import { renderTaskPanel } from './components/task-panel.js';
 import { renderDownloadsView } from './components/downloads-view.js';
 import { renderHistoryView } from './components/history-view.js';
@@ -73,9 +73,14 @@ function initApp() {
   const modalEl = document.getElementById('modal-container');
 
   window.addEventListener('setuppal:stream-delta', (event) => {
-    const { conversationId, messageId, text } = event.detail || {};
-    if (store.getState().activeConversationId !== conversationId) return;
-    updateStreamingMessage(messageId, text);
+    const { conversationId, messageId, text, thinking } = event.detail || {};
+    const state = store.getState();
+    if (state.activeConversationId !== conversationId) return;
+    updateStreamingMessage(messageId, text, thinking);
+    // Terminal tab hides the chat panel; mirror the live model stream there so it does not look stalled.
+    if (state.mode === 'hacker' && state.terminalTab === 'terminal') {
+      updateTerminalModelStream(text || (thinking ? 'thinking…' : ''));
+    }
   });
 
   function render() {

@@ -72,10 +72,10 @@ function doctorHtml() {
 
 function selectedModelMeta(prefs) {
   const health = apiClient.lastHealth;
-  const id = health?.model_id || prefs.model || 'super';
+  const id = health?.model_id || prefs.model || 'lightning';
   const catalog = Array.isArray(health?.models) ? health.models : [];
   const fromHealth = catalog.find((m) => m.id === id);
-  const local = NEMOTRON_MODELS[id] || NEMOTRON_MODELS.super;
+  const local = NEMOTRON_MODELS[id] || NEMOTRON_MODELS.lightning;
   const name = fromHealth?.name || local.label;
   const description = fromHealth?.description || local.description;
   const apiId = fromHealth?.api_id || health?.model || '';
@@ -181,7 +181,7 @@ export function renderSettingsView(container) {
               hint: modelHint(prefs),
               control: select(
                 'setting-model',
-                Object.values(NEMOTRON_MODELS).map((m) => [m.id, m.id === 'super' ? `${m.label} (Default)` : m.label]),
+                Object.values(NEMOTRON_MODELS).map((m) => [m.id, m.id === 'lightning' ? `${m.label} (Default)` : m.label]),
                 selectedModelMeta(prefs).id,
               ),
             })}

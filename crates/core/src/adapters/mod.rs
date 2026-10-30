@@ -339,7 +339,7 @@ impl AdapterRegistry {
 /// Shared HTTP client used by the registry adapters.
 pub(crate) fn registry_http_client(timeout_secs: u64) -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent("SetupPal-Orchestrator/0.1.0")
+        .user_agent("SetupPal-Orchestrator/0.0.1")
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .pool_idle_timeout(std::time::Duration::from_secs(90))

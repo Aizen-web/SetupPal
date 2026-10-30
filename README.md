@@ -26,12 +26,12 @@ That is a complete product experience—not a prompt demo: chat → plan card �
 | Piece | Detail |
 | --- | --- |
 | **Provider** | [Nebius Token Factory](https://tokenfactory.nebius.com/) OpenAI-compatible API (`https://api.tokenfactory.nebius.com/v1`) only |
-| **Selectable models** | Nemotron 3.5 Lightning (`nvidia/Nemotron-3_5-Lightning`), **Nemotron 3 Super** default (`nvidia/nemotron-3-super-120b-a12b`), Nemotron 3 Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`) — catalog IDs only |
+| **Selectable models** | **Nemotron 3.5 Lightning** default (`nvidia/Nemotron-3_5-Lightning`), Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`), Nemotron 3 Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`) — catalog IDs only |
 | **What the model does** | Streams chat replies and emits structured install intents / plans |
 | **What the model never does** | Execute shell commands, bypass the Safety Engine, or override Red ratings |
 | **Optional** | Tavily — Safety Engine source-domain consensus only (not general chat search) |
 
-Pick a model in **Settings**. Default is Nemotron 3 Super. Choice is persisted across restarts; unknown IDs are rejected with a clear error (no silent fallback). Keys live in Windows Credential Manager (desktop) or `.env` (CLI / debug).
+Pick a model in **Settings** or from the picker beside the chat box. Default is Nemotron 3.5 Lightning. Choice is persisted across restarts; unknown IDs are rejected with a clear error (no silent fallback). Keys live in Windows Credential Manager (desktop) or `.env` (CLI / debug).
 
 ## Architecture (proposal ≠ authority)
 
@@ -39,7 +39,7 @@ Pick a model in **Settings**. Default is Nemotron 3 Super. Choice is persisted a
 User goal (chat)
     │
     ▼
-Nebius Token Factory ──► selected Nemotron model (default: Super)
+Nebius Token Factory ──► selected Nemotron model (default: Lightning)
     │                      (chat stream + setuppal-intent)
     ▼
 Typed Plan card (source of truth)
@@ -83,7 +83,7 @@ Anything else gets a **Manual setup guide**: step-by-step instructions plus simi
 3. Verify the checksum (PowerShell):
 
 ```powershell
-Get-FileHash .\SetupPal_0.1.0_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\SetupPal_0.0.1_x64-setup.exe -Algorithm SHA256
 # Compare to the hash in the .sha256 file from the same release.
 ```
 
@@ -132,8 +132,8 @@ For CLI and local development, copy `.env.example` to `.env` and fill blanks loc
 # Optional; must be `nebius` or blank.
 SETUPPAL_PROVIDER=
 
-# lightning | super (default) | ultra — or an exact catalog API ID
-SETUPPAL_MODEL=super
+# lightning (default) | super | ultra — or an exact catalog API ID
+SETUPPAL_MODEL=lightning
 
 NEBIUS_BASE_URL=https://api.tokenfactory.nebius.com/v1
 NEBIUS_API_KEY=

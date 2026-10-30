@@ -25,7 +25,7 @@ Supersedes: v0.2 of this file and `SetupPal-UI-Style-Guide.md` (v0.1).
 | History | Two sub-tabs | One page with **search** across changes and conversations |
 | Recent list | Status icons planned | **Status icon per chat** (replying, running, held, blocked, failed, finished, plan ready, chat) |
 | Settings | Large wish list | Only **working** controls (section 9.5). The safety level is stored and sent with execute requests |
-| Models | Model picker | **Settings → AI model**: Lightning / Super (default) / Ultra on Nebius only; no arbitrary IDs |
+| Models | Model picker | **Settings → AI model**: Lightning (default) / Super / Ultra on Nebius only; no arbitrary IDs |
 | Plan approval | `Approve 4 safe steps` | Per-step approval with **"Run N approved steps"** is the target (Phase 1); today's card says "Approve safe steps" |
 | Demo content | Demo mode suggested | **No demo, canned, or placeholder content anywhere.** Empty states say plainly that nothing exists yet |
 | Accessibility | Guidelines | Nav landmark + `aria-current`, focus-trapped dialogs, focus kept across re-renders, text selectable everywhere except chrome |
@@ -482,7 +482,7 @@ Only controls that work today. Everything is saved locally and applied immediate
 | Appearance | Theme mode (Auto / Always Chill / Always Hacker), text size (S / M / L), reduce motion (also turns off confetti), ambient background |
 | Pixel | Speech bubbles on/off, Mascot Lab (preview every animation) |
 | Safety level | Strict (default) / Balanced / Relaxed, with a one-line explanation of the selected level |
-| AI model | Lightning / Super (default) / Ultra — Nebius Nemotron allowlist only; short description per model |
+| AI model | Lightning (default) / Super / Ultra — Nebius Nemotron allowlist only; short description per model |
 | Chat & memory | Recent messages kept in full, reply length, share PC facts, Clear all chats, Reset |
 | System scan | Run the doctor scan: OS, GPU, detected dev tools |
 | Sound | Sound effects on/off, volume |

@@ -1961,7 +1961,7 @@ dependencies = [
 
 [[package]]
 name = "installer_cli"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1977,7 +1977,7 @@ dependencies = [
 
 [[package]]
 name = "installer_core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "installer_gui"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "axum",

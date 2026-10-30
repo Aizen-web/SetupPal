@@ -13,9 +13,9 @@ pub type SecretProvider = std::sync::Arc<dyn Fn() -> Option<String> + Send + Syn
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NemotronModel {
-    /// Fast everyday planning (`nvidia/Nemotron-3_5-Lightning`).
+    /// Default: fast everyday planning (`nvidia/Nemotron-3_5-Lightning`).
     Lightning,
-    /// Default: balanced reasoning (`nvidia/nemotron-3-super-120b-a12b`).
+    /// Balanced reasoning (`nvidia/nemotron-3-super-120b-a12b`).
     Super,
     /// Advanced multi-stage setups (`nvidia/Nemotron-3-Ultra-550b-a55b`).
     Ultra,
@@ -23,7 +23,7 @@ pub enum NemotronModel {
 
 impl Default for NemotronModel {
     fn default() -> Self {
-        Self::Super
+        Self::Lightning
     }
 }
 
@@ -58,8 +58,8 @@ impl NemotronModel {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Lightning => "Fast, everyday installation planning",
-            Self::Super => "Recommended default. Balanced reasoning and planning",
+            Self::Lightning => "Default. Fast, everyday installation planning",
+            Self::Super => "Balanced reasoning and planning",
             Self::Ultra => "Advanced reasoning for complicated, multi-stage setups",
         }
     }
@@ -164,7 +164,7 @@ pub struct CoreConfig {
     pub tavily_api_key: Option<String>,
     pub recipes_dir: PathBuf,
     pub state_log_path: PathBuf,
-    /// Initial Nemotron model from `SETUPPAL_MODEL` (default: Super). Runtime selection may override.
+    /// Initial Nemotron model from `SETUPPAL_MODEL` (default: Lightning). Runtime selection may override.
     pub model: NemotronModel,
 }
 

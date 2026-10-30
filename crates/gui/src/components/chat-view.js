@@ -7,11 +7,12 @@
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { bridge } from '../api/bridge.js';
-import { pickProjectFolder } from '../api/folder-picker.js';
+import { apiClient } from '../api/client.js';
+import { getPrefs, setPrefs, NEMOTRON_MODELS } from '../state/prefs.js';
 import { pixelVoice } from '../mascot/voicelines.js';
 import { createPixelSvg } from '../mascot/pixel.js';
-import { renderMessage } from './chat-message.js';
-import { esc, safeHttpsUrl } from './html.js';
+import { renderMessage, splitMessageThinking } from './chat-message.js';
+import { esc } from './html.js';
 import { confirmDialog } from './modal.js';
 import { icon } from './icon.js';
 import { contextButtonHtml, contextModalHtml, bindContextPanel, isContextOpen } from './context-panel.js';
@@ -27,7 +28,6 @@ const chatUi = {
   collapsed: new Set(),
   seen: new Set(),
   greetingSeen: false,
-  whyOpen: new Set(),
   slashHelp: false,
   slashIndex: 0,
   notice: null, // { text, tone }
@@ -35,8 +35,6 @@ const chatUi = {
 
 let noticeTimer = null;
 
-const VERDICT_ICON = { GREEN: 'check', YELLOW: 'alert', RED: 'shieldX' };
-const VERDICT_CLASS = { GREEN: 'badge-green', YELLOW: 'badge-yellow', RED: 'badge-red' };
 
 /* ------------------------------------------------------------------ */
 /* Composer notice + slash commands                                    */
@@ -159,13 +157,6 @@ function flashCopied(btn) {
   }, 1500);
 }
 
-function verdictBadge(verdict) {
-  const v = String(verdict || '').toUpperCase();
-  const cls = VERDICT_CLASS[v] || '';
-  const ico = VERDICT_ICON[v];
-  return `<span class="badge ${cls}">${ico ? icon(ico, 12) : ''}${esc(v || 'UNRATED')}</span>`;
-}
-
 function renderEmptyState() {
   return `
     <div class="welcome-block">
@@ -242,108 +233,17 @@ function renderPlanPending(pending) {
   `;
 }
 
-function renderPlanCard(plan) {
-  if (!plan?.tasks?.length) return '';
-
-  const review = plan.tasks.filter(t => t.verdict === 'YELLOW' || t.verdict === 'RED').length;
-  const approvedCount = plan.tasks.filter(t => {
-    if (t.verdict === 'RED') return false;
-    if (t.verdict === 'YELLOW') return Boolean(t.approved);
-    return t.approved !== false;
-  }).length;
-  const heldId = plan.haltedAt;
-  const meta = `${plan.tasks.length} step${plan.tasks.length === 1 ? '' : 's'}${review ? ` · ${review} need${review === 1 ? 's' : ''} a look` : ''}`;
-  const totalSteps = plan.tasks.length;
-  const approveLabel = heldId
-    ? 'Approve and continue'
-    : `Run ${approvedCount} of ${totalSteps} step${totalSteps === 1 ? '' : 's'}`;
-
-  return `
-    <section class="plan-card" aria-labelledby="plan-card-title">
-      <div class="plan-card-head">
-        <div class="plan-card-head-text">
-          <h2 class="plan-title" id="plan-card-title">${esc(plan.title)}</h2>
-          ${plan.subtitle ? `<p class="plan-subtitle">${esc(plan.subtitle)}</p>` : ''}
-        </div>
-        <span class="plan-meta">${plan.dryRun ? '<span class="chip-tag dry-run-badge">Dry run: nothing is installed</span> ' : ''}${esc(meta)}</span>
-      </div>
-
-      <ol class="plan-steps-list">
-        ${plan.tasks.map(t => {
-          const source = t.sourceDomain || t.source || '';
-          const href = safeHttpsUrl(t.sourceUrl);
-          const reasons = Array.isArray(t.reasons) && t.reasons.length ? t.reasons : (t.verdictDesc ? [t.verdictDesc] : []);
-          const showWhy = (t.verdict === 'YELLOW' || t.verdict === 'RED') && (reasons.length || t.verdictTitle);
-          const whyOpen = chatUi.whyOpen.has(String(t.id));
-          const whyId = `why-${esc(t.id)}`;
-          const isRed = t.verdict === 'RED';
-          const isYellow = t.verdict === 'YELLOW';
-          const isGreen = t.verdict === 'GREEN';
-          const checked = isGreen ? t.approved !== false : Boolean(t.approved);
-
-          return `
-            <li class="step-row ${t.status === 'held' ? 'is-held' : ''}" data-task-id="${esc(t.id)}">
-              <div class="step-left">
-                <span class="step-number" aria-hidden="true">${esc(t.num)}</span>
-                <div class="step-info">
-                  <div class="step-title">${esc(t.title)}</div>
-                  ${source ? `<div class="step-source">${href
-                    ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(source)}</a>`
-                    : esc(source)}</div>` : ''}
-                  ${showWhy ? `
-                    <button type="button" class="step-why-btn" data-why="${esc(t.id)}" aria-expanded="${whyOpen}" aria-controls="${whyId}">Why?</button>
-                    <div class="step-why-detail ${whyOpen ? 'is-open' : ''}" id="${whyId}">
-                      ${t.verdictTitle ? `<strong>${esc(t.verdictTitle)}</strong>` : ''}
-                      ${reasons.length ? `<ul>${reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
-                    </div>
-                  ` : ''}
-                  ${isRed ? `<div class="step-blocked-label">Blocked</div>` : ''}
-                  ${isYellow ? `
-                    <label class="step-approve-row">
-                      <input type="checkbox" class="step-approve-cb" data-step-id="${esc(t.id)}" ${checked ? 'checked' : ''} />
-                      <span>Approve this step</span>
-                    </label>
-                  ` : ''}
-                  ${isGreen ? `
-                    <label class="step-approve-row">
-                      <input type="checkbox" class="step-approve-cb" data-step-id="${esc(t.id)}" ${checked ? 'checked' : ''} />
-                      <span>Include this safe step</span>
-                    </label>
-                  ` : ''}
-                </div>
-              </div>
-              ${verdictBadge(t.verdict)}
-            </li>
-          `;
-        }).join('')}
-      </ol>
-
-      ${plan.needsProjectDir ? `
-        <div class="plan-folder-row">
-          <div class="plan-folder-text">
-            <span class="plan-folder-label">Project folder</span>
-            <span class="plan-folder-path ${plan.projectDir ? '' : 'is-empty'}" id="plan-folder-path">${plan.projectDir ? esc(plan.projectDir) : 'Pick the folder where npm packages should go'}</span>
-          </div>
-          <button type="button" class="btn-review-link" id="btn-pick-folder">${plan.projectDir ? 'Change' : 'Choose folder'}</button>
-        </div>
-      ` : ''}
-
-      <div class="plan-actions-row">
-        <button id="btn-approve-plan" class="btn-approve" type="button" ${(approvedCount === 0 && !heldId) || (plan.needsProjectDir && !plan.projectDir) ? 'disabled' : ''}>${esc(approveLabel)}</button>
-        ${review ? `<button id="btn-review-yellow" class="btn-review-link" type="button">Review warnings</button>` : ''}
-      </div>
-
-      <label class="plan-trust-row" for="trust-winget-checkbox">
-        <input type="checkbox" id="trust-winget-checkbox" />
-        <span>Don't ask again about verified winget packages</span>
-      </label>
-    </section>
-  `;
+function terminalModelPreview(text) {
+  const compact = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!compact) return '~ …';
+  return compact.length > 220 ? `~ ${compact.slice(0, 220)}…` : `~ ${compact}`;
 }
 
-function renderTerminal(state, isWorking) {
+function renderTerminal(state, { isWorking, planPending }) {
   const logs = state.terminalLogs || [];
   const plan = state.activePlan;
+  const streaming = (state.chatMessages || []).find((m) => m.isStreaming);
+  const showEmpty = logs.length === 0 && !streaming && !planPending && !isWorking;
   return `
     <div class="terminal-container" id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal">
       <div class="terminal-header">
@@ -355,15 +255,38 @@ function renderTerminal(state, isWorking) {
         <div class="terminal-title">Run log${plan?.dryRun ? ' · DRY RUN (nothing is installed)' : ''}${plan?.title ? ` · ${esc(plan.title)}` : ''}</div>
       </div>
       <div class="terminal-log-list" id="terminal-log-output" role="log" aria-label="Run log">
-        ${logs.length === 0 ? `
+        ${showEmpty ? `
           <div class="log-line log-empty">No run output yet. Approve a plan and each step's output streams here.</div>
-        ` : logs.map(l => `<div class="log-line ${esc(l.type)}">${esc(l.text)}</div>`).join('')}
+        ` : logs.map(l => `<div class="log-line ${esc(l.type)}${l.live ? ' is-live' : ''}">${esc(l.text)}</div>`).join('')}
+        ${streaming ? `
+          <div class="log-line running is-live is-model-stream" data-model-stream="true">${esc(terminalModelPreview(streaming.text))}</div>
+        ` : ''}
+        ${planPending && !streaming ? `
+          <div class="log-line running is-live" data-plan-pending-line="true">
+            <span class="terminal-working-dot" aria-hidden="true"></span>${esc(planPending.label || 'Generating plan…')}
+          </div>
+        ` : ''}
         ${isWorking ? `
-          <div class="log-line" aria-hidden="true">
-            <span class="terminal-prompt">› </span><span class="terminal-cursor"></span>
+          <div class="log-line log-working" aria-live="polite">
+            <span class="terminal-working-dot" aria-hidden="true"></span>working…
           </div>` : ''}
       </div>
     </div>
+  `;
+}
+
+function currentModelId() {
+  const id = apiClient.lastHealth?.model_id || getPrefs().model;
+  return NEMOTRON_MODELS[id] ? id : 'lightning';
+}
+
+function modelPickerHtml(disabled) {
+  const current = currentModelId();
+  return `
+    <label for="composer-model" class="sr-only">AI model</label>
+    <select id="composer-model" class="composer-model" title="${esc(NEMOTRON_MODELS[current].description)}" ${disabled ? 'disabled' : ''}>
+      ${Object.values(NEMOTRON_MODELS).map(m => `<option value="${esc(m.id)}" ${m.id === current ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}
+    </select>
   `;
 }
 
@@ -394,6 +317,14 @@ export function renderChatView(container) {
   const hasMessages = Boolean(state.chatMessages && state.chatMessages.length > 0);
   const planPending = state.planPending?.conversationId === state.activeConversationId ? state.planPending : null;
   const showTerminal = isHacker && state.terminalTab === 'terminal';
+
+  // Keep animated nodes across re-renders so CSS animations are not reset to frame 0.
+  const prevPendingSpinner = planPending
+    ? container.querySelector('.plan-pending-spinner')
+    : null;
+  const prevWorkingDot = (isWorking || planPending)
+    ? container.querySelector('.terminal-working-dot')
+    : null;
 
   // Preserve scroll position (the DOM is rebuilt below)
   const prevScrollEl = container.querySelector('.workspace-scroll-area');
@@ -457,7 +388,7 @@ export function renderChatView(container) {
       `}
 
       <div class="workspace-scroll-area">
-        ${showTerminal ? renderTerminal(state, isWorking) : `
+        ${showTerminal ? renderTerminal(state, { isWorking, planPending }) : `
           <div class="chat-panel" ${isHacker ? 'id="panel-chat" role="tabpanel" aria-labelledby="tab-chat"' : ''}>
             ${hasMessages ? `
               <div class="chat-thread-stream" id="chat-thread-stream">
@@ -472,7 +403,6 @@ export function renderChatView(container) {
             ` : renderEmptyState()}
             ${planPending ? renderPlanPending(planPending) : `
               ${renderPackageConfirm(state.packageConfirm)}
-              ${renderPlanCard(plan)}
               ${!plan?.tasks?.length && !state.packageConfirm ? renderManualGuide(state.manualGuide) : ''}
             `}
           </div>
@@ -484,6 +414,7 @@ export function renderChatView(container) {
         <div class="composer-box">
           <button type="button" id="btn-slash-hint" class="composer-slash" aria-label="Show commands" aria-controls="slash-menu" aria-expanded="${menuItems.length > 0}">/</button>
           <label for="chat-input" class="sr-only">Message</label>
+          ${modelPickerHtml(isGenerating || isWorking)}
           <textarea id="chat-input" class="composer-input" rows="1" placeholder="${esc(placeholder)}" aria-describedby="composer-notice"></textarea>
           ${isWorking || isGenerating ? `<button id="btn-stop-run" class="btn-stop" type="button" aria-label="${isGenerating ? 'Stop response' : 'Stop task'}">Stop</button>` : ''}
           <button id="btn-chat-send" class="btn-send" type="button" aria-label="Send">
@@ -498,6 +429,19 @@ export function renderChatView(container) {
   `;
   chatUi.greetingSeen = true;
 
+  if (planPending && prevPendingSpinner) {
+    const nextSpinner = container.querySelector('.plan-pending-spinner');
+    if (nextSpinner && nextSpinner !== prevPendingSpinner) {
+      nextSpinner.replaceWith(prevPendingSpinner);
+    }
+  }
+  if ((isWorking || planPending) && prevWorkingDot) {
+    const nextDot = container.querySelector('.terminal-working-dot');
+    if (nextDot && nextDot !== prevWorkingDot) {
+      nextDot.replaceWith(prevWorkingDot);
+    }
+  }
+
   if (isContextOpen()) container.insertAdjacentHTML('beforeend', contextModalHtml());
   bindContextPanel(container, () => renderChatView(container));
 
@@ -508,7 +452,7 @@ export function renderChatView(container) {
   }
 
   bindHeader(container);
-  bindPlanCard(container, plan);
+  bindManualAlternatives(container);
   bindPackageConfirm(container);
   bindMessages(container);
   bindComposer(container, prevValue);
@@ -583,88 +527,7 @@ function bindHeader(container) {
   }
 }
 
-function bindPlanCard(container, plan) {
-  container.querySelectorAll('.step-approve-cb').forEach(cb => {
-    cb.onchange = () => {
-      const id = cb.getAttribute('data-step-id');
-      store.setState(s => {
-        const tasks = (s.activePlan?.tasks || []).map(t =>
-          t.id === id ? { ...t, approved: cb.checked } : t
-        );
-        return { ...s, activePlan: s.activePlan ? { ...s.activePlan, tasks } : null };
-      });
-      sounds.play('ui.click');
-      renderChatView(container);
-    };
-  });
-
-  const btnApprove = container.querySelector('#btn-approve-plan');
-  if (btnApprove) {
-    btnApprove.onclick = () => {
-      const trustWinget = container.querySelector('#trust-winget-checkbox')?.checked;
-      const categories = trustWinget ? ['verified_winget'] : [];
-      const tasks = store.getState().activePlan?.tasks || [];
-      const approvedStepIds = tasks
-        .filter(t => t.verdict === 'GREEN' && t.approved !== false)
-        .map(t => t.id);
-      const allowYellowSteps = tasks
-        .filter(t => t.verdict === 'YELLOW' && t.approved)
-        .map(t => t.id);
-      const startAtStepId = plan?.haltedAt || null;
-      bridge.approveAndRunPlan({
-        trustedCategories: categories,
-        approvedStepIds,
-        allowYellowSteps,
-        startAtStepId,
-      });
-    };
-  }
-
-  const btnPickFolder = container.querySelector('#btn-pick-folder');
-  if (btnPickFolder) {
-    btnPickFolder.onclick = async () => {
-      sounds.play('ui.click');
-      try {
-        const folder = await pickProjectFolder();
-        if (!folder) return;
-        store.setState(s => ({
-          ...s,
-          activePlan: s.activePlan ? { ...s.activePlan, projectDir: folder } : s.activePlan,
-        }));
-        renderChatView(container);
-      } catch (err) {
-        store.setState(s => ({
-          ...s,
-          terminalLogs: [
-            ...s.terminalLogs,
-            { id: Date.now() + Math.random(), text: `! folder picker failed: ${err?.message || err}`, type: 'error' },
-          ],
-        }));
-      }
-    };
-  }
-
-  const btnReview = container.querySelector('#btn-review-yellow');
-  if (btnReview) {
-    btnReview.onclick = () => {
-      const held = (plan.tasks || []).filter(t => t.verdict === 'YELLOW' || t.verdict === 'RED');
-      held.forEach(t => chatUi.whyOpen.add(String(t.id)));
-      if (held.length) pixelVoice.trigger('warning_held');
-      sounds.play('ui.click');
-      renderChatView(container);
-    };
-  }
-
-  container.querySelectorAll('.step-why-btn').forEach(btn => {
-    btn.onclick = () => {
-      const id = btn.getAttribute('data-why');
-      if (chatUi.whyOpen.has(id)) chatUi.whyOpen.delete(id);
-      else chatUi.whyOpen.add(id);
-      sounds.play('ui.click');
-      renderChatView(container);
-    };
-  });
-
+function bindManualAlternatives(container) {
   container.querySelectorAll('.manual-alt-chip').forEach(btn => {
     btn.onclick = () => {
       const prompt = btn.getAttribute('data-prompt');
@@ -688,7 +551,8 @@ function bindMessages(container) {
     btn.onclick = () => {
       if (btn.dataset.action === 'copy') {
         const msg = store.getState().chatMessages.find(m => String(m.id) === btn.dataset.msgId);
-        if (msg?.text) copyText(btn, msg.text);
+        const { text: cleanText } = splitMessageThinking(msg);
+        if (cleanText) copyText(btn, cleanText);
       } else if (btn.dataset.action === 'retry') {
         const prompt = btn.dataset.retryText?.trim();
         if (prompt) bridge.submitGoal(prompt);
@@ -756,6 +620,15 @@ function bindMessages(container) {
     });
   });
 
+  container.querySelectorAll('details.chat-thinking').forEach(details => {
+    details.addEventListener('toggle', () => {
+      const key = details.getAttribute('data-thinking-key');
+      if (!key) return;
+      if (details.open) chatUi.collapsed.add(key);
+      else chatUi.collapsed.delete(key);
+    });
+  });
+
   container.querySelectorAll('.sys-copy').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -787,6 +660,26 @@ function bindComposer(container, prevValue) {
   const btnStop = container.querySelector('#btn-stop-run');
   const menu = container.querySelector('#slash-menu');
   const hint = container.querySelector('#btn-slash-hint');
+  const modelSelect = container.querySelector('#composer-model');
+
+  if (modelSelect) {
+    modelSelect.onchange = async () => {
+      const model = modelSelect.value;
+      if (!NEMOTRON_MODELS[model]) return;
+      const previous = currentModelId();
+      sounds.play('ui.click');
+      try {
+        await apiClient.setModel(model);
+        setPrefs({ model });
+        await apiClient.checkHealth();
+        notify(`Using ${NEMOTRON_MODELS[model].label}.`, 'ok');
+      } catch (err) {
+        sounds.play('error');
+        modelSelect.value = previous;
+        notify(err?.message || 'Could not switch model.', 'error');
+      }
+    };
+  }
 
   if (prevValue && !input.value) input.value = prevValue;
   autoSize(input);

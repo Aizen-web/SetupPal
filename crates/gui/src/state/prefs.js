@@ -7,9 +7,9 @@ const KEY = 'setuppal_chat_prefs';
 const UI_KEY = 'setuppal_ui_settings';
 
 export const REPLY_LENGTHS = {
-  short: { label: 'Short', tokens: 400 },
-  normal: { label: 'Normal', tokens: 800 },
-  long: { label: 'Long', tokens: 1400 },
+  short: { label: 'Short', tokens: 2400 },
+  normal: { label: 'Normal', tokens: 3200 },
+  long: { label: 'Long', tokens: 4400 },
 };
 
 /** Allowlisted Nemotron models (must match backend `NemotronModel`). */
@@ -17,12 +17,12 @@ export const NEMOTRON_MODELS = {
   lightning: {
     id: 'lightning',
     label: 'Nemotron 3.5 Lightning',
-    description: 'Fast, everyday installation planning',
+    description: 'Default. Fast, everyday installation planning',
   },
   super: {
     id: 'super',
     label: 'Nemotron 3 Super',
-    description: 'Recommended default. Balanced reasoning and planning',
+    description: 'Balanced reasoning and planning',
   },
   ultra: {
     id: 'ultra',
@@ -35,8 +35,8 @@ export const DEFAULT_PREFS = {
   memoryTurns: 6, // recent messages sent word for word; older ones become compact notes
   replyLength: 'normal',
   includePcFacts: true,
-  /** Allowlisted slug only — never an arbitrary model ID. Default: Super. */
-  model: 'super',
+  /** Allowlisted slug only — never an arbitrary model ID. Default: Lightning. */
+  model: 'lightning',
 };
 
 function readJson(key) {

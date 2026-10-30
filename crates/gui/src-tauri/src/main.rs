@@ -293,7 +293,7 @@ async fn health_handler(State(state): State<AppState>) -> Json<serde_json::Value
     let mut health = serde_json::json!({
         "status": "ok",
         "app": "SetupPal Zero-Trust Backend",
-        "version": "0.1.0",
+        "version": "0.0.1",
         "safety_level": safety_level,
         "deterministic_gates": true,
         "has_tavily_key": has_tavily_key,
@@ -788,7 +788,7 @@ const PROMPT_VERSION: &str = "v28-backend-decides";
 
 const STATIC_SYSTEM_PROMPT: &str = "\
 Role\n\
-You are Pixel, SetupPal's assistant: a friendly little ghost who helps people set up software on their Windows PC. Be warm and clear; at most one light joke per chat, never on errors or plans.\n\
+You are Pixel, SetupPal's assistant: a friendly little ghost who helps people set up software on their Windows PC. Be warm and clear; one light joke per chat at most, never on errors.\n\
 \n\
 Scope\n\
 SetupPal installs anything that installs unattended and passes safety checks: winget, npm, pip, cargo, and CLI installers (Fabric for Minecraft Java). Game, music, chat, and dev apps are fine (LMMS, Discord, Steam, Roblox). A window or sign-in after install is fine.\n\
@@ -810,10 +810,11 @@ Only when you are setting something up, end the reply with one fenced block (fen
 {\"kind\":\"install\",\"goal\":\"vlc\"}\n\
 ```\n\
 Out-of-scope named item: {\"kind\":\"manual\",\"item\":\"Minecraft Bedrock\",\"reason\":\"only sold in the Microsoft Store\"}.\n\
-No block, no plan: if you say you'll set something up, include it. Skip it only while asking a question.\n\
+To drop the current plan when asked: {\"kind\":\"remove_plan\"}.\n\
+No block, no plan: if you say you'll set something up, include it. Skip it only while asking.\n\
 \n\
 Style\n\
-Plain words, short replies. Don't open with a greeting after the first message. Don't mirror slang. Never claim you installed or checked anything.";
+Plain words, short replies. No greeting after the first message. Never claim you installed or checked anything.";
 
 /// Plain-text facts about this PC. Minecraft details are only added when the chat is about Minecraft.
 fn format_host_facts(
@@ -1036,7 +1037,7 @@ async fn chat_stream_handler(
     } else {
         "(PC facts are turned off by the user. Do not claim to know what is installed.)".to_string()
     };
-    let max_tokens = req.max_reply_tokens.unwrap_or(800).clamp(200, 2000);
+    let max_tokens = req.max_reply_tokens.unwrap_or(2800).clamp(2000, 6000);
     let system_tokens = est_tokens(STATIC_SYSTEM_PROMPT);
     let memory_tokens = context.memory_note.as_deref().map(est_tokens).unwrap_or(0);
     let recent_tokens: usize = context
@@ -1092,7 +1093,7 @@ async fn chat_stream_handler(
             attempt = call_ai_chat_stream(&provider, &raw_msg, &context, &host_facts, max_tokens, &sender).await;
         }
         match attempt {
-            Ok((reply, intent)) => {
+            Ok((reply, intent, reasoning)) => {
                 let (reply, intent) = overrule_false_manual(os_provider.as_ref(), reply, intent).await;
                 let intent = intent.map(|i| drop_installed_alternatives(i, &installed_names));
                 if let Some(intent) = intent {
@@ -1106,7 +1107,11 @@ async fn chat_stream_handler(
                 let _ = send_chat_event(
                     &sender,
                     "message.end",
-                    serde_json::json!({ "reply": reply, "context": context_payload }),
+                    serde_json::json!({
+                        "reply": reply,
+                        "reasoning": (!reasoning.is_empty()).then_some(reasoning),
+                        "context": context_payload,
+                    }),
                 )
                 .await;
             }
@@ -1175,7 +1180,7 @@ async fn call_ai_chat_stream(
     host_facts: &str,
     max_tokens: u32,
     sender: &ChatSseSender,
-) -> Result<(String, Option<SetupIntent>), String> {
+) -> Result<(String, Option<SetupIntent>, String), String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(120))
@@ -1269,7 +1274,7 @@ async fn call_ai_chat_stream(
         consume_chat_sse_line(&final_line, &mut data_lines, &mut filter, sender).await?;
     }
 
-    let (reply, intent_result) = filter.finish();
+    let (reply, intent_result, reasoning) = filter.finish_with_reasoning();
     let mut intent = match intent_result {
         Ok(intent) => intent,
         Err(kind) => {
@@ -1309,7 +1314,7 @@ async fn call_ai_chat_stream(
             extracted = extract_install_intent(&client, provider, user_prompt, context, &reply) => extracted,
         };
     }
-    Ok((reply, intent))
+    Ok((reply, intent, reasoning))
 }
 
 /// The model's "manual-only" call is a claim, not a verdict. When winget has one exact,
@@ -1500,16 +1505,17 @@ async fn extract_install_intent(
     }
     transcript.push_str(&format!("User: {}\nAssistant: {}", clip(user_prompt, 300), clip(reply, 300)));
 
-    let body = serde_json::json!({
-        "model": provider.model_id(),
-        "messages": [
-            { "role": "system", "content": INTENT_EXTRACT_PROMPT },
-            { "role": "user", "content": transcript },
-        ],
-        "temperature": 0,
-        "max_tokens": 120,
-        "stream": false
-    });
+        let body = serde_json::json!({
+            "model": provider.model_id(),
+            "messages": [
+                { "role": "system", "content": INTENT_EXTRACT_PROMPT },
+                { "role": "user", "content": transcript },
+            ],
+            "temperature": 0,
+            "max_tokens": 120,
+            "stream": false,
+            "chat_template_kwargs": { "enable_thinking": false }
+        });
     let response = client
         .post(provider.chat_completions_url())
         .bearer_auth(provider.api_key())
@@ -1564,15 +1570,44 @@ async fn consume_chat_sse_line(
         }
         let value: serde_json::Value = serde_json::from_str(&payload)
             .map_err(|_| "AI provider sent an invalid streaming response.".to_string())?;
-        if let Some(text) = value
+        let delta = value
             .get("choices")
             .and_then(|choices| choices.get(0))
-            .and_then(|choice| choice.get("delta"))
-            .and_then(|delta| delta.get("content"))
+            .and_then(|choice| choice.get("delta"));
+        if let Some(reasoning_chunk) = delta
+            .and_then(|d| {
+                d.get("reasoning_content")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| d.get("reasoning").and_then(serde_json::Value::as_str))
+            })
+            .filter(|s| !s.is_empty())
+        {
+            let r = filter.push_reasoning(reasoning_chunk);
+            if !r.is_empty() {
+                send_chat_event(
+                    sender,
+                    "message.reasoning",
+                    serde_json::json!({ "text": r }),
+                )
+                .await?;
+            }
+        }
+        if let Some(text) = delta
+            .and_then(|d| d.get("content"))
             .and_then(serde_json::Value::as_str)
             .filter(|text| !text.is_empty())
         {
+            let before_reasoning_len = filter.reasoning().len();
             let forward = filter.push(text);
+            if filter.reasoning().len() > before_reasoning_len {
+                let think_slice = &filter.reasoning()[before_reasoning_len..];
+                send_chat_event(
+                    sender,
+                    "message.reasoning",
+                    serde_json::json!({ "text": think_slice }),
+                )
+                .await?;
+            }
             if !forward.is_empty() {
                 send_chat_event(
                     sender,
@@ -1702,13 +1737,15 @@ async fn plan_handler(
         return Ok(Json(serde_json::json!(guide)));
     }
 
+    // Pin versions first so OSV judges the version that will actually be installed, not every
+    // advisory ever filed against the package name.
+    enrich_plan_versions(&mut plan, &state).await;
     let mut safety_report = state
         .safety_engine
         .evaluate_plan(&plan)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     apply_to_safety_report(&install_checks, &mut safety_report);
-    enrich_plan_versions(&mut plan, &state).await;
     let step_metadata = create_metadata_for_plan(&plan, &safety_report);
 
     state
@@ -2490,9 +2527,10 @@ mod live_corpus {
         let context = build_context(history, message, 6);
         let (tx, mut rx) = mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
-        call_ai_chat_stream(provider, message, &context, "- OS: Windows 11 (x86_64)\n- Detected tools: git, node", 800, &tx)
+        let (reply, intent, _) = call_ai_chat_stream(provider, message, &context, "- OS: Windows 11 (x86_64)\n- Detected tools: git, node", 2800, &tx)
             .await
-            .expect("provider call")
+            .expect("provider call");
+        (reply, intent)
     }
 
     fn has_numbered_steps(reply: &str) -> bool {
@@ -2571,7 +2609,7 @@ mod live_corpus {
         let body = serde_json::json!({
             "model": provider.model_id(),
             "messages": build_chat_messages("hi", &context, "- OS: Windows 11"),
-            "temperature": 0.5, "max_tokens": 800, "stream": false
+            "temperature": 0.5, "max_tokens": 2800, "stream": false
         });
         let res = reqwest::Client::new().post(provider.chat_completions_url()).bearer_auth(provider.api_key()).json(&body).send().await.unwrap();
         println!("RAW {}", res.text().await.unwrap());

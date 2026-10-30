@@ -34,8 +34,10 @@ export function installStepLabel(pkg, eco, version, fallbackDescription) {
     : (eco || 'package');
   const name = (() => {
     if (eco === 'winget' && pkg && pkg.includes('.')) {
-      const last = pkg.split('.').pop();
-      return last || pkg;
+      // Python.Python.3.11 -> "Python" (drop the publisher and any trailing version segments)
+      const parts = pkg.split('.').slice(1);
+      while (parts.length > 1 && /^\d+$/.test(parts[parts.length - 1])) parts.pop();
+      return parts.join('.') || pkg;
     }
     return pkg || 'package';
   })();
@@ -252,7 +254,7 @@ export class BackendBridge {
     const health = apiClient.lastHealth;
     const backendId = health?.model_id;
     if (backendId && prefs.model === backendId) return;
-    if (prefs.model && prefs.model !== 'super' && (!backendId || backendId === 'super')) {
+    if (prefs.model && prefs.model !== 'lightning' && (!backendId || backendId === 'lightning')) {
       try {
         await apiClient.setModel(prefs.model);
         return;
@@ -365,13 +367,26 @@ export class BackendBridge {
         if (payload?.bytes_downloaded) {
           store.setMascotState('downloading', pixelVoice.line('downloading'));
         }
-        store.setState(s => ({
-          ...s,
-          terminalLogs: [
-            ...s.terminalLogs,
-            { id: Date.now() + Math.random(), text: `~ ${payload?.message || 'progress'}`, type: 'running' }
-          ]
-        }));
+        store.setState(s => {
+          const message = String(payload?.message || 'progress').trim() || 'progress';
+          const text = `~ ${message}`;
+          const logs = [...(s.terminalLogs || [])];
+          const last = logs[logs.length - 1];
+          const heartbeat = /^Still working:/i.test(message);
+          // Heartbeats and installer \r progress update the live line in place so the
+          // terminal keeps moving without flooding.
+          if (last?.live && (heartbeat || last.type === 'running')) {
+            logs[logs.length - 1] = { ...last, text, type: 'running', live: true };
+          } else {
+            logs.push({
+              id: Date.now() + Math.random(),
+              text,
+              type: 'running',
+              live: true,
+            });
+          }
+          return { ...s, terminalLogs: logs };
+        });
         break;
 
       case 'step_execution_completed':
@@ -384,15 +399,18 @@ export class BackendBridge {
             if (t.id === payload?.step_id) return { ...t, status: 'done' };
             return t;
           });
+          const logs = (s.terminalLogs || []).map(l => (l.live ? { ...l, live: false } : l));
+          logs.push({
+            id: Date.now() + Math.random(),
+            text: (payload?.receipt?.dry_run ?? this.runDryRun)
+              ? labelRunText(`✓ [${payload?.step_id}] simulated only: nothing was installed or changed`, true)
+              : `✓ [${payload?.step_id}] completed & verified cleanly`,
+            type: 'green',
+          });
           return {
             ...s,
             activePlan: { ...s.activePlan, tasks },
-            terminalLogs: [
-              ...s.terminalLogs,
-              { id: Date.now() + Math.random(), text: (payload?.receipt?.dry_run ?? this.runDryRun)
-                ? labelRunText(`✓ [${payload?.step_id}] simulated only: nothing was installed or changed`, true)
-                : `✓ [${payload?.step_id}] completed & verified cleanly`, type: 'green' }
-            ]
+            terminalLogs: logs,
           };
         });
         break;
@@ -406,13 +424,16 @@ export class BackendBridge {
             if (t.id === payload?.step_id) return { ...t, status: 'blocked' };
             return t;
           });
+          const logs = (s.terminalLogs || []).map(l => (l.live ? { ...l, live: false } : l));
+          logs.push({
+            id: Date.now() + Math.random(),
+            text: labelRunText(`⛔ BLOCKED: ${payload?.reason}`, this.runDryRun),
+            type: 'error',
+          });
           return {
             ...s,
             activePlan: s.activePlan ? { ...s.activePlan, tasks } : s.activePlan,
-            terminalLogs: [
-              ...s.terminalLogs,
-              { id: Date.now() + Math.random(), text: labelRunText(`⛔ BLOCKED: ${payload?.reason}`, this.runDryRun), type: 'error' }
-            ]
+            terminalLogs: logs,
           };
         });
         break;
@@ -425,13 +446,16 @@ export class BackendBridge {
             if (t.id === payload?.step_id) return { ...t, status: 'failed' };
             return t;
           });
+          const logs = (s.terminalLogs || []).map(l => (l.live ? { ...l, live: false } : l));
+          logs.push({
+            id: Date.now() + Math.random(),
+            text: labelRunText(`✗ [${payload?.step_id}] ${payload?.error || 'failed'}`, this.runDryRun),
+            type: 'error',
+          });
           return {
             ...s,
             activePlan: s.activePlan ? { ...s.activePlan, tasks, status: 'failed' } : s.activePlan,
-            terminalLogs: [
-              ...s.terminalLogs,
-              { id: Date.now() + Math.random(), text: labelRunText(`✗ [${payload?.step_id}] ${payload?.error || 'failed'}`, this.runDryRun), type: 'error' }
-            ]
+            terminalLogs: logs,
           };
         });
         break;
@@ -444,13 +468,16 @@ export class BackendBridge {
             }
             return t;
           });
+          const logs = (s.terminalLogs || []).map(l => (l.live ? { ...l, live: false } : l));
+          logs.push({
+            id: Date.now() + Math.random(),
+            text: `■ cancelled at ${payload?.step_id || 'step'}`,
+            type: 'yellow',
+          });
           return {
             ...s,
             activePlan: s.activePlan ? { ...s.activePlan, tasks, status: 'cancelled' } : s.activePlan,
-            terminalLogs: [
-              ...s.terminalLogs,
-              { id: Date.now() + Math.random(), text: `■ cancelled at ${payload?.step_id || 'step'}`, type: 'yellow' }
-            ]
+            terminalLogs: logs,
           };
         });
         store.endRun();
@@ -628,15 +655,22 @@ export class BackendBridge {
 
     let reply = '';
     let pendingText = '';
+    let reasoning = '';
+    let pendingReasoning = '';
     let frame = null;
     let completed = null;
     let intent = null;
     const flush = () => {
       frame = null;
       reply = pendingText;
-      store.updateConversationMessage(conversationId, assistantId, { text: reply, isStreaming: true });
+      reasoning = pendingReasoning;
+      store.updateConversationMessage(conversationId, assistantId, {
+        text: reply,
+        thinking: reasoning || null,
+        isStreaming: true,
+      });
       window.dispatchEvent(new CustomEvent('setuppal:stream-delta', {
-        detail: { conversationId, messageId: assistantId, text: reply }
+        detail: { conversationId, messageId: assistantId, text: reply, thinking: reasoning }
       }));
     };
     const persistTimer = window.setInterval(() => {
@@ -676,6 +710,9 @@ export class BackendBridge {
           if (event.type === 'message.delta' && typeof event.text === 'string') {
             pendingText += event.text;
             if (frame === null) frame = requestAnimationFrame(flush);
+          } else if (event.type === 'message.reasoning' && typeof event.text === 'string') {
+            pendingReasoning += event.text;
+            if (frame === null) frame = requestAnimationFrame(flush);
           } else if (event.type === 'plan.pending') {
             setPlanPending(conversationId, 'Working out what to install…');
           } else if (event.type === 'message.intent') {
@@ -696,9 +733,11 @@ export class BackendBridge {
       if (!completed) throw new Error('The response stream ended before completion.');
 
       reply = completed.reply || reply;
+      const finalThinking = (completed.reasoning || reasoning || '').trim() || null;
       if (completed.context) setLastContext(completed.context);
       store.updateConversationMessage(conversationId, assistantId, {
         text: reply,
+        thinking: finalThinking,
         options: [],
         isStreaming: false,
         intent: intent || null,
@@ -710,7 +749,7 @@ export class BackendBridge {
           isChatGenerating: false,
           chatMessages: s.chatMessages.map(message =>
             message.id === assistantId
-              ? { ...message, text: reply, isStreaming: false, intent: intent || null }
+              ? { ...message, text: reply, thinking: finalThinking, isStreaming: false, intent: intent || null }
               : message
           ),
         }));
@@ -732,8 +771,10 @@ export class BackendBridge {
         flush();
       }
       if (controller.signal.aborted) {
+        const stoppedThinking = (reasoning || '').trim() || null;
         store.updateConversationMessage(conversationId, assistantId, {
           text: reply,
+          thinking: stoppedThinking,
           isStreaming: false,
           stopped: true,
         });
@@ -743,7 +784,7 @@ export class BackendBridge {
             ...s,
             isChatGenerating: false,
             chatMessages: s.chatMessages.map(message =>
-              message.id === assistantId ? { ...message, text: reply, isStreaming: false, stopped: true } : message
+              message.id === assistantId ? { ...message, text: reply, thinking: stoppedThinking, isStreaming: false, stopped: true } : message
             )
           }));
         }
@@ -779,7 +820,30 @@ export class BackendBridge {
     }
   }
 
+  /** Drops the plan shown in the Tasks panel (button or the assistant's `remove_plan` intent). */
+  removePlan(conversationId = store.getState().activeConversationId) {
+    const s = store.getState();
+    const isActive = s.activeConversationId === conversationId;
+    const plan = isActive ? s.activePlan : s.conversations.find(c => c.id === conversationId)?.activePlan;
+    if (!plan) return false;
+    if (plan.tasks?.some(t => t.status === 'running')) return false; // stop the run first
+    if (!isActive) {
+      store.state.conversations = store.state.conversations.map(c =>
+        c.id === conversationId ? { ...c, activePlan: null } : c);
+      store.persistConversations();
+      return true;
+    }
+    this.activeExecutionPlan = null;
+    store.setState(st => ({ ...st, activePlan: null, scrollToPlan: false }));
+    store.persistConversations();
+    return true;
+  }
+
   async handleIntent(conversationId, intent, historyMessages = []) {
+    if (intent?.kind === 'remove_plan') {
+      this.removePlan(conversationId);
+      return;
+    }
     try {
       await this.buildPlanFromIntent(conversationId, intent, historyMessages);
     } finally {
@@ -1103,7 +1167,14 @@ export class BackendBridge {
         const chatSummary = buildRunChatSummary(summary);
         store.setState(s => ({
           ...s,
-          activePlan: { ...s.activePlan, status: 'completed' },
+          activePlan: s.activePlan ? {
+            ...s.activePlan,
+            status: 'completed',
+            haltedAt: null,
+            tasks: s.activePlan.tasks.map(t => (
+              t.status === 'done' || t.status === 'blocked' ? t : { ...t, status: 'skipped' }
+            )),
+          } : s.activePlan,
           terminalLogs: [
             ...s.terminalLogs,
             { id: Date.now() + 99, text: '✓ ALL APPROVED TASKS EXECUTED AND VERIFIED CLEANLY', type: 'green' },
@@ -1114,6 +1185,13 @@ export class BackendBridge {
               id: 'a_' + Date.now(),
               sender: 'assistant',
               text: chatSummary,
+              // Read-only record of what ran; lives with this message so it never moves.
+              completedPlan: {
+                title: s.activePlan?.title || 'Plan',
+                steps: (s.activePlan?.tasks || [])
+                  .filter(t => t.status === 'done')
+                  .map(t => ({ num: t.num, title: t.title })),
+              },
               options: [],
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               planAttached: false,

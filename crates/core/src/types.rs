@@ -65,6 +65,7 @@ pub enum Step {
     },
     CreateIsolatedEnv {
         kind: IsolationKind,
+        /// Must be under `%USERPROFILE%\.venvs\<name>` (never a bare relative path like `.venv`).
         path: PathBuf,
     },
     RunVerifyCommand {

@@ -398,6 +398,66 @@
 .quote-content { overflow-wrap: anywhere; }
 
 /* ========================================================
+   Model thinking disclosure (collapsed by default)
+   ======================================================== */
+.chat-thinking {
+  max-width: 68ch;
+  border-radius: 10px;
+}
+
+.chat-thinking-summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 4px;
+  border-radius: 6px;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.chat-thinking-summary::-webkit-details-marker { display: none; }
+
+.chat-thinking-summary:hover {
+  color: var(--ink);
+  background: var(--bg-surface);
+}
+
+.chat-thinking-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-thinking-chev {
+  display: inline-flex;
+  color: var(--ink-soft);
+  transition: transform 0.15s ease;
+}
+
+.chat-thinking[open] .chat-thinking-chev {
+  transform: rotate(90deg);
+}
+
+.chat-thinking-body {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--border);
+  border-radius: 0 8px 8px 0;
+  background: var(--bg-surface);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* ========================================================
    System check (collapsible, one fact per row)
    ======================================================== */
 .chat-sys {
@@ -1082,10 +1142,13 @@
   border-radius: 50%;
   border: 2.5px solid var(--border);
   border-top-color: var(--accent);
+  /* Keep animation off zoomed ancestors; transform rotate is reliable here. */
   animation: plan-pending-spin 800ms linear infinite;
+  will-change: transform;
 }
 
 @keyframes plan-pending-spin {
+  from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 

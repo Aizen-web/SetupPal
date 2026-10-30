@@ -68,7 +68,7 @@ button,
 /* Text size setting (S / M / L). Content regions scale; the app frame stays put. */
 .chat-thread-stream,
 .welcome-block,
-.plan-card,
+.plan-card:not(.plan-pending-card),
 .terminal-log-list,
 .composer-box,
 .composer-notice,

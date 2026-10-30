@@ -11,7 +11,7 @@ use crate::config::{CoreError, NemotronModel};
 use crate::paths::setuppal_data_dir;
 
 /// Slug used in Settings, prefs, and `SETUPPAL_MODEL`.
-pub const DEFAULT_MODEL_SLUG: &str = "super";
+pub const DEFAULT_MODEL_SLUG: &str = "lightning";
 
 /// File under the SetupPal data dir that remembers the user's choice across restarts.
 pub const MODEL_PREFS_FILE: &str = "ai_model.json";
@@ -49,7 +49,7 @@ impl ModelSelection {
         }
     }
 
-    /// Loads from `SETUPPAL_MODEL` (if set), else the prefs file, else Super.
+    /// Loads from `SETUPPAL_MODEL` (if set), else the prefs file, else Lightning.
     pub fn load_default() -> Self {
         let path = setuppal_data_dir()
             .ok()
@@ -68,7 +68,7 @@ impl ModelSelection {
         }
     }
 
-    /// Prefers `preferred` (for example `CoreConfig.model` from env), else the prefs file, else Super.
+    /// Prefers `preferred` (for example `CoreConfig.model` from env), else the prefs file, else Lightning.
     pub fn load_with_preferred(preferred: NemotronModel) -> Self {
         let path = setuppal_data_dir()
             .ok()
@@ -149,7 +149,7 @@ mod tests {
             NemotronModel::Ultra.api_id(),
             "nvidia/Nemotron-3-Ultra-550b-a55b"
         );
-        assert_eq!(NemotronModel::default(), NemotronModel::Super);
+        assert_eq!(NemotronModel::default(), NemotronModel::Lightning);
         assert_eq!(NemotronModel::default().slug(), DEFAULT_MODEL_SLUG);
     }
 

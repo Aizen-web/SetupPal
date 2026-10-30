@@ -4,6 +4,7 @@
  * Run: node ./scripts/check-formatter.js
  */
 import { formatChatMessage } from '../src/components/chat-formatter.js';
+import { renderMessage, splitMessageThinking } from '../src/components/chat-message.js';
 import { esc, safeHttpsUrl } from '../src/components/html.js';
 
 const failures = [];
@@ -35,6 +36,26 @@ if (esc(`<"'&>`) !== '&lt;&quot;&#39;&amp;&gt;') failures.push(`esc(): got ${esc
 if (safeHttpsUrl('javascript:alert(1)')) failures.push('safeHttpsUrl allowed javascript:');
 if (safeHttpsUrl('http://example.com')) failures.push('safeHttpsUrl allowed plain http:');
 if (!safeHttpsUrl('https://example.com/x')) failures.push('safeHttpsUrl rejected an https URL');
+
+const legacyLeaked = `Here's a thinking process:\n\n1. Analyze User Input\nSentence: "I'll set up Python 3.12 and install pandas 1.0.3 for you."\nBlock: \`\`setuppal-intent {"kind":"install","goal":"python 3.12 and pandas 1.0.3"}\`\``;
+const split = splitMessageThinking({ text: legacyLeaked });
+if (split.text !== "I'll set up Python 3.12 and install pandas 1.0.3 for you.") {
+  failures.push(`splitMessageThinking text: got ${JSON.stringify(split.text)}`);
+}
+if (!split.thinking.startsWith("Here's a thinking process:")) {
+  failures.push(`splitMessageThinking thinking missing`);
+}
+
+const msgHtml = renderMessage({
+  id: 'a_1',
+  sender: 'assistant',
+  text: "I'll set up Python 3.12 and install pandas 1.0.3 for you.",
+  thinking: '1. Analyze user input',
+  time: '03:25 AM',
+}, { isLast: true, ui: { collapsed: new Set() } });
+if (!msgHtml.includes('<details class="chat-thinking"') || msgHtml.includes('<details class="chat-thinking" data-thinking-key="a_1:thinking:open" open')) {
+  failures.push('renderMessage should render collapsed <details class="chat-thinking"> by default');
+}
 
 if (failures.length) {
   console.error(`Formatter check failed (${failures.length}):`);

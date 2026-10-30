@@ -10,8 +10,8 @@
 - Assistant answers should give clear, concrete recommendations of what it can set up.
 - Keep conversation/context memory compact to limit tokens while retaining what the user said.
 - Account/settings should make API key paste easy and expose practical controls such as context-window viewing.
-- Pixel is the only mascot (Mochi, Byte, and the pet selector are removed); Pixel's chat bubbles should be ambiguous and fun, never quoting the user's messages.
-- Prefer a calm decluttered chat UI (light pet vibe): one focal idea per screen, collapse the empty Tasks panel, keep Pixel as the only pet in view, and show a generating-plan indicator while a plan is being built.
+- Pixel is the only mascot (Mochi, Byte, and the pet selector are removed); Pixel's chat bubbles should be ambiguous and fun, never quoting the user's messages; keep a small set of smooth, reliable animations (not a large fragile set), and keep Pixel fully inside its container with no clipping.
+- Prefer a calm decluttered chat UI (light pet vibe): one focal idea per screen, collapse the empty Tasks panel, keep Pixel as the only pet in view, no empty-state recommendation chips (e.g. web/python presets), an animated generating-plan indicator while a plan is being built, live streamed install/terminal progress so runs do not look stalled, and no fake input affordances that look writable but are not.
 
 ## Learned Workspace Facts
 

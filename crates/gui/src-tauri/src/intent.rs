@@ -19,6 +19,8 @@ pub enum SetupIntent {
         #[serde(default)]
         alternatives: Vec<String>,
     },
+    /// The user asked to drop the plan currently shown in the Tasks panel.
+    RemovePlan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,13 +96,17 @@ impl SetupIntent {
                 }
                 Ok(())
             }
+            SetupIntent::RemovePlan => Ok(()),
         }
     }
 }
 
-/// Incremental filter that holds back a trailing `setuppal-intent` fence from visible deltas.
+/// Incremental filter that strips `<think>…</think>` blocks and holds back a trailing
+/// `setuppal-intent` fence from visible deltas.
 #[derive(Debug, Default)]
 pub struct IntentStreamFilter {
+    /// Zero stage: separates `<think>…</think>` tags emitted inside `delta.content`.
+    think: ThinkTagFilter,
     /// Full text seen so far (including held intent body once capturing).
     full: String,
     /// Text that might still become the start of an intent fence; not yet forwarded.
@@ -111,7 +117,107 @@ pub struct IntentStreamFilter {
     loose: LooseJsonFilter,
     /// Visible reply with every intent removed (or never present).
     visible: String,
+    /// Reasoning collected from `delta.reasoning_content` or `<think>` blocks.
+    reasoning: String,
     opened_reported: bool,
+}
+
+#[derive(Debug, Default)]
+struct ThinkTagFilter {
+    in_think: bool,
+    hold: String,
+    saw_content: bool,
+}
+
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
+impl ThinkTagFilter {
+    fn push(&mut self, chunk: &str) -> (String, String) {
+        if chunk.is_empty() {
+            return (String::new(), String::new());
+        }
+        self.hold.push_str(chunk);
+        let mut content_out = String::new();
+        let mut reasoning_out = String::new();
+
+        loop {
+            if self.in_think {
+                if let Some(close_at) = self.hold.find(THINK_CLOSE) {
+                    reasoning_out.push_str(&self.hold[..close_at]);
+                    let rest = self.hold[close_at + THINK_CLOSE.len()..].trim_start_matches(['\r', '\n']);
+                    self.hold = rest.to_string();
+                    self.in_think = false;
+                    self.saw_content = true;
+                    continue;
+                }
+                let keep = partial_suffix_len(&self.hold, THINK_CLOSE);
+                let safe = self.hold.len().saturating_sub(keep);
+                if safe > 0 {
+                    reasoning_out.push_str(&self.hold[..safe]);
+                    self.hold = self.hold[safe..].to_string();
+                }
+                break;
+            } else {
+                // Only look for <think> at the start of the stream (before visible content).
+                if !self.saw_content {
+                    let trimmed = self.hold.trim_start();
+                    let ws_len = self.hold.len() - trimmed.len();
+                    if trimmed.is_empty() {
+                        break;
+                    }
+                    if let Some(after) = trimmed.strip_prefix(THINK_OPEN) {
+                        let after = after.strip_prefix('\r').unwrap_or(after);
+                        let after = after.strip_prefix('\n').unwrap_or(after);
+                        self.hold = after.to_string();
+                        self.in_think = true;
+                        continue;
+                    }
+                    if THINK_OPEN.starts_with(trimmed) {
+                        // Still a prefix of `<think>` at the very start of the reply.
+                        break;
+                    }
+                    let _ = ws_len;
+                }
+                // Check if the model emitted `</think>` without an opening `<think>`.
+                if !self.saw_content {
+                    if let Some(close_at) = self.hold.find(THINK_CLOSE) {
+                        reasoning_out.push_str(&self.hold[..close_at]);
+                        let rest = self.hold[close_at + THINK_CLOSE.len()..].trim_start_matches(['\r', '\n']);
+                        self.hold = rest.to_string();
+                        self.saw_content = true;
+                        continue;
+                    }
+                }
+                self.saw_content = true;
+                content_out.push_str(&self.hold);
+                self.hold.clear();
+                break;
+            }
+        }
+
+        (content_out, reasoning_out)
+    }
+
+    fn finish(&mut self) -> (String, String) {
+        let rest = std::mem::take(&mut self.hold);
+        if self.in_think {
+            self.in_think = false;
+            (String::new(), rest)
+        } else {
+            (rest, String::new())
+        }
+    }
+}
+
+fn partial_suffix_len(s: &str, tag: &str) -> usize {
+    let max = tag.len().saturating_sub(1).min(s.len());
+    for k in (1..=max).rev() {
+        if s.is_char_boundary(s.len() - k) && tag.starts_with(&s[s.len() - k..]) {
+            return k;
+        }
+    }
+    0
 }
 
 impl IntentStreamFilter {
@@ -129,12 +235,31 @@ impl IntentStreamFilter {
         false
     }
 
-    /// Feed a provider delta. Returns the slice that is safe to show the user.
+    /// Feed a provider content delta. Returns the slice that is safe to show the user.
     pub fn push(&mut self, chunk: &str) -> String {
-        let fenced_safe = self.push_fenced(chunk);
+        let (content_safe, think_delta) = self.think.push(chunk);
+        if !think_delta.is_empty() {
+            self.reasoning.push_str(&think_delta);
+        }
+        let fenced_safe = self.push_fenced(&content_safe);
         let shown = self.loose.push(&fenced_safe);
         self.visible.push_str(&shown);
         shown
+    }
+
+    /// Feed a provider reasoning delta (`delta.reasoning_content` / `delta.reasoning`), or
+    /// combine with any `<think>` delta extracted from `delta.content`.
+    pub fn push_reasoning(&mut self, chunk: &str) -> String {
+        if chunk.is_empty() {
+            return String::new();
+        }
+        self.reasoning.push_str(chunk);
+        chunk.to_string()
+    }
+
+    /// Current accumulated reasoning text.
+    pub fn reasoning(&self) -> &str {
+        &self.reasoning
     }
 
     /// First stage: hold back a trailing `setuppal-intent` fence.
@@ -196,7 +321,24 @@ impl IntentStreamFilter {
     }
 
     /// Flush remaining hold buffers and parse any captured intent JSON.
-    pub fn finish(mut self) -> (String, Result<Option<SetupIntent>, IntentParseError>) {
+    pub fn finish(self) -> (String, Result<Option<SetupIntent>, IntentParseError>) {
+        let (visible, intent, _) = self.finish_with_reasoning();
+        (visible, intent)
+    }
+
+    /// Flush remaining hold buffers and return `(visible, intent, reasoning)`.
+    pub fn finish_with_reasoning(
+        mut self,
+    ) -> (String, Result<Option<SetupIntent>, IntentParseError>, String) {
+        let (think_content, think_reasoning) = self.think.finish();
+        if !think_reasoning.is_empty() {
+            self.reasoning.push_str(&think_reasoning);
+        }
+        if !think_content.is_empty() {
+            let fenced_safe = self.push_fenced(&think_content);
+            let shown = self.loose.push(&fenced_safe);
+            self.visible.push_str(&shown);
+        }
         if !self.capturing && !self.hold.is_empty() {
             // Incomplete fence marker at EOF: show it (not a real intent block).
             let rest = std::mem::take(&mut self.hold);
@@ -207,6 +349,7 @@ impl IntentStreamFilter {
         let (tail, loose_json) = std::mem::take(&mut self.loose).finish();
         self.visible.push_str(&tail);
         let visible = trim_trailing_blank_lines(&self.visible);
+        let reasoning = self.reasoning.trim().to_string();
         let intent = if !self.intent_body.trim().is_empty() || self.capturing {
             parse_intent_json(&self.intent_body).map(Some)
         } else if let Some(json) = loose_json {
@@ -214,7 +357,7 @@ impl IntentStreamFilter {
         } else {
             Ok(None)
         };
-        (visible, intent)
+        (visible, intent, reasoning)
     }
 }
 
@@ -556,6 +699,14 @@ mod tests {
     }
 
     #[test]
+    fn remove_plan_intent_parses() {
+        let reply = "Plan removed.\n\n```setuppal-intent\n{\"kind\":\"remove_plan\"}\n```";
+        let (visible, intent) = split_intent_block(reply);
+        assert_eq!(visible, "Plan removed.");
+        assert_eq!(intent.expect("parse ok"), Some(SetupIntent::RemovePlan));
+    }
+
+    #[test]
     fn block_split_across_chunks_including_fence_marker() {
         let mut filter = IntentStreamFilter::new();
         let parts = [
@@ -744,5 +895,28 @@ mod tests {
         let (visible, intent) = split_intent_block(&reply);
         assert!(visible.starts_with("**Manual setup guide**"));
         assert!(matches!(intent, Ok(Some(SetupIntent::Manual { .. }))));
+    }
+
+    #[test]
+    fn think_tags_and_reasoning_deltas_are_separated_from_visible_reply() {
+        let mut filter = IntentStreamFilter::new();
+        assert_eq!(filter.push_reasoning("Step 1: analyze. "), "Step 1: analyze. ");
+        let mut forwarded = String::new();
+        for part in [
+            "<th",
+            "ink>\nStep 2: check policy.",
+            "</thi",
+            "nk>\nI'll set up Python 3.12 and pandas 1.0.3 for you.\n\n```setuppal-intent\n",
+            install_json(),
+            "\n```",
+        ] {
+            forwarded.push_str(&filter.push(part));
+        }
+        let (visible, intent, reasoning) = filter.finish_with_reasoning();
+        assert_eq!(visible, "I'll set up Python 3.12 and pandas 1.0.3 for you.");
+        assert!(!forwarded.contains("Step 2"));
+        assert!(reasoning.contains("Step 1: analyze."));
+        assert!(reasoning.contains("Step 2: check policy."));
+        assert!(matches!(intent, Ok(Some(SetupIntent::Install { .. }))));
     }
 }

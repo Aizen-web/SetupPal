@@ -73,6 +73,12 @@ struct ChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     response_format: ResponseFormat,
+    chat_template_kwargs: ChatTemplateKwargs,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatTemplateKwargs {
+    enable_thinking: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -185,7 +191,7 @@ impl ProviderClient {
                 },
             ],
             temperature: 0.0,
-            max_tokens: Some(1500),
+            max_tokens: Some(4096),
             response_format: ResponseFormat {
                 kind: "json_schema".to_string(),
                 json_schema: JsonSchemaPayload {
@@ -193,6 +199,9 @@ impl ProviderClient {
                     strict: true,
                     schema: schema_value,
                 },
+            },
+            chat_template_kwargs: ChatTemplateKwargs {
+                enable_thinking: false,
             },
         };
 

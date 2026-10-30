@@ -17,7 +17,10 @@ const DEFAULT_PORT = 9333;
 
 const SNAP = `(() => {
   const t = s => [...document.querySelectorAll(s)].map(e => e.innerText.trim());
-  const msgs = [...document.querySelectorAll('#chat-thread-stream > *')].map(e => e.innerText.trim()).filter(Boolean);
+  const msgs = [...document.querySelectorAll('#chat-thread-stream > *')].map(e => {
+    const body = e.querySelector('.chat-bubble-body, .user-text');
+    return (body ? body.innerText : e.innerText).trim();
+  }).filter(Boolean);
   const plan = document.querySelector('#plan-card-title');
   const manual = document.querySelector('#manual-guide-title');
   const stepRows = [...document.querySelectorAll('.step-row')].map(e => e.innerText.replace(/\\n/g, ' | '));

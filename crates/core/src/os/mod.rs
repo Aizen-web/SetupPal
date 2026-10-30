@@ -88,7 +88,8 @@ pub trait OsProvider: Send + Sync {
         cancel: Option<&CancellationToken>,
     ) -> Result<CommandOutput, CoreError>;
 
-    /// Same as `run_command_cancellable`, with optional stall progress every 90 seconds.
+    /// Same as `run_command_cancellable`, streaming stdout/stderr lines through
+    /// `on_progress` and emitting a heartbeat when the child is quiet for a few seconds.
     async fn run_command_with_options(
         &self,
         binary: &Path,
@@ -260,7 +261,7 @@ impl OsProvider for PlatformOsProvider {
 
         // Job Object kills the whole tree (msiexec, unins000, …) on timeout/cancel/drop.
         let job = job::KillOnCloseJob::create();
-        let child = cmd.spawn()?;
+        let mut child = cmd.spawn()?;
         if let Some(ref job) = job {
             #[cfg(windows)]
             {
@@ -275,7 +276,7 @@ impl OsProvider for PlatformOsProvider {
         }
 
         let timeout_duration = std::time::Duration::from_secs(300);
-        let stall = std::time::Duration::from_secs(90);
+        let heartbeat = std::time::Duration::from_secs(3);
         let label = binary.display().to_string();
         let short_name = binary
             .file_stem()
@@ -283,13 +284,34 @@ impl OsProvider for PlatformOsProvider {
             .unwrap_or("installer");
         let started = std::time::Instant::now();
 
-        let mut join = tokio::spawn(async move {
-            let result = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
-            drop(job);
-            result
-        });
+        if let Some(cb) = &on_progress {
+            cb(format!("Running {short_name}…"));
+        }
 
-        let timed = loop {
+        let stdout_acc = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let stderr_acc = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        let stdout_pump = child.stdout.take().map(|pipe| {
+            let acc = std::sync::Arc::clone(&stdout_acc);
+            let tx = line_tx.clone();
+            tokio::spawn(async move { pump_command_output(pipe, acc, tx).await })
+        });
+        let stderr_pump = child.stderr.take().map(|pipe| {
+            let acc = std::sync::Arc::clone(&stderr_acc);
+            let tx = line_tx.clone();
+            tokio::spawn(async move { pump_command_output(pipe, acc, tx).await })
+        });
+        drop(line_tx);
+
+        let mut last_emit = started;
+        let mut lines_open = true;
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick completes immediately; skip it so we don't heartbeat at t=0.
+        tick.tick().await;
+
+        let wait_result: Result<std::process::ExitStatus, CoreError> = loop {
             tokio::select! {
                 biased;
                 _ = async {
@@ -299,43 +321,184 @@ impl OsProvider for PlatformOsProvider {
                         std::future::pending::<()>().await;
                     }
                 } => {
-                    join.abort();
-                    let _ = (&mut join).await;
-                    return Err(CoreError::Os(format!("Command '{label}' was cancelled")));
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    break Err(CoreError::Os(format!("Command '{label}' was cancelled")));
                 }
-                result = &mut join => {
-                    break match result {
-                        Ok(inner) => inner,
-                        Err(_) => {
-                            return Err(CoreError::Os(format!("Command '{label}' task failed")));
+                status = child.wait() => {
+                    break status.map_err(|e| CoreError::Os(format!("Command '{label}' failed: {e}")));
+                }
+                line = async {
+                    if lines_open {
+                        line_rx.recv().await
+                    } else {
+                        std::future::pending::<Option<String>>().await
+                    }
+                } => {
+                    match line {
+                        Some(text) => {
+                            if let Some(cb) = &on_progress {
+                                cb(text);
+                            }
+                            last_emit = std::time::Instant::now();
                         }
-                    };
+                        None => lines_open = false,
+                    }
                 }
-                _ = tokio::time::sleep(stall) => {
-                    if let Some(cb) = &on_progress {
-                        let secs = started.elapsed().as_secs();
-                        cb(format!(
-                            "Still working: {short_name} is downloading or waiting on Windows ({secs}s elapsed)"
-                        ));
+                _ = tick.tick() => {
+                    if started.elapsed() >= timeout_duration {
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                        break Err(CoreError::Os(format!(
+                            "Command '{label}' timed out after {} seconds",
+                            timeout_duration.as_secs()
+                        )));
+                    }
+                    if last_emit.elapsed() >= heartbeat {
+                        if let Some(cb) = &on_progress {
+                            let secs = started.elapsed().as_secs();
+                            cb(format!(
+                                "Still working: {short_name} is downloading or installing ({secs}s elapsed)"
+                            ));
+                        }
+                        last_emit = std::time::Instant::now();
                     }
                 }
             }
         };
 
-        let out = match timed {
-            Ok(output_res) => output_res?,
-            Err(_) => {
-                return Err(CoreError::Os(format!(
-                    "Command '{label}' timed out after {} seconds",
-                    timeout_duration.as_secs()
-                )));
+        drop(job);
+        if let Some(handle) = stdout_pump {
+            let _ = handle.await;
+        }
+        if let Some(handle) = stderr_pump {
+            let _ = handle.await;
+        }
+        while let Ok(text) = line_rx.try_recv() {
+            if let Some(cb) = &on_progress {
+                cb(text);
             }
-        };
+        }
+
+        let status = wait_result?;
+        let stdout = stdout_acc
+            .lock()
+            .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+            .unwrap_or_default();
+        let stderr = stderr_acc
+            .lock()
+            .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+            .unwrap_or_default();
 
         Ok(CommandOutput {
-            exit_code: out.status.code(),
-            stdout: String::from_utf8_lossy(&out.stdout).trim().to_string(),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            exit_code: status.code(),
+            stdout,
+            stderr,
         })
+    }
+}
+
+/// Reads a child pipe, accumulates raw bytes, and forwards cleaned `\n`/`\r` lines for the UI.
+async fn pump_command_output<R>(
+    pipe: R,
+    acc: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
+) where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    let mut pipe = pipe;
+    let mut buf = [0u8; 1024];
+    let mut pending = Vec::<u8>::new();
+    loop {
+        match pipe.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => {
+                if let Ok(mut guard) = acc.lock() {
+                    guard.extend_from_slice(&buf[..n]);
+                }
+                for &byte in &buf[..n] {
+                    if byte == b'\n' || byte == b'\r' {
+                        if let Some(line) = progress_line_from_bytes(&pending) {
+                            let _ = tx.send(line);
+                        }
+                        pending.clear();
+                    } else {
+                        pending.push(byte);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    if let Some(line) = progress_line_from_bytes(&pending) {
+        let _ = tx.send(line);
+    }
+}
+
+fn progress_line_from_bytes(raw: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(raw);
+    let cleaned = strip_ansi(&text);
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // winget / console spinners
+    if trimmed
+        .chars()
+        .all(|c| matches!(c, '|' | '/' | '-' | '\\' | ' ' | '.'))
+    {
+        return None;
+    }
+    let line = if trimmed.chars().count() > 240 {
+        let cut: String = trimmed.chars().take(240).collect();
+        format!("{cut}…")
+    } else {
+        trimmed.to_string()
+    };
+    Some(line)
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(next) = chars.next() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if ch == '\u{08}' {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+#[cfg(test)]
+mod progress_line_tests {
+    use super::{progress_line_from_bytes, strip_ansi};
+
+    #[test]
+    fn strips_ansi_and_keeps_text() {
+        assert_eq!(strip_ansi("\u{1b}[32mOK\u{1b}[0m"), "OK");
+        assert_eq!(
+            progress_line_from_bytes(b"\x1b[33mDownloading 42%\x1b[0m").as_deref(),
+            Some("Downloading 42%")
+        );
+    }
+
+    #[test]
+    fn drops_spinner_noise() {
+        assert_eq!(progress_line_from_bytes(b"|/-\\"), None);
+        assert_eq!(progress_line_from_bytes(b"   "), None);
     }
 }

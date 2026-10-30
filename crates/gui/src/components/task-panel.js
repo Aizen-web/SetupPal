@@ -6,6 +6,7 @@
 import { store } from '../state/store.js';
 import { esc } from './html.js';
 import { icon } from './icon.js';
+import { renderPlanCard, renderCompletedPlan, bindPlanCard, isPlanReviewable } from './plan-card.js';
 
 // status -> [icon, badge class, label]
 const STATUS = {
@@ -26,6 +27,8 @@ export function renderTaskPanel(container) {
     return;
   }
 
+  const plan = state.activePlan;
+  const reviewable = isPlanReviewable(plan);
   const count = (status) => tasks.filter(t => t.status === status).length;
   const held = count('held');
   const blocked = count('blocked');
@@ -68,7 +71,10 @@ export function renderTaskPanel(container) {
 
       <div class="task-panel-divider"></div>
 
-      <ol class="task-list">
+      <div class="task-panel-scroll">
+      ${reviewable ? renderPlanCard(plan) : ''}
+      ${plan.status === 'completed' ? renderCompletedPlan(plan) : ''}
+      ${reviewable ? '' : `<ol class="task-list">
         ${tasks.map(t => {
           const [statusIcon, chipClass, label] = STATUS[t.status] || [null, '', 'Waiting'];
           const source = t.sourceDomain || t.source || '';
@@ -89,8 +95,10 @@ export function renderTaskPanel(container) {
             </li>
           `;
         }).join('')}
-      </ol>
+      </ol>`}
+      </div>
     </div>
   `;
   container.querySelector('#btn-tasks-close').onclick = () => store.setTasksOpen(false);
+  bindPlanCard(container, () => renderTaskPanel(container));
 }

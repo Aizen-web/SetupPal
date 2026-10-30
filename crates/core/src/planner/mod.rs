@@ -135,6 +135,10 @@ impl Planner {
             .propose_plan(&llm_goal, profile, untrusted_context)
             .await?;
         plan.goal = trimmed_goal.to_string();
+        plan.source = crate::types::PlanSource::Llm {
+            model: self.llm.model_name().to_string(),
+        };
+        normalize_llm_isolated_envs(&mut plan, &llm_goal);
 
         // Reject LLM plans that silently rename a typed registry package (R11).
         if let Some((eco, typed)) = parse_registry_goal(trimmed_goal) {
@@ -161,7 +165,21 @@ impl Planner {
         }
 
         self.validate_plan_structure(&plan)?;
-        validate_plan_scope(&plan)?;
+        // Things the user named earlier in this chat ("...along with pandas") still count as
+        // requested when a follow-up goal only restates part of it ("python 3.12").
+        let mut scope_plan = plan.clone();
+        if let Some(ctx) = conversation_context {
+            let earlier: Vec<&str> = ctx
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("User:"))
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect();
+            if !earlier.is_empty() {
+                scope_plan.goal = format!("{trimmed_goal} {}", earlier.join(" "));
+            }
+        }
+        validate_plan_scope(&scope_plan)?;
 
         self.events.emit(AgentEvent::PlanGenerated {
             plan: Box::new(plan.clone()),
@@ -192,6 +210,40 @@ impl Planner {
             }
         }
         Ok(())
+    }
+}
+
+fn normalize_llm_isolated_envs(plan: &mut Plan, llm_goal: &str) {
+    let lower = llm_goal.to_ascii_lowercase();
+    let wants_venv = ["venv", "virtualenv", "virtual env", "isolated"]
+        .iter()
+        .any(|k| lower.contains(k));
+    let has_install = plan
+        .steps
+        .iter()
+        .any(|s| matches!(s.step, crate::types::Step::InstallPackage { .. }));
+
+    if !wants_venv && has_install {
+        plan.steps
+            .retain(|s| !matches!(s.step, crate::types::Step::CreateIsolatedEnv { .. }));
+        return;
+    }
+
+    for step in &mut plan.steps {
+        if let crate::types::Step::CreateIsolatedEnv { path, .. } = &mut step.step {
+            let raw = path.to_string_lossy().to_string();
+            if !path.is_absolute()
+                && !raw.starts_with("%USERPROFILE%")
+                && !raw.starts_with("%LOCALAPPDATA%")
+                && !raw.starts_with("%APPDATA%")
+                && !raw.contains("..")
+            {
+                let leaf = raw
+                    .trim_matches(|c: char| c == '.' || c == '/' || c == '\\' || c.is_whitespace());
+                let leaf = if leaf.is_empty() { "venv" } else { leaf };
+                *path = std::path::PathBuf::from(format!("%USERPROFILE%\\.venvs\\{leaf}"));
+            }
+        }
     }
 }
 

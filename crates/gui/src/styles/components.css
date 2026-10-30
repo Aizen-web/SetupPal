@@ -1511,6 +1511,31 @@
   color: var(--accent);
 }
 
+.log-line.log-working {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-soft);
+  opacity: .85;
+}
+
+.terminal-working-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: terminalWorkingPulse 1s ease-in-out infinite;
+}
+
+@keyframes terminalWorkingPulse {
+  0%, 100% { opacity: .35; transform: scale(.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.log-line.is-live {
+  color: var(--accent);
+}
+
 [data-mode="hacker"] .terminal-container::before {
   content: "";
   position: absolute;
@@ -1653,7 +1678,8 @@
   .starter-pill,
   .btn-send,
   .btn-approve,
-  .speech-bubble.is-new {
+  .speech-bubble.is-new,
+  .terminal-working-dot {
     transition: none;
     animation: none;
   }
@@ -2442,3 +2468,47 @@
 }
 
 .dry-run-badge { background: var(--warning-soft, rgba(233, 185, 73, 0.18)); color: var(--warning, #e9b949); font-weight: 600; }
+
+/* Plan lives in the Tasks panel */
+.task-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: 12px;
+}
+
+.task-panel-scroll .task-list { margin-top: 12px; }
+
+.plan-card.plan-in-panel,
+.plan-card.plan-completed-card {
+  max-width: none;
+  margin: 0 0 12px;
+  padding: 14px;
+  box-shadow: none;
+}
+
+.plan-in-panel .plan-card-head { flex-direction: column; gap: 6px; }
+
+.btn-remove-plan:hover { color: var(--v-red); }
+
+.plan-completed-card .plan-title { display: flex; align-items: center; gap: 6px; }
+.chat-msg-col .plan-completed-card { margin: 12px 0 0; max-width: 520px; }
+
+/* Composer model picker */
+.composer-model {
+  flex: none;
+  max-width: 150px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--bg-canvas);
+  color: var(--ink-soft);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.composer-model:hover:not(:disabled) { color: var(--ink); border-color: var(--border); }
+.composer-model:disabled { opacity: 0.5; cursor: not-allowed; }

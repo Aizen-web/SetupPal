@@ -46,7 +46,7 @@ If the model or network is slow, say that the plan is being checked against OSV 
 2. Stay at or under **3:00**. Lead with Nebius/Nemotron; do not spend the first minute on setup slides.
 3. Upload as a **public** (or unlisted-if-allowed-by-Devpost; prefer public) YouTube video.
 4. Title suggestion: `SetupPal — Nebius Token Factory + NVIDIA Nemotron (hackathon demo)`.
-5. Description should mention: SetupPal, Nebius Token Factory, Nemotron Super (default), GitHub `https://github.com/Aizen-web/SetupPal`.
+5. Description should mention: SetupPal, Nebius Token Factory, Nemotron Lightning (default), GitHub `https://github.com/Aizen-web/SetupPal`.
 6. Paste the real URL into Devpost and optionally into [SUBMISSION.md](../SUBMISSION.md) / [README.md](../README.md). **Do not** commit a fake or “TBD” video link.
 
 ## Reset checklist (between runs)

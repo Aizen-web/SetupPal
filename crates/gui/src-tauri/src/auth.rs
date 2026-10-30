@@ -103,7 +103,7 @@ pub fn allowed_origins(debug_build: bool) -> Vec<HeaderValue> {
 pub fn cors_layer(debug_build: bool) -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed_origins(debug_build)))
-        .allow_methods([Method::GET, Method::POST, Method::DELETE])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
 }
 
@@ -281,6 +281,37 @@ mod tests {
         assert_eq!(
             ok.headers().get("access-control-allow-origin").unwrap(),
             "http://tauri.localhost"
+        );
+
+        let put_preflight = Request::builder()
+            .method("OPTIONS")
+            .uri("/api/model")
+            .header("host", "127.0.0.1:40123")
+            .header("origin", "http://localhost:5173")
+            .header("access-control-request-method", "PUT")
+            .header(
+                "access-control-request-headers",
+                "authorization,content-type",
+            )
+            .body(Body::empty())
+            .unwrap();
+        let put_ok = secure(
+            Router::new().route("/api/model", get(|| async { "model" })),
+            AuthState::new(TOKEN.to_string(), PORT),
+            true,
+        )
+        .oneshot(put_preflight)
+        .await
+        .unwrap();
+        assert!(put_ok.status().is_success());
+        let allow_methods = put_ok
+            .headers()
+            .get("access-control-allow-methods")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            allow_methods.split(',').any(|method| method.trim() == "PUT"),
+            "{allow_methods}"
         );
 
         let bad = app()
