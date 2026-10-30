@@ -86,28 +86,45 @@
   color: var(--v-red-text);
 }
 
-.chat-error-actions {
+/* Copy / Retry: quiet until hover or focus; always visible on the latest reply */
+.chat-msg-actions {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  color: var(--ink-soft);
-  font-size: 12px;
+  gap: 4px;
+  margin-top: -2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
 }
 
-.chat-retry-btn {
-  padding: 5px 11px;
-  border: 1px solid var(--border);
+.chat-bubble:hover .chat-msg-actions,
+.chat-msg-actions:focus-within,
+.chat-msg-actions.is-pinned {
+  opacity: 1;
+}
+
+.chat-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
-  background: var(--bg-surface);
-  color: var(--ink);
+  background: transparent;
+  color: var(--ink-soft);
   font: 600 12px var(--font-ui);
   cursor: pointer;
 }
 
-.chat-retry-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+.chat-action-btn:hover {
+  border-color: var(--border);
+  background: var(--bg-surface);
+  color: var(--ink);
+}
+
+.chat-action-btn.copied { color: var(--v-green-text); }
+
+@media (hover: none) {
+  .chat-msg-actions { opacity: 1; }
 }
 
 .chat-meta {
@@ -261,17 +278,11 @@
   overflow-wrap: anywhere;
 }
 
-.chat-inline-link,
-.chat-file-link {
+.chat-inline-link {
   color: var(--accent-strong);
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 2px;
-}
-
-.chat-file-link {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
 }
 
 .ext-arrow {
@@ -280,8 +291,7 @@
   vertical-align: middle;
 }
 
-.chat-inline-link:focus-visible,
-.chat-file-link:focus-visible {
+.chat-inline-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 3px;

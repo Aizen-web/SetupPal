@@ -1,7 +1,6 @@
 /**
- * SetupPal: Mascot Animations for Pixel (Ghost), Byte (Cat), and Mochi (Bunny)
- * Covers all 20 catalogue animations + pet-specific personality behaviors.
- * All animations are designed to loop smoothly and keep pets lively and charming!
+ * SetupPal: Pixel's animations.
+ * One block per state in mascot/animations.js (driven by data-state on the SVG root).
  */
 
 :root {
@@ -68,58 +67,6 @@
 
 .ghost-hem {
   animation: hemWave 1.8s ease-in-out infinite;
-}
-
-/* Cat-specific idle personality: Swishing tail & twitching ears */
-@keyframes catTailSwish {
-  0%, 100% {
-    transform: rotate(0deg);
-  }
-  50% {
-    transform: rotate(-12deg);
-  }
-}
-
-.cat-tail {
-  animation: catTailSwish 2.2s ease-in-out infinite;
-  transform-origin: 140px 148px;
-}
-
-@keyframes catEarTwitch {
-  0%, 90%, 100% {
-    transform: rotate(0deg);
-  }
-  93% {
-    transform: rotate(-6deg);
-  }
-  96% {
-    transform: rotate(4deg);
-  }
-}
-
-.cat-ear-l {
-  animation: catEarTwitch 5s ease-in-out infinite;
-  transform-origin: 72px 78px;
-}
-
-/* Bunny-specific idle personality: Floppy ear gentle bounce */
-@keyframes bunnyEarFlop {
-  0%, 100% {
-    transform: rotate(0deg);
-  }
-  50% {
-    transform: rotate(-4deg);
-  }
-}
-
-.bunny-ear-l {
-  animation: bunnyEarFlop 2s ease-in-out infinite;
-  transform-origin: 76px 86px;
-}
-
-.bunny-ear-r {
-  animation: bunnyEarFlop 2s 0.3s ease-in-out infinite;
-  transform-origin: 124px 86px;
 }
 
 /* ========================================================
@@ -320,23 +267,6 @@
 .pet-root[data-state="working"] .fx-item[id$="fx-sparkles"] {
   opacity: 0.9 !important;
   animation: sparkleBurst 1.2s ease-out infinite;
-}
-
-/* Cat tippy-tappy typing on keyboard */
-@keyframes catPawsType {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-5px);
-  }
-}
-
-.pet-cat[data-state="working"] .pet-arm-l {
-  animation: catPawsType 0.15s ease-in-out infinite alternate;
-}
-.pet-cat[data-state="working"] .pet-arm-r {
-  animation: catPawsType 0.15s 0.08s ease-in-out infinite alternate;
 }
 
 /* ========================================================
@@ -612,19 +542,6 @@
   animation: waveHelloHand 1.8s var(--ease-spring) both;
 }
 
-.pet-cat[data-state="wave-hello"] .pet-arm-r,
-.pet-bunny[data-state="wave-hello"] .pet-arm-r {
-  animation: pawWaveLoop 1.8s var(--ease-soft) both;
-}
-
-.pet-cat[data-state="wave-hello"] .cat-tail {
-  animation: catTailSwish 1.8s var(--ease-soft) both;
-}
-
-.pet-bunny[data-state="wave-hello"] .bunny-ear-r {
-  animation: bunnyEarFlop 1.8s var(--ease-soft) both;
-}
-
 /* ========================================================
    14. LISTENING (User typing in composer)
    ======================================================== */
@@ -644,16 +561,6 @@
 .pet-root[data-state="listening"] .ghost-eye {
   transform: scale(1.15) translate(1px, 2px);
   animation: none;
-}
-
-.pet-cat[data-state="listening"] .cat-ear-l,
-.pet-cat[data-state="listening"] .cat-ear-r {
-  transform: rotate(-5deg);
-}
-
-.pet-bunny[data-state="listening"] .bunny-ear-l,
-.pet-bunny[data-state="listening"] .bunny-ear-r {
-  transform: rotate(6deg);
 }
 
 /* ========================================================

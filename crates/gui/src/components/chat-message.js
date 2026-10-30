@@ -1,39 +1,34 @@
 /**
  * SetupPal: one chat message as HTML.
  *
- * Kept free of store/bridge imports so the dev preview page (chat-preview.html)
- * can render exactly what the app renders.
+ * Kept free of store/bridge imports so it renders the same wherever it is used.
  */
 
-import { formatChatMessage, escapeHtml } from './chat-formatter.js';
+import { formatChatMessage } from './chat-formatter.js';
+import { esc } from './html.js';
 import { icon } from './icon.js';
 
-export const PETS = {
-  ghost: { icon: 'ghost', name: 'Pixel', style: 'playful' },
-  cat: { icon: 'cat', name: 'Byte', style: 'dry & grumpy' },
-  bunny: { icon: 'bunny', name: 'Mochi', style: 'shy & gentle' },
-};
+export const ASSISTANT_NAME = 'Pixel';
 
 /**
- * @param {object} m                  { id, sender, text, time, options? }
+ * @param {object} m                  { id, sender, text, time, options?, isStreaming?, stopped?, failed? }
  * @param {object} ctx
- * @param {boolean} ctx.isLast        latest message: interactive + shows quick actions
+ * @param {boolean} ctx.isLast        latest message: interactive and keeps its actions visible
  * @param {boolean} ctx.isNew         animate in
- * @param {string}  ctx.activePet     'ghost' | 'cat' | 'bunny'
- * @param {string}  ctx.retryText     preceding user prompt for failed replies
+ * @param {string}  ctx.retryText     preceding user prompt, enables Retry on the latest reply
+ * @param {boolean} ctx.canRetry      false while another reply is streaming
  * @param {object}  ctx.ui            { selections, collapsed }
  */
 export function renderMessage(m, ctx) {
-  const { isLast = false, isNew = false, activePet = 'ghost', retryText = '', ui = {} } = ctx || {};
-  const pet = PETS[m.pet || activePet] || PETS.ghost;
-  const idAttr = escapeHtml(m.id);
+  const { isLast = false, isNew = false, retryText = '', canRetry = true, ui = {} } = ctx || {};
+  const idAttr = esc(m.id);
   const newCls = isNew ? ' is-new' : '';
 
   if (m.sender === 'user') {
     return `
       <div class="chat-bubble user-bubble${newCls}" data-msg-id="${idAttr}">
-        <div class="user-text">${escapeHtml(m.text)}</div>
-        <span class="chat-timestamp">${escapeHtml(m.time)}</span>
+        <div class="user-text">${esc(m.text)}</div>
+        <span class="chat-timestamp">${esc(m.time)}</span>
       </div>
     `;
   }
@@ -56,33 +51,41 @@ export function renderMessage(m, ctx) {
       <div class="chat-options-header">Quick actions</div>
       <div class="chat-options-group">
         ${m.options.map(opt => `
-          <button type="button" class="chat-option-pill ${opt.value === 'open_settings' ? 'pill-settings' : ''}" data-choice="${escapeHtml(opt.value)}">
-            <span class="option-label">${escapeHtml(opt.label)}</span>
+          <button type="button" class="chat-option-pill ${opt.value === 'open_settings' ? 'pill-settings' : ''}" data-choice="${esc(opt.value)}">
+            <span class="option-label">${esc(opt.label)}</span>
           </button>
         `).join('')}
       </div>
     </div>
   ` : '';
+
   const failure = m.failed ? ' is-failed' : '';
-  const retryAction = m.failed && retryText ? `
-    <div class="chat-error-actions">
-      <span>Check your connection, then try again.</span>
-      <button class="chat-retry-btn" type="button" data-retry-text="${escapeHtml(retryText)}">Try again</button>
+  const showRetry = isLast && canRetry && retryText && !m.isStreaming;
+  const actions = m.isStreaming ? '' : `
+    <div class="chat-msg-actions${isLast || m.failed ? ' is-pinned' : ''}" role="group" aria-label="Message actions">
+      ${m.text ? `
+        <button type="button" class="chat-action-btn" data-action="copy" data-msg-id="${idAttr}" aria-label="Copy reply">
+          ${icon('copy', 14)}<span>Copy</span>
+        </button>` : ''}
+      ${showRetry ? `
+        <button type="button" class="chat-action-btn" data-action="retry" data-retry-text="${esc(retryText)}" aria-label="${m.failed ? 'Try again' : 'Retry this question'}">
+          ${icon('refresh', 14)}<span>${m.failed ? 'Try again' : 'Retry'}</span>
+        </button>` : ''}
     </div>
-  ` : '';
+  `;
 
   return `
     <div class="chat-bubble bot-bubble${newCls}${streaming}${failure}" data-msg-id="${idAttr}"${ariaBusy}>
-      <div class="chat-avatar-wrap" aria-hidden="true">${icon(pet.icon, 20)}</div>
+      <div class="chat-avatar-wrap" aria-hidden="true">${icon('ghost', 20)}</div>
       <div class="chat-msg-col">
         <div class="chat-meta">
-          <span class="chat-author-name">${pet.name}</span>
+          <span class="chat-author-name">${ASSISTANT_NAME}</span>
           ${m.stopped ? '<span class="chat-status-label">Stopped</span>' : ''}
-          <span class="chat-timestamp">${escapeHtml(m.time)}</span>
+          <span class="chat-timestamp">${esc(m.time)}</span>
         </div>
         <div class="chat-bubble-body">${body}${streamIndicator}</div>
-        ${retryAction}
         ${options}
+        ${actions}
       </div>
     </div>
   `;

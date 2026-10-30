@@ -3,28 +3,30 @@
  */
 
 import { sounds } from '../audio/sound-engine.js';
-import { petLine } from '../mascot/pet-lines.js';
+import { pixelLine } from '../mascot/pixel-lines.js';
+import { getUiSettings, setUiSettings, TEXT_SIZES } from './prefs.js';
 
 const STORAGE_KEY = 'setuppal_local_conversations_v2';
 const ACTIVE_CONV_KEY = 'setuppal_active_conv_id_v2';
-const ACTIVE_PET_KEY = 'setuppal_active_pet';
-const PET_IDS = ['ghost', 'cat', 'bunny'];
+const LEGACY_PET_KEY = 'setuppal_active_pet';
+const DEFAULT_TITLE = 'New setup';
+
+/** Minimum time in a mode before auto mode switches back (ui.md 2.3). */
+export const MODE_MIN_DWELL_MS = 2000;
 
 function generateConvId() {
   return 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
 }
 
-function createNewConversation(title = 'New setup', icon = '✨') {
+function createNewConversation(title = DEFAULT_TITLE) {
   return {
     id: generateConvId(),
     title,
-    icon,
-    createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
     chatMessages: [],
     activePlan: null,
-    terminalLogs: [
-      { id: 1, text: '> Zero-Trust Orchestrator ready. Standing by for user request...', type: 'info' }
-    ]
+    terminalLogs: [],
   };
 }
 
@@ -34,7 +36,7 @@ function loadStoredConversations() {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const recovered = parsed.map(conversation => ({
+        return parsed.map(conversation => ({
           ...conversation,
           chatMessages: (conversation.chatMessages || []).map(message =>
             message.isStreaming
@@ -42,13 +44,12 @@ function loadStoredConversations() {
               : message
           ),
         }));
-        return recovered;
       }
     }
   } catch (e) {
     console.warn("Could not parse local conversations:", e);
   }
-  const defaultConv = createNewConversation('New setup', '✨');
+  const defaultConv = createNewConversation();
   saveStoredConversations([defaultConv], defaultConv.id);
   return [defaultConv];
 }
@@ -64,10 +65,24 @@ function saveStoredConversations(conversations, activeId) {
   }
 }
 
+function toRecent(conversations, activeId) {
+  return conversations.map(c => ({ id: c.id, title: c.title, active: c.id === activeId }));
+}
+
+/** Mirrors settings that CSS reads onto <html>. */
+function applyDocumentSettings(settings) {
+  const root = document.documentElement;
+  root.dataset.bgIntensity = settings.backgroundIntensity;
+  root.dataset.textSize = settings.textScale;
+  root.dataset.reduceMotion = String(settings.reduceMotion);
+  root.style.setProperty('--text-zoom', String((TEXT_SIZES[settings.textScale] || TEXT_SIZES.m).zoom));
+}
+
 class Store {
   constructor() {
     this.subscribers = new Set();
-    
+    localStorage.removeItem(LEGACY_PET_KEY);
+
     const conversations = loadStoredConversations();
     let activeId = localStorage.getItem(ACTIVE_CONV_KEY);
     let activeConv = conversations.find(c => c.id === activeId);
@@ -76,74 +91,54 @@ class Store {
       activeId = activeConv.id;
     }
 
+    const settings = getUiSettings();
+    const initialMode = settings.modePreference === 'always-hacker' ? 'hacker' : 'chill';
+    document.documentElement.dataset.mode = initialMode;
+    applyDocumentSettings(settings);
+    sounds.setVolume(settings.masterVolume);
+    sounds.setMuted(!settings.soundEnabled);
+
+    // Mode controller (not rendered state)
+    this.modeEnteredAt = Date.now();
+    this.modeOverride = null; // 'chill' | 'hacker' while a manual /hack or /chill is in force
+    this.runActive = false;
+    this.modeTimer = null;
+
     this.state = {
-      mode: 'chill', // 'chill' | 'hacker'
-      modePreference: 'auto', // 'auto' | 'always-chill' | 'always-hacker'
+      mode: initialMode, // 'chill' | 'hacker'
+      modePreference: settings.modePreference, // 'auto' | 'always-chill' | 'always-hacker'
       activePage: 'chats', // 'chats' | 'history' | 'downloads' | 'accounts' | 'settings'
-      
-      // Conversations & Tabs (Persisted locally)
-      conversations: conversations,
+
+      conversations,
       activeConversationId: activeId,
 
-      // Mascot & Pets
-      activePet: PET_IDS.includes(localStorage.getItem(ACTIVE_PET_KEY))
-        ? localStorage.getItem(ACTIVE_PET_KEY)
-        : 'ghost',
       mascotState: 'idle',
-      mascotSpeech: petLine('ghost', 'welcome'),
-      mascotSpeechSpeed: 25, // ms per char
-      isSpeaking: false,
-      
-      // Right Task Panel
+      mascotSpeech: pixelLine('welcome'),
+
+      // Right task panel: user can collapse it while a plan exists
       tasksOpen: true,
-      
-      // Active Plan & Tasks (restored from active conversation)
+
+      // Active plan and terminal log (restored from the active conversation)
       activePlan: activeConv.activePlan || null,
+      terminalTab: 'terminal', // 'terminal' | 'chat' (Hacker mode tab strip)
+      terminalLogs: activeConv.terminalLogs || [],
 
-      // Terminal Logs (restored from active conversation)
-      terminalTab: 'terminal', // 'terminal' | 'chat'
-      terminalLogs: activeConv.terminalLogs || [
-        { id: 1, text: '> Zero-Trust Orchestrator ready. Standing by for user request...', type: 'info' }
-      ],
-
-      // Chat Messages (restored from active conversation)
       chatMessages: activeConv.chatMessages || [],
       isChatGenerating: (activeConv.chatMessages || []).some(message => message.isStreaming),
 
-      // RECENT list in sidebar (synced with conversations)
-      recentChats: conversations.map(c => ({
-        id: c.id,
-        title: c.title,
-        icon: c.icon,
-        active: c.id === activeId
-      })),
+      recentChats: toRecent(conversations, activeId),
 
-      // Downloads Data
-      // Real downloads, derived from the backend transaction log
+      // Derived from the backend transaction log
       downloads: [],
-
-      // History Data (filled from the backend transaction log)
       history: {
         transactions: [],
         loaded: false,
         error: null
       },
 
-      // Settings
-      settings: {
-        safetyLevel: 'strict', // 'strict' | 'balanced' | 'relaxed'
-        textScale: 'm', // 's' | 'm' | 'l'
-        backgroundIntensity: 'subtle',
-        reduceMotion: false,
-        mascotAnimations: true,
-        speechBubbles: true,
-        soundEnabled: true,
-        masterVolume: 0.35,
-        modelPlanner: 'NVIDIA Nemotron-3 70B (Planning & Safety)',
-        modelVerification: 'Local Deterministic Safety Engine'
-      },
+      settings,
 
-      // Accounts (Local credentials & state)
+      // Accounts (owned by the Accounts view)
       accounts: {
         displayName: localStorage.getItem('setuppal_display_name') || 'Local User',
         avatarColor: 'lavender',
@@ -159,7 +154,6 @@ class Store {
         }
       },
 
-      // Mascot Lab Modal
       animationLabOpen: false
     };
   }
@@ -256,26 +250,19 @@ class Store {
     this.notify();
   }
 
-  createConversation() {
-    // 1. Save currently active conversation first
+  /** Copies the live chat state back into its conversation record. */
+  snapshotActiveConversation() {
     const s = this.state;
-    const updatedConvs = (s.conversations || []).map(c => {
-      if (c.id === s.activeConversationId) {
-        return {
-          ...c,
-          chatMessages: s.chatMessages,
-          activePlan: s.activePlan,
-          terminalLogs: s.terminalLogs,
-          updatedAt: Date.now()
-        };
-      }
-      return c;
-    });
+    return (s.conversations || []).map(c => (
+      c.id === s.activeConversationId
+        ? { ...c, chatMessages: s.chatMessages, activePlan: s.activePlan, terminalLogs: s.terminalLogs, updatedAt: Date.now() }
+        : c
+    ));
+  }
 
-    // 2. Create fresh new conversation
-    const newConv = createNewConversation('New setup', '✨');
-    const allConvs = [newConv, ...updatedConvs];
-
+  createConversation() {
+    const newConv = createNewConversation();
+    const allConvs = [newConv, ...this.snapshotActiveConversation()];
     saveStoredConversations(allConvs, newConv.id);
 
     this.setState({
@@ -286,36 +273,20 @@ class Store {
       activePlan: null,
       terminalLogs: newConv.terminalLogs,
       activePage: 'chats',
-      recentChats: allConvs.map(c => ({
-        id: c.id,
-        title: c.title,
-        icon: c.icon,
-        active: c.id === newConv.id
-      }))
+      recentChats: toRecent(allConvs, newConv.id),
     });
 
     sounds.play('ui.click');
-    this.setMascotState('idle', petLine(this.state.activePet || 'ghost', 'new_chat'));
+    this.setMascotState('wave-hello', pixelLine('new_chat'));
   }
 
   switchConversation(id) {
-    if (this.state.activeConversationId === id) return;
+    if (this.state.activeConversationId === id) {
+      if (this.state.activePage !== 'chats') this.setActivePage('chats');
+      return;
+    }
 
-    // 1. Save currently active conversation
-    const s = this.state;
-    const updatedConvs = (s.conversations || []).map(c => {
-      if (c.id === s.activeConversationId) {
-        return {
-          ...c,
-          chatMessages: s.chatMessages,
-          activePlan: s.activePlan,
-          terminalLogs: s.terminalLogs,
-          updatedAt: Date.now()
-        };
-      }
-      return c;
-    });
-
+    const updatedConvs = this.snapshotActiveConversation();
     const targetConv = updatedConvs.find(c => c.id === id);
     if (!targetConv) return;
 
@@ -327,20 +298,13 @@ class Store {
       chatMessages: targetConv.chatMessages || [],
       isChatGenerating: (targetConv.chatMessages || []).some(message => message.isStreaming),
       activePlan: targetConv.activePlan || null,
-      terminalLogs: targetConv.terminalLogs || [
-        { id: 1, text: '> Zero-Trust Orchestrator ready. Standing by for user request...', type: 'info' }
-      ],
+      terminalLogs: targetConv.terminalLogs || [],
       activePage: 'chats',
-      recentChats: updatedConvs.map(c => ({
-        id: c.id,
-        title: c.title,
-        icon: c.icon,
-        active: c.id === targetConv.id
-      }))
+      recentChats: toRecent(updatedConvs, targetConv.id),
     });
 
     sounds.play('ui.click');
-    this.setMascotState('idle', petLine(this.state.activePet || 'ghost', 'switch_chat'));
+    this.setMascotState('idle', pixelLine('switch_chat'));
   }
 
   closeConversation(id) {
@@ -369,12 +333,7 @@ class Store {
       isChatGenerating: (nextConv.chatMessages || []).some(message => message.isStreaming),
       activePlan: nextConv.activePlan || null,
       terminalLogs: nextConv.terminalLogs || [],
-      recentChats: remaining.map(c => ({
-        id: c.id,
-        title: c.title,
-        icon: c.icon,
-        active: c.id === nextActiveId
-      }))
+      recentChats: toRecent(remaining, nextActiveId),
     });
 
     sounds.play('ui.click');
@@ -383,99 +342,130 @@ class Store {
   updateConversationTitleFromMessage(userText) {
     const s = this.state;
     const active = (s.conversations || []).find(c => c.id === s.activeConversationId);
-    if (!active) return;
+    if (!active || !active.title.startsWith(DEFAULT_TITLE)) return;
 
-    // Only update if current title is default
-    if (active.title === 'New setup' || active.title.startsWith('New setup')) {
-      const lower = userText.toLowerCase();
-      let newTitle = userText.slice(0, 24);
-      let newIcon = '💬';
+    const lower = userText.toLowerCase();
+    let newTitle = userText.replace(/\s+/g, ' ').trim().slice(0, 32);
+    if (/\b(web|node|typescript|javascript)\b/.test(lower)) newTitle = 'Web & TypeScript';
+    else if (/\b(rust|cargo)\b/.test(lower)) newTitle = 'Rust toolchain';
+    else if (/\b(python|venv)\b|data science/.test(lower)) newTitle = 'Python setup';
+    else if (/c\+\+|\bcpp\b|compiler/.test(lower)) newTitle = 'C++ toolchain';
+    if (!newTitle) return;
 
-      if (lower.includes('web') || lower.includes('node') || lower.includes('typescript') || lower.includes('javascript')) {
-        newTitle = 'Web & TypeScript';
-        newIcon = '🌐';
-      } else if (lower.includes('rust') || lower.includes('cargo')) {
-        newTitle = 'Rust toolchain';
-        newIcon = '🦀';
-      } else if (lower.includes('python') || lower.includes('venv') || lower.includes('data science')) {
-        newTitle = 'Python AI dev';
-        newIcon = '🐍';
-      } else if (lower.includes('c++') || lower.includes('cpp') || lower.includes('compiler')) {
-        newTitle = 'C++ toolchain';
-        newIcon = '⚡';
-      } else if (lower.includes('attack') || lower.includes('radar')) {
-        newTitle = 'Security Radar';
-        newIcon = '🛡️';
-      }
-
-      const updatedConvs = s.conversations.map(c => {
-        if (c.id === s.activeConversationId) {
-          return { ...c, title: newTitle, icon: newIcon };
-        }
-        return c;
-      });
-
-      saveStoredConversations(updatedConvs, s.activeConversationId);
-
-      this.setState({
-        conversations: updatedConvs,
-        recentChats: updatedConvs.map(c => ({
-          id: c.id,
-          title: c.title,
-          icon: c.icon,
-          active: c.id === s.activeConversationId
-        }))
-      });
-    }
+    const updatedConvs = s.conversations.map(c => (c.id === s.activeConversationId ? { ...c, title: newTitle } : c));
+    saveStoredConversations(updatedConvs, s.activeConversationId);
+    this.setState({
+      conversations: updatedConvs,
+      recentChats: toRecent(updatedConvs, s.activeConversationId),
+    });
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Modes                                                             */
+  /* ---------------------------------------------------------------- */
+
+  /** Low-level switch. Prefer beginRun/endRun/setModeManual so auto mode stays consistent. */
   setMode(mode) {
     if (this.state.mode === mode) return;
-    const prev = this.state.mode;
-    this.setState({ mode });
+    this.modeEnteredAt = Date.now();
     document.documentElement.dataset.mode = mode;
-    
-    // Play transition sound
-    if (mode === 'hacker') {
-      sounds.play('mode.hacker');
-    } else {
-      sounds.play('mode.chill');
-    }
+    this.setState({ mode });
+    sounds.play(mode === 'hacker' ? 'mode.hacker' : 'mode.chill');
   }
+
+  clearModeTimer() {
+    if (this.modeTimer) clearTimeout(this.modeTimer);
+    this.modeTimer = null;
+  }
+
+  /** /hack, /chill, and the header toggle: forced until the next run ends. */
+  setModeManual(mode) {
+    this.clearModeTimer();
+    this.modeOverride = mode;
+    this.setMode(mode);
+  }
+
+  /** A plan run started (first task running). Auto mode goes to Hacker and shows the terminal. */
+  beginRun() {
+    this.runActive = true;
+    this.clearModeTimer();
+    if (this.state.modePreference !== 'auto' || this.modeOverride) return;
+    if (this.state.terminalTab !== 'terminal') this.setState({ terminalTab: 'terminal' });
+    this.setMode('hacker');
+  }
+
+  /** A plan run finished or stopped. Auto mode returns to Chill after the minimum dwell. */
+  endRun() {
+    this.runActive = false;
+    this.modeOverride = null;
+    this.clearModeTimer();
+    if (this.state.modePreference !== 'auto' || this.state.mode === 'chill') return;
+    const wait = Math.max(0, MODE_MIN_DWELL_MS - (Date.now() - this.modeEnteredAt));
+    this.modeTimer = setTimeout(() => {
+      this.modeTimer = null;
+      if (!this.runActive && !this.modeOverride && this.state.modePreference === 'auto') this.setMode('chill');
+    }, wait);
+  }
+
+  setModePreference(pref) {
+    this.updateSettings({ modePreference: pref });
+    this.modeOverride = null;
+    this.clearModeTimer();
+    if (pref === 'always-chill') this.setMode('chill');
+    else if (pref === 'always-hacker') this.setMode('hacker');
+    else this.setMode(this.runActive ? 'hacker' : 'chill');
+  }
+
+  setTerminalTab(tab) {
+    if (tab !== 'terminal' && tab !== 'chat') return;
+    this.setState({ terminalTab: tab });
+    sounds.play('ui.click');
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Settings                                                          */
+  /* ---------------------------------------------------------------- */
+
+  updateSettings(patch) {
+    const settings = setUiSettings(patch);
+    applyDocumentSettings(settings);
+    sounds.setVolume(settings.masterVolume);
+    sounds.setMuted(!settings.soundEnabled);
+    this.setState({ settings, modePreference: settings.modePreference });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Mascot                                                            */
+  /* ---------------------------------------------------------------- */
 
   setMascotState(state, speech = null) {
     this.state.mascotState = state;
     if (speech !== null) {
       this.state.mascotSpeech = speech;
     }
-    
-    // Update DOM speech bubble and mascot element directly without destroying user input / DOM
+
+    // Update the live mascot and bubble in place so typing and scrolling are not disturbed.
     const speechEl = document.getElementById('speech-bubble-text');
     if (speechEl && speech !== null) {
       speechEl.textContent = speech;
     }
-    const mascotSvg = document.getElementById('hero-ghost-root') || document.getElementById('ghost-root');
+    const mascotSvg = document.querySelector('[data-mascot-live="true"]');
     if (mascotSvg) {
       if (mascotSvg.dataset.state === state) {
         mascotSvg.dataset.state = '';
-        void mascotSvg.offsetWidth;
+        void mascotSvg.getBoundingClientRect();
       }
       mascotSvg.dataset.state = state;
     }
   }
 
-  setActivePet(pet) {
-    if (!PET_IDS.includes(pet)) return;
-    localStorage.setItem(ACTIVE_PET_KEY, pet);
-    this.setState({ activePet: pet });
-    sounds.play('ui.click');
-    
-    // Greet with pet's personality
-    this.setMascotState('wave-hello', petLine(pet, 'welcome'));
-  }
-
   setActivePage(page) {
     this.setState({ activePage: page });
+    sounds.play('ui.click');
+  }
+
+  setTasksOpen(open) {
+    this.setState({ tasksOpen: Boolean(open) });
     sounds.play('ui.click');
   }
 

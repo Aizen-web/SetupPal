@@ -1,11 +1,34 @@
-# SetupPal: App UI Guide (v0.2)
+# SetupPal: App UI Guide (v0.3)
 
-Applies to: the desktop app. The website reuses the same tokens, mascot and components.
-Supersedes: `SetupPal-UI-Style-Guide.md` (v0.1).
+Applies to: the desktop app (a Tauri v2 window around the same web UI). The website reuses the same tokens, mascot and components.
+Supersedes: v0.2 of this file and `SetupPal-UI-Style-Guide.md` (v0.1).
 
 ---
 
-## 0. What changed from v0.1
+## 0. What changed
+
+### v0.3 (Phase 6 UI polish)
+
+| Topic | v0.2 | v0.3 |
+|---|---|---|
+| Scope | Dev tools | **Anything that installs unattended from the command line** (winget, npm, pip, cargo, CLI mod installers...) and passes the Safety Engine. Everything else gets a **Manual setup guide** reply (section 6.4) |
+| Mascot | Pixel only "for now" | **Pixel is the only mascot.** Byte, Mochi and the pet selector are gone, including in the Mascot Lab |
+| Speech bubbles | Templates filled with real check results | **Flavor only:** short, vague, fun lines. Never facts, never the user's words (section 11.3). Facts live in the plan card, Task panel and terminal |
+| Pixel placement | 72 px docked mascot during chat | Hero (140 px) on the empty chat; **40 px docked in the top bar** once a chat has messages, with a one-line bubble |
+| Composer | Single-line input | **Textarea** that grows to 6 lines. Enter sends, Shift+Enter adds a line. `/` button opens the command menu |
+| Slash commands | Planned list | **Built:** `/new`, `/undo`, `/help`, `/hack`, `/chill` (section 6.5) |
+| Message actions | Copy, Regenerate, Edit, Thumbs | **Copy** on every reply, **Retry** on the latest reply ("Try again" on a failed one) |
+| Hacker Mode | Tab strip planned | **Terminal \| Chat** tab strip is live; auto mode keeps a **2 s minimum dwell** |
+| Task panel | Always visible with plan | Exists only while a plan exists, **collapses to a slim rail**; no decorative art |
+| History | Two sub-tabs | One page with **search** across changes and conversations |
+| Recent list | Status icons planned | **Status icon per chat** (replying, running, held, blocked, failed, finished, plan ready, chat) |
+| Settings | Large wish list | Only **working** controls (section 9.5). The safety level is stored and sent with execute requests |
+| Models | Model picker | **One fixed model per provider** (Nebius in production, NVIDIA NIM for testing). No picker anywhere |
+| Plan approval | `Approve 4 safe steps` | Per-step approval with **"Run N approved steps"** is the target (Phase 1); today's card says "Approve safe steps" |
+| Demo content | Demo mode suggested | **No demo, canned, or placeholder content anywhere.** Empty states say plainly that nothing exists yet |
+| Accessibility | Guidelines | Nav landmark + `aria-current`, focus-trapped dialogs, focus kept across re-renders, text selectable everywhere except chrome |
+
+### v0.2 (from v0.1)
 
 | Topic | v0.1 | v0.2 |
 |---|---|---|
@@ -27,7 +50,7 @@ Style name stays: **Cozy Kawaii Pixel** (kawaii mascot, lo-fi cozy warmth, pixel
 1. **It's a chatbot first.** Everything a normal chat assistant does must work (section 6). Tools are an extension of chat, not a separate app.
 2. **Plan, then act.** For anything that changes the machine, the AI defines tasks first, shows them, and waits for approval.
 3. **Chill to think, Hacker to work.** Conversation and planning are warm and calm. Execution is the neon terminal.
-4. **The ghost only says what the code checked.** Speech bubbles use templates filled with real check results.
+4. **Facts come from the code, flavor comes from Pixel.** Verdicts, hashes and step results appear only in the plan card, Task panel, terminal and History, straight from the backend. Pixel's bubbles are mood, never claims.
 5. **Colour is never the only signal.** Verdicts and task states always have a word and an icon.
 6. **Always a way out.** Stop (Esc), Skip task, and Rewind are always reachable.
 
@@ -56,8 +79,9 @@ Task execution and tool-heavy work: downloads, hash checks, installs, repo scans
 | User sends `/hack` or `/chill` | Forced until the next task run ends |
 
 Rules:
-- **Minimum dwell:** 2 seconds in a mode before switching again (prevents flicker).
-- **Setting:** Settings > Appearance > Mode: `Auto` (default) / `Always Chill` / `Always Hacker`.
+- **Minimum dwell:** 2 seconds in a mode before switching again (prevents flicker). Built as `MODE_MIN_DWELL_MS` in `state/store.js`; runs call `store.beginRun()` / `store.endRun()`.
+- **Setting:** Settings > Appearance > Theme mode: `Auto` (default) / `Always Chill` / `Always Hacker`.
+- The header Chill/Hacker toggle, `/hack` and `/chill` act like a manual override: forced until the next run ends.
 - **What stays fixed during a switch:** sidebar, composer position, window chrome. Only the main area content, colours, ghost accessory and microcopy change.
 - **Transition:** 300 ms cross-fade of tokens, glasses slide-on (250 ms), 120 ms scanline flicker. Sound cue optional (section 12).
 - In Hacker Mode the main area has a small tab strip: **Terminal | Chat**, so the user can read the conversation without leaving the run.
@@ -213,12 +237,12 @@ Everything a normal chatbot does must work. Priority P0 = needed for the demo, P
 | Streaming replies | Token-by-token, with a stop button | P0 |
 | Markdown | Headings, lists, tables, bold/italic, links, blockquotes | P0 |
 | Code blocks | Language label, copy button, horizontal scroll or wrap toggle | P0 |
-| Message actions (hover) | Copy, Regenerate, Edit and resend (user messages), Thumbs up/down | P0 |
+| Message actions | Copy (every reply, on hover/focus; pinned on the latest), Retry (latest reply; "Try again" when it failed). Edit-and-resend later | P0 |
 | Stop / Esc | Stops generation and any running task safely | P0 |
 | Multi-turn context | Full conversation context sent to the model, trimmed sensibly | P0 |
 | Auto titles | Chat gets a short title after the first exchange; user can rename | P0 |
 | New chat, switch chats | Sidebar RECENT list | P0 |
-| Slash commands | `/new`, `/hack`, `/chill`, `/tasks`, `/undo`, `/clear`, `/help` | P0 |
+| Slash commands | Built: `/new`, `/undo`, `/help`, `/hack`, `/chill` (section 6.5) | P0 |
 | Suggestion chips | Under empty composer: "get me C++", "set up this repo", "fix my PATH" | P0 |
 | Source chips | When Tavily search is used, show domain chips under the answer, each with a trust icon | P0 |
 | Attachments | Text and code files; images only if the selected model supports vision | P1 |
@@ -238,14 +262,31 @@ Everything a normal chatbot does must work. Priority P0 = needed for the demo, P
 
 ### 6.2 Composer
 
-- Height 52 px (grows to 6 lines), radius 14, 1 px border, `Send` primary button at right.
-- Left of the input: attach icon and a `/` command hint.
-- States: **idle** ("Tell me what to set up..."), **generating** (Send becomes Stop), **running tasks** (placeholder "Working... press Esc to stop", Stop button neon-outlined).
-- While tasks run, the user may still type; the message is **queued** and shown as a chip "Queued: ..." until the run ends or the user sends it with `Ctrl+Enter` (interrupt).
+- A `<textarea>`: one line high, grows to 6 lines, then scrolls. Radius 16, 1 px border, `Send` primary button at right.
+- **Enter** sends, **Shift+Enter** adds a line (IME composition is respected).
+- Left of the input: a `/` button that opens the command menu.
+- States: **idle** ("What would you like to set up?"), **generating** (Stop appears; you may type another question, it queues), **running tasks** (placeholder "Working... press Esc to stop", Stop button).
+- **Esc** stops a streaming reply first, then a running plan. Inside a dialog or the command menu, Esc only closes that layer.
+- A quiet notice line under the composer (`aria-live`) reports command results, e.g. "Nothing to undo yet."
 
 ### 6.3 Empty state
 
-Large ghost (`peek-a-boo` animation), greeting bubble, 3 suggestion chips, tiny line "Safety: strict. I'll ask before I touch anything."
+Hero Pixel (140 px), one flavor bubble, the headline "What should we set up?", 3 starter pills, and one scope line: "SetupPal installs things that set up unattended from the command line. Anything else gets a step-by-step manual guide."
+
+### 6.4 Manual setup guide
+
+When something cannot be installed unattended (proprietary GUI launchers, DRM, interactive account logins such as Steam, Epic or Minecraft Bedrock), the assistant replies with a **Manual setup guide**: one line saying the app does not allow non-terminal setup, numbered steps the user can follow, and a short list of similar things SetupPal *can* install. It is a normal assistant message (no plan card, no Approve button).
+
+### 6.5 Slash commands
+
+| Command | Does |
+|---|---|
+| `/new` | Start a new chat |
+| `/undo` | Roll back the latest reversible change (same as History > Rewind last change) after a confirmation dialog; reports the result under the composer |
+| `/help` | Show the command menu |
+| `/hack`, `/chill` | Force a mode until the next run ends |
+
+Typing `/` opens a filtered menu (Arrow keys move, Enter runs, Tab completes, Esc closes). Commands run locally and never reach the model. Text that only *starts* with a slash, such as a path, is sent as normal. New commands are added with `registerSlashCommand()` in `components/slash-commands.js`.
 
 ---
 
@@ -301,6 +342,8 @@ The LLM only produces a **structured plan** (tasks + tool ids + arguments). A de
 
 RED verdicts and non-allowlisted domains are blocked at every level.
 
+The level is chosen in Settings > Safety level and shown in the sidebar chip (clicking it opens that section). It is stored in `setuppal_ui_settings` and sent with execute requests through `executePrefsPayload()` in `state/prefs.js`; the backend decides what each level allows.
+
 ---
 
 ## 8. Task system and the Task bar
@@ -341,7 +384,7 @@ RED verdicts and non-allowlisted domains are blocked at every level.
 
 | Where | Chill | Hacker |
 |---|---|---|
-| **Right panel** ("TASKS" in Chill, "PROGRESS" in Hacker) | Shown while a plan exists; collapsible | Always shown during a run |
+| **Right panel** ("TASKS" in Chill, "PROGRESS" in Hacker) | Exists only while a plan exists; collapses to a 52 px rail with `done/N` | Same; the user's collapse choice is kept |
 | **Top mini-strip** in the main area | `2 of 4 tasks done` + thin bar; click opens the panel | Hidden (panel already visible) |
 | **Inline plan card** in the chat | Interactive checklist with Approve / Review buttons | Read-only history in Chat tab |
 
@@ -378,17 +421,15 @@ Panel item layout: status icon (28 px circle) + task title + status chip. Runnin
 Sidebar order: **+ New chat**, then **Chats**, **History**, **Downloads**, **Accounts**, then RECENT list, then the Safety chip and **Settings** pinned at the bottom. Active item uses `--accent-soft` (Chill) or a neon left bar (Hacker).
 
 ### 9.1 Chats (home)
-The chat described in sections 6 to 8. RECENT shows the latest 8 chats with a status icon: `v` finished, `~` running, `!` has a held task, `x` failed.
+The chat described in sections 6 to 8. RECENT lists saved chats, each with a status icon derived from what the chat really holds (plus a screen-reader label): replying, running, held (yellow), blocked (red), last reply failed, finished, plan ready, or plain chat.
 
 ### 9.2 History
 
-Two sub-tabs:
+One page with a **search box** in the header that filters both sections (change summaries, goals, changed paths; chat titles and message text).
 
-**Conversations**
-- List rows: title, date, type chip (Chat / Setup / Repo), `tasks done`, worst verdict seen.
-- Search box and filters: type, date range, verdict.
-- Row actions: Open, Rename, Pin, Export (.md), Delete.
-- Retention setting in Settings (keep forever / 30 / 90 days).
+**Changes (Rewind log)** first, then **Past conversations** (title, message count, tasks done, last activity; Open and Delete).
+
+Later: rename, pin, export (.md), retention setting.
 
 **Changes (Rewind log)**
 - Timeline of every change made to the machine: package installed, file written, PATH edited.
@@ -422,7 +463,7 @@ Sections, top to bottom:
 1. **Profile:** display name, avatar (ghost colour variants), local-only vs signed-in badge. v1 can be a **local profile**; cloud sign-in is a stretch goal.
 2. **Connected services** (card per service with `Connect / Disconnect` and `Test connection`):
    - **GitHub:** OAuth, read-only scopes by default; shows connected username and granted scopes.
-   - **Nebius Token Factory:** API key field (masked), model picker (which Nemotron model for fast calls vs hard reasoning).
+   - **Nebius Token Factory:** API key field (masked, easy paste). One fixed model, shown read-only; no model picker.
    - **Tavily:** API key field (masked).
 3. **Usage:** local counters (messages, tool calls, tokens used this month). Show only numbers the app really measured.
 4. **Privacy and data:** what stays on this device, `Export my data`, `Delete all data`.
@@ -432,16 +473,18 @@ Danger zone card at the bottom (red outline): delete data, reset app.
 
 ### 9.5 Settings
 
+Only controls that work today. Everything is saved locally and applied immediately.
+
 | Section | Contents |
 |---|---|
-| Appearance | Mode (Auto / Always Chill / Always Hacker), text size, reduce motion |
-| Mascot | Animations on/off, ghost size (S/M/L), speech bubbles on/off |
-| Sound | Master volume, categories, sound pack folder (section 12) |
-| Safety | Level (Strict / Balanced / Relaxed), allowlist viewer and editor, "always show raw commands" |
-| Models | Which model for planning, fast replies, verification |
-| Data | Download folder, history retention, cache |
-| Shortcuts | List and rebind |
-| About | Version, licences, credits |
+| Appearance | Theme mode (Auto / Always Chill / Always Hacker), text size (S / M / L), reduce motion (also turns off confetti), ambient background |
+| Pixel | Speech bubbles on/off, Mascot Lab (preview every animation) |
+| Safety level | Strict (default) / Balanced / Relaxed, with a one-line explanation of the selected level |
+| Chat & memory | Recent messages kept in full, reply length, share PC facts, the fixed model in use (read from `/api/health`), Clear all chats, Reset |
+| System scan | Run the doctor scan: OS, GPU, detected dev tools |
+| Sound | Sound effects on/off, volume |
+
+Later: allowlist viewer, shortcuts list, data/retention, about.
 
 ---
 
@@ -475,16 +518,17 @@ Shy, gentle, thorough. Spooky puns (max one per message), short sentences.
 
 | Context | Size | Where |
 |---|---|---|
-| Empty chat, plan presentation | 160 px "hero" | Top of the main area, bubble to the right (as in your mockup) |
-| During chat or run | 72 px "docked" | Sticky at the top of the main area, bubble shows the latest status line |
-| Next to assistant messages | 28 px | Avatar |
-| Task panel header | 40 px | Beside the "2 of 4 done" headline |
+| Empty chat | 140 px "hero" | Above the headline, bubble to the right |
+| Chat has messages, or a run | 40 px "docked" | Left of the top bar, with a one-line pill bubble |
+| Next to assistant messages | 20 px ghost icon | Avatar, author name "Pixel" |
+
+Only one live Pixel is on screen at a time (the Mascot Lab preview is separate). Clicking Pixel pokes it.
 
 ### 11.3 Speech bubble
-- Max 2 lines, about 60 characters per line, radius 18, 2 px border.
-- Chill: Inter on `--bg-surface`, `--accent` border. Hacker: JetBrains Mono on `--hx-panel`, neon border and glow.
-- Typewriter at 30 ms per character; click to skip.
-- **Source rule:** text comes from templates keyed by event and verdict, filled with real values. The LLM may choose a template; it cannot write security claims.
+- Hero: max 2 lines, radius 18, 2 px border. Docked: one line, ellipsis.
+- Chill: Inter on `--bg-surface`. Hacker: neon border and glow.
+- **Flavor rule (overrides v0.2):** lines come from one bank in `mascot/pixel-lines.js`, keyed by event. They are short, vague and fun ("Ooh, what are we building?"), make **no factual claims** (no package names, verdicts, counts) and **never quote or paraphrase the user**. Events carry no payload, so this is enforced by code.
+- Settings > Pixel > Speech bubbles turns them off entirely.
 
 ### 11.4 SVG structure (what the AI must keep stable)
 
@@ -720,7 +764,7 @@ Reduce-motion setting: no loops, no confetti, no slides; 100 ms fades only.
 | Rewind | "Rewinding... everything's back how it was." | `< reverting 3 changes` |
 | Idle | "Zzz... wake me when you need a setup." | n/a |
 
-Rules: say what was checked ("hash matches publisher"), never just "safe". Errors say what happened, what the ghost will try next, and offer `Show details`.
+Rules: the Hacker column is real terminal output from backend events. The Chill column is the *tone* to aim for; in-app bubbles follow the flavor rule in 11.3, so lines that name specific packages or results belong in assistant messages or the plan card, not in Pixel's bubble. Messages say what was checked ("hash matches publisher"), never just "safe". Errors say what happened and what to try next.
 
 ---
 
@@ -728,8 +772,12 @@ Rules: say what was checked ("hash matches publisher"), never just "safe". Error
 
 - Text contrast at least 4.5:1; small caramel text uses `--accent-strong`.
 - Every verdict and task state has an icon and a word.
-- Full keyboard use: `Tab` order follows visual order, visible 2 px focus ring, `Esc` stops a run, `Ctrl+K` opens the command palette (see suggestions).
-- Honour OS reduce-motion and high-contrast settings.
+- Full keyboard use: `Tab` order follows visual order, visible 2 px focus ring, `Esc` stops a reply or run.
+- Landmarks: sidebar `<nav aria-label="Main">` with `aria-current="page"`, `<main>` for the active view, the Task panel is an `<aside>`.
+- Dialogs (Context window, Mascot Lab) use `role="dialog"` + `aria-modal`, trap focus, close on Esc, and return focus to the button that opened them.
+- Views re-render on state changes; the focused control and caret position are restored.
+- Text is selectable everywhere except chrome (buttons, nav, badges, the mascot).
+- Honour OS reduce-motion and high-contrast settings; Settings > Reduce motion applies the same rules in-app.
 - Mascot images have alt text describing state ("Pixel the ghost, happy, task finished").
 - Sounds are never the only signal.
 - Hacker glow is decoration only.
@@ -789,17 +837,15 @@ Rules: say what was checked ("hash matches publisher"), never just "safe". Error
 
 Optional ideas, roughly in order of value:
 
-1. **Make the counter rule visible.** In your mockup the Task bar says "2 of 4 done" while the plan lists 5 steps. That's consistent under rule 8.3 (the held step isn't counted), but add the "1 held" sub-line so judges don't read it as a bug.
-2. **Demo mode for the hackathon video.** A scripted run that shows every key moment in 3 minutes: question in Chill, plan, approval, auto-switch to Hacker, one YELLOW hold, one RED typosquat block, celebration, back to Chill, then Rewind.
-3. **Command palette (`Ctrl+K`)** for new chat, switch mode, open Downloads, rewind last change, change safety level.
-4. **Clickable Safety chip** that opens a small popover explaining strict / balanced / relaxed and lets you switch.
-5. **"Why this step?"** tooltip on each task (one sentence from the plan). It builds trust cheaply.
-6. **Pause as well as Stop**, and a per-task Skip button.
-7. **Before/after diff for PATH and environment edits**, shown inside the task before approval.
-8. **Log tools:** filter (errors only), copy log, export log in the Hacker terminal.
-9. **OS notifications** when a task is held or the run finishes while the window is in the background.
-10. **Empty states with the ghost** (peek-a-boo) on History, Downloads and Accounts instead of blank pages.
-11. **Keyboard shortcut cheat sheet** on `?`, and a collapsible sidebar for small windows.
-12. **Keep the ghost lavender** against the warm palette (it's the one cool object); extend the same warm cream and caramel to the website so app and site match.
-13. **Compact density option** (smaller spacing) for users who like dense UIs.
-14. **Verdict legend** link near the Task bar ("What do GREEN / YELLOW / RED mean?") for first-time users.
+Done in v0.3: the "1 held · 0 blocked" sub-line, the clickable Safety chip (opens Settings > Safety level), and the "Why?" toggle on YELLOW/RED plan steps. Dropped: a scripted demo mode (no demo content in the app).
+
+1. **Command palette (`Ctrl+K`)** for new chat, switch mode, open Downloads, rewind last change, change safety level. Can reuse the slash-command registry.
+2. **Pause as well as Stop**, and a per-task Skip button.
+3. **Before/after diff for PATH and environment edits**, shown inside the task before approval.
+4. **Log tools:** filter (errors only), copy log, export log in the Hacker terminal.
+5. **OS notifications** when a task is held or the run finishes while the window is in the background.
+6. **Keyboard shortcut cheat sheet** on `?`, and a collapsible sidebar for small windows.
+7. **Keep the ghost lavender** against the warm palette (it's the one cool object); extend the same warm cream and caramel to the website so app and site match.
+8. **Compact density option** (smaller spacing) for users who like dense UIs.
+9. **Verdict legend** link near the Task bar ("What do GREEN / YELLOW / RED mean?") for first-time users.
+10. **Bundle the fonts locally** (Inter, JetBrains Mono, Pixelify Sans) so the strict CSP can drop Google Fonts.

@@ -3,7 +3,7 @@
  * Connects modern UI frontend to installer_core Axum backend & SSE event stream.
  */
 
-import { chatPrefsPayload } from '../state/prefs.js';
+import { chatPrefsPayload, executePrefsPayload } from '../state/prefs.js';
 
 const API_BASE = '/api';
 
@@ -143,6 +143,7 @@ class ApiClient {
         allow_yellow: allowYellow,
         custom_plan: customPlan,
         trusted_categories: trustedCategories,
+        ...executePrefsPayload(),
       }),
     });
     if (!res.ok) {

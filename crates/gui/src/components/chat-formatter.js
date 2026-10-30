@@ -19,19 +19,13 @@
  *   - only real failures use the error colour
  */
 
+import { esc } from './html.js';
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-export function escapeHtml(str) {
-  if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
+export const escapeHtml = esc;
 
 const ICON_PATHS = {
   check: '<polyline points="20 6 9 17 4 12"/>',
@@ -98,9 +92,7 @@ export function formatInline(text) {
   // 1. Code spans
   out = out.replace(/`([^`]+)`/g, (_, code) => hold(`<code class="chat-code-pill">${code}</code>`));
 
-  // 2. Links (before emphasis so URL underscores survive)
-  out = out.replace(/\[([^\]]+)\]\((file:\/\/\/[^\s)]+)\)/g, (_, label, url) =>
-    hold(`<a href="${url}" class="chat-file-link" title="Open path">${label}</a>`));
+  // 2. Links (before emphasis so URL underscores survive). Only http(s) targets become links.
   out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) =>
     hold(`<a href="${url}" target="_blank" rel="noopener noreferrer" class="chat-inline-link">${label}<span class="ext-arrow">${icon('arrow', 12)}</span></a>`));
 

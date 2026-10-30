@@ -5,58 +5,10 @@
 
 import { apiClient } from './client.js';
 import { store } from '../state/store.js';
-import { setLastContext } from '../state/prefs.js';
+import { setLastContext, motionReduced } from '../state/prefs.js';
 import { sounds } from '../audio/sound-engine.js';
-import { petVoiceEngine } from '../mascot/voicelines.js';
+import { pixelVoice } from '../mascot/voicelines.js';
 import confetti from 'canvas-confetti';
-
-function formatStepDetails(step) {
-  if (!step) return { desc: 'Zero-trust verified step', source: 'local' };
-  
-  if (step.action === 'install_package') {
-    const pkg = step.params.package_id;
-    const eco = step.params.ecosystem || 'winget';
-    return {
-      desc: `${pkg} via ${eco} · deterministic package install`,
-      source: `${eco}`
-    };
-  }
-  if (step.action === 'download_artifact') {
-    const dest = step.params.destination || step.params.id;
-    const sha = step.params.expected_sha256 ? `${step.params.expected_sha256.slice(0, 8)}...` : 'hash checked';
-    return {
-      desc: `${dest} · SHA-256: ${sha}`,
-      source: step.params.adapter || 'official_vendor'
-    };
-  }
-  if (step.action === 'verify_hash') {
-    return {
-      desc: `Verify cryptographic SHA-256 digest on ${step.params.file_path}`,
-      source: 'sha256_verifier'
-    };
-  }
-  if (step.action === 'add_to_user_path') {
-    return {
-      desc: `Add ${step.params.directory} to Windows User Environment PATH (HKCU)`,
-      source: 'windows_registry'
-    };
-  }
-  if (step.action === 'create_isolated_env') {
-    return {
-      desc: `Create sandbox isolated environment at ${step.params.path}`,
-      source: 'sandbox'
-    };
-  }
-  if (step.action === 'run_verify_command') {
-    const bin = step.params.binary || 'verify';
-    const args = (step.params.args || []).join(' ');
-    return {
-      desc: `Run verified test: ${bin} ${args}`,
-      source: `${bin}`
-    };
-  }
-  return { desc: 'Standard verified step', source: 'orchestrator' };
-}
 
 export class BackendBridge {
   constructor() {
@@ -116,30 +68,29 @@ export class BackendBridge {
 
     switch (eventType) {
       case 'scan_started':
-        petVoiceEngine.trigger('diagnosing');
+        pixelVoice.trigger('diagnosing');
         break;
 
       case 'scan_completed':
         if (payload?.profile) {
-          const tools = payload.profile.detected_tools || [];
-          store.setMascotState('idle', petVoiceEngine.line('idle'));
+          store.setMascotState('idle', pixelVoice.line('idle'));
         }
         break;
 
       case 'planning_started':
-        petVoiceEngine.trigger('thinking', { query: payload?.goal || 'goal' });
+        pixelVoice.trigger('thinking');
         break;
 
       case 'recipe_matched':
-        store.setMascotState('speaking', petVoiceEngine.line('thinking'));
+        store.setMascotState('speaking', pixelVoice.line('thinking'));
         break;
 
       case 'plan_generated':
-        petVoiceEngine.trigger('plan_ready', { stepCount: payload?.steps?.length || 5 });
+        pixelVoice.trigger('plan_ready');
         break;
 
       case 'safety_check_started':
-        store.setMascotState('scanning', petVoiceEngine.line('diagnosing'));
+        store.setMascotState('scanning', pixelVoice.line('diagnosing'));
         break;
 
       case 'safety_check_completed':
@@ -147,20 +98,20 @@ export class BackendBridge {
           const rating = (payload.report.overall_rating || 'green').toLowerCase();
           if (rating === 'green') {
             sounds.play('verdict.green');
-            store.setMascotState('green', petVoiceEngine.line('done'));
+            store.setMascotState('green', pixelVoice.line('done'));
           } else if (rating === 'yellow') {
-            petVoiceEngine.trigger('warning_held', { title: 'Held step' });
+            pixelVoice.trigger('warning_held');
           } else if (rating === 'red') {
             sounds.play('verdict.red');
-            store.setMascotState('red', petVoiceEngine.line('blocked'));
+            store.setMascotState('red', pixelVoice.line('blocked'));
           }
         }
         break;
 
       case 'step_execution_started':
         sounds.play('task.start');
-        store.setMode('hacker');
-        petVoiceEngine.trigger('step_progress', { desc: payload?.description || payload?.step_id });
+        store.beginRun();
+        pixelVoice.trigger('step_progress');
 
         store.setState(s => {
           const tasks = (s.activePlan?.tasks || []).map(t => {
@@ -180,7 +131,7 @@ export class BackendBridge {
 
       case 'step_execution_progress':
         if (payload?.bytes_downloaded) {
-          store.setMascotState('downloading', petVoiceEngine.line('downloading'));
+          store.setMascotState('downloading', pixelVoice.line('downloading'));
         }
         store.setState(s => ({
           ...s,
@@ -194,7 +145,7 @@ export class BackendBridge {
       case 'step_execution_completed':
         sounds.play('task.done');
         sounds.play('verdict.green');
-        store.setMascotState('green', petVoiceEngine.line('done'));
+        store.setMascotState('green', pixelVoice.line('done'));
 
         store.setState(s => {
           const tasks = (s.activePlan?.tasks || []).map(t => {
@@ -214,7 +165,7 @@ export class BackendBridge {
 
       case 'step_execution_blocked':
         sounds.play('verdict.red');
-        store.setMascotState('red', petVoiceEngine.line('blocked'));
+        store.setMascotState('red', pixelVoice.line('blocked'));
 
         store.setState(s => {
           const tasks = (s.activePlan?.tasks || []).map(t => {
@@ -233,7 +184,7 @@ export class BackendBridge {
 
       case 'step_approval_required':
         sounds.play('verdict.yellow');
-        store.setMascotState('held-sign', petVoiceEngine.line('warning'));
+        store.setMascotState('held-sign', pixelVoice.line('warning'));
 
         store.setState(s => {
           const tasks = (s.activePlan?.tasks || []).map(t => {
@@ -277,16 +228,16 @@ export class BackendBridge {
 
       case 'rollback_started':
         sounds.play('rewind');
-        store.setMascotState('rewind', petVoiceEngine.line('rewind'));
+        store.setMascotState('rewind', pixelVoice.line('rewind'));
         break;
 
       case 'rollback_completed':
         if (payload?.success) {
           sounds.play('verdict.green');
-          store.setMascotState('green', petVoiceEngine.line('done'));
+          store.setMascotState('green', pixelVoice.line('done'));
         } else {
           sounds.play('error');
-          store.setMascotState('error', petVoiceEngine.line('error'));
+          store.setMascotState('error', pixelVoice.line('error'));
         }
         this.refreshHistory();
         break;
@@ -313,12 +264,11 @@ export class BackendBridge {
   }
 
   async runChatTurn(goal, conversationId) {
-    const activePet = store.getState().activePet || 'ghost';
     sounds.play('msg.send');
     if (store.getState().activeConversationId === conversationId) {
       store.updateConversationTitleFromMessage(goal);
     }
-    petVoiceEngine.trigger('thinking', { query: goal });
+    pixelVoice.trigger('thinking');
 
     const userMsg = {
       id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -333,16 +283,6 @@ export class BackendBridge {
       const scrollArea = document.querySelector('#main-view-container .workspace-scroll-area');
       if (scrollArea) scrollArea.scrollTop = scrollArea.scrollHeight;
     }));
-    if (store.getState().activeConversationId === conversationId) {
-      store.setState(s => ({
-        ...s,
-        terminalLogs: [
-          ...(s.terminalLogs || []).slice(-100),
-          { id: Date.now() + Math.random(), text: '> user inquiry received', type: 'info' }
-        ]
-      }));
-    }
-
     const assistantId = `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const assistant = {
       id: assistantId,
@@ -352,7 +292,6 @@ export class BackendBridge {
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       planAttached: false,
       isStreaming: true,
-      pet: activePet,
     };
     const controller = new AbortController();
     this.chatControllers.set(conversationId, controller);
@@ -383,7 +322,7 @@ export class BackendBridge {
 
     try {
       if (!this.isBackendOnline) {
-        store.setMascotState('scanning', petVoiceEngine.line('thinking'));
+        store.setMascotState('scanning', pixelVoice.line('thinking'));
         const ready = await this.waitForConnection(3500);
         if (!ready) {
           const health = await apiClient.checkHealth(1000);
@@ -404,7 +343,7 @@ export class BackendBridge {
         content: (message.text || '').trim().slice(0, 1200)
       }));
 
-      await apiClient.sendChatStream(goal, history, activePet, {
+      await apiClient.sendChatStream(goal, history, {
         signal: controller.signal,
         onEvent: (event) => {
           if (event.type === 'message.delta' && typeof event.text === 'string') {
@@ -439,14 +378,10 @@ export class BackendBridge {
           chatMessages: s.chatMessages.map(message =>
             message.id === assistantId ? { ...message, text: reply, isStreaming: false } : message
           ),
-          terminalLogs: [
-            ...s.terminalLogs,
-            { id: Date.now() + Math.random(), text: '> assistant response complete', type: 'green' }
-          ]
         }));
       }
       sounds.play('msg.receive');
-      petVoiceEngine.trigger('questions_asked');
+      pixelVoice.trigger('questions_asked');
       return { reply, context: completed.context || null };
     } catch (error) {
       if (frame !== null) {
@@ -469,7 +404,7 @@ export class BackendBridge {
             )
           }));
         }
-        store.setMascotState('idle', petVoiceEngine.line('stopped'));
+        store.setMascotState('idle', pixelVoice.line('stopped'));
         return { reply, stopped: true };
       }
 
@@ -491,7 +426,7 @@ export class BackendBridge {
         }));
       }
       sounds.play('error');
-      store.setMascotState('error', petVoiceEngine.line('error'));
+      store.setMascotState('error', pixelVoice.line('error'));
       return null;
     } finally {
       window.clearInterval(persistTimer);
@@ -503,8 +438,8 @@ export class BackendBridge {
 
   async approveAndRunPlan(trustedCategories = []) {
     sounds.play('ui.click');
-    petVoiceEngine.trigger('plan_approve');
-    store.setMode('hacker');
+    pixelVoice.trigger('plan_approve');
+    store.beginRun();
 
     if (!this.isBackendOnline) {
       await this.waitForConnection(3000);
@@ -531,16 +466,18 @@ export class BackendBridge {
       // Celebration
       sounds.play('task.all_done');
       sounds.play('celebrate');
-      petVoiceEngine.trigger('completed');
+      pixelVoice.trigger('completed');
 
-      try {
-        confetti({
-          particleCount: 85,
-          spread: 65,
-          origin: { y: 0.6 },
-          colors: ['#39FF14', '#E6E0FF', '#E9B949', '#5CFF3A']
-        });
-      } catch (e) {}
+      if (!motionReduced()) {
+        try {
+          confetti({
+            particleCount: 85,
+            spread: 65,
+            origin: { y: 0.6 },
+            colors: ['#39FF14', '#E6E0FF', '#E9B949', '#5CFF3A']
+          });
+        } catch (e) {}
+      }
 
       store.setState(s => ({
         ...s,
@@ -554,16 +491,16 @@ export class BackendBridge {
       this.refreshHistory();
 
       setTimeout(() => {
-        store.setMode('chill');
-        store.setMascotState('idle', petVoiceEngine.line('idle'));
+        store.endRun();
+        store.setMascotState('idle', pixelVoice.line('idle'));
       }, 4000);
 
       return result;
     } catch (err) {
       console.error("Plan execution failed:", err);
       sounds.play('error');
-      store.setMode('chill');
-      store.setMascotState('error', petVoiceEngine.line('error'));
+      store.endRun();
+      store.setMascotState('error', pixelVoice.line('error'));
       store.setState(s => ({
         ...s,
         chatMessages: [
@@ -637,7 +574,7 @@ export class BackendBridge {
 
   async rewindLastChange(txId = null) {
     sounds.play('rewind');
-    store.setMascotState('rewind', petVoiceEngine.line('rewind'));
+    store.setMascotState('rewind', pixelVoice.line('rewind'));
 
     if (!this.isBackendOnline) {
       await this.waitForConnection(3000);
@@ -647,17 +584,18 @@ export class BackendBridge {
       const res = await apiClient.undo(txId);
       if (res.status === 'rolled_back') {
         sounds.play('verdict.green');
-        store.setMascotState('green', petVoiceEngine.line('done'));
+        store.setMascotState('green', pixelVoice.line('done'));
       } else {
         sounds.play('error');
-        store.setMascotState('error', petVoiceEngine.line('error'));
+        store.setMascotState('error', pixelVoice.line('error'));
       }
       this.refreshHistory();
       return res;
     } catch (err) {
       console.error("Rewind failed:", err);
       sounds.play('error');
-      store.setMascotState('error', petVoiceEngine.line('error'));
+      store.setMascotState('error', pixelVoice.line('error'));
+      return { status: 'error', message: err?.message || 'The backend did not respond.' };
     }
   }
 }

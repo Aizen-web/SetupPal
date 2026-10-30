@@ -1,8 +1,7 @@
 /**
  * SetupPal: Base Styles and Layout
+ * Fonts load once, from the <link> in index.html.
  */
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Pixelify+Sans:wght@600;700&display=swap');
 
 * {
   box-sizing: border-box;
@@ -20,6 +19,19 @@ html, body {
   color: var(--ink);
   background-color: var(--bg-canvas);
   transition: background-color var(--trans-mode), color var(--trans-mode);
+}
+
+/* Chrome is not selectable; chat text, plans, logs, and settings output are. */
+button,
+.nav-item,
+.mode-toggle-group,
+.hacker-tab-strip,
+.mascot-button,
+.pet-root,
+.logo-row,
+.section-label,
+.status-chip-sm,
+.badge {
   user-select: none;
 }
 
@@ -29,6 +41,39 @@ html, body {
   height: 100vh;
   overflow: hidden;
   position: relative;
+}
+
+.sidebar-host {
+  flex: none;
+  display: flex;
+}
+
+.main-view {
+  flex: 1;
+  display: flex;
+  height: 100vh;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.task-panel-host {
+  flex: none;
+  display: flex;
+}
+
+.task-panel-host[hidden] {
+  display: none;
+}
+
+/* Text size setting (S / M / L). Content regions scale; the app frame stays put. */
+.chat-thread-stream,
+.welcome-block,
+.plan-card,
+.terminal-log-list,
+.composer-box,
+.composer-notice,
+.page-inner {
+  zoom: var(--text-zoom, 1);
 }
 
 /* Custom Scrollbar */
@@ -78,6 +123,21 @@ html, body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Settings > Reduce motion: same rules as the OS preference above. */
+html[data-reduce-motion="true"] *,
+html[data-reduce-motion="true"] *::before,
+html[data-reduce-motion="true"] *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+html[data-reduce-motion="true"] .main-content::before,
+html[data-reduce-motion="true"] .main-content::after {
+  animation: none;
 }
 /* Keep labels available to assistive technology without taking up UI space. */
 .sr-only {

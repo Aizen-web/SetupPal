@@ -5,13 +5,17 @@
 
 import { store } from './store.js';
 import { sounds } from '../audio/sound-engine.js';
-import { petVoiceEngine } from '../mascot/voicelines.js';
+import { pixelVoice } from '../mascot/voicelines.js';
 
 class SimulationEngine {
   stopRun() {
-    store.setMode('chill');
-    store.setMascotState('idle', petVoiceEngine.line('stopped'));
+    const running = store.runActive
+      || Boolean(store.getState().activePlan?.tasks?.some(t => t.status === 'running'));
+    if (!running) return false;
+    store.endRun();
+    store.setMascotState('idle', pixelVoice.line('stopped'));
     sounds.play('mode.chill');
+    return true;
   }
 }
 

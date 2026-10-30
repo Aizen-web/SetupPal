@@ -1,15 +1,54 @@
 /**
  * SetupPal: Sidebar Component
- * Footer keeps Settings + a quiet safety indicator; Mascot Lab lives in Settings.
+ * Main nav, recent chats with a status icon each, and Settings + the safety level in the footer.
  */
 
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
+import { SAFETY_LEVELS } from '../state/prefs.js';
+import { esc } from './html.js';
 import { icon } from './icon.js';
+
+const NAV = [
+  { page: 'chats', label: 'Chats', iconName: 'message' },
+  { page: 'history', label: 'History', iconName: 'history' },
+  { page: 'downloads', label: 'Downloads', iconName: 'download' },
+  { page: 'accounts', label: 'Accounts', iconName: 'user' },
+];
+
+// status -> [icon, screen-reader label]
+const RECENT_STATUS = {
+  replying: ['refresh', 'Replying'],
+  running: ['refresh', 'Running'],
+  blocked: ['shieldX', 'Blocked step'],
+  held: ['alert', 'Waiting for review'],
+  failed: ['alert', 'Last reply failed'],
+  done: ['check', 'Finished'],
+  planned: ['clipboard', 'Plan ready'],
+  chat: ['message', 'Chat'],
+};
+
+/** Derived from what the conversation actually holds; nothing is guessed. */
+function conversationStatus(conv, isActive, state) {
+  const plan = isActive ? state.activePlan : conv.activePlan;
+  const messages = isActive ? state.chatMessages : conv.chatMessages;
+  if (isActive && state.isChatGenerating) return 'replying';
+  const tasks = plan?.tasks || [];
+  if (tasks.some(t => t.status === 'running')) return 'running';
+  if (tasks.some(t => t.status === 'blocked')) return 'blocked';
+  if (tasks.some(t => t.status === 'held')) return 'held';
+  if (plan?.status === 'completed' || (tasks.length && tasks.every(t => t.status === 'done'))) return 'done';
+  const last = messages?.[messages.length - 1];
+  if (last?.failed) return 'failed';
+  if (tasks.length) return 'planned';
+  return 'chat';
+}
 
 export function renderSidebar(container) {
   const state = store.getState();
   const safety = state.settings?.safetyLevel || 'strict';
+  const safetyLabel = SAFETY_LEVELS[safety]?.label || safety;
+  const convById = new Map((state.conversations || []).map(c => [c.id, c]));
 
   container.innerHTML = `
     <div class="sidebar">
@@ -18,114 +57,88 @@ export function renderSidebar(container) {
           <div class="logo-mascot" aria-hidden="true">${icon('ghost', 28)}</div>
           <div class="logo-text">Setup Pal</div>
         </div>
-        <button id="btn-new-chat" class="btn-new-setup">
-          <span style="font-size: 16px; font-weight: 500;">+</span>
+        <button id="btn-new-chat" class="btn-new-setup" type="button">
+          ${icon('plus', 16)}
           <span>New setup</span>
         </button>
       </div>
 
-      <nav class="sidebar-nav">
-        <button class="nav-item ${state.activePage === 'chats' ? 'active' : ''}" data-page="chats">
-          <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-          </svg>
-          <span>Chats</span>
-        </button>
-        <button class="nav-item ${state.activePage === 'history' ? 'active' : ''}" data-page="history">
-          <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <polyline points="12 6 12 12 14 14"></polyline>
-            <path d="M3.05 11a9 9 0 0 1 .5-2m-.5 2h4m-4 0v-4"></path>
-          </svg>
-          <span>History</span>
-        </button>
-        <button class="nav-item ${state.activePage === 'downloads' ? 'active' : ''}" data-page="downloads">
-          <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-            <polyline points="7 10 12 15 17 10"></polyline>
-            <line x1="12" y1="15" x2="12" y2="3"></line>
-          </svg>
-          <span>Downloads</span>
-        </button>
-        <button class="nav-item ${state.activePage === 'accounts' ? 'active' : ''}" data-page="accounts">
-          <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-            <circle cx="12" cy="7" r="4"></circle>
-          </svg>
-          <span>Accounts</span>
-        </button>
+      <nav class="sidebar-nav" aria-label="Main">
+        ${NAV.map(item => {
+          const current = state.activePage === item.page;
+          return `
+            <button type="button" id="nav-${item.page}" class="nav-item ${current ? 'active' : ''}" data-page="${item.page}" ${current ? 'aria-current="page"' : ''}>
+              ${icon(item.iconName, 16, 'nav-icon')}
+              <span>${item.label}</span>
+            </button>
+          `;
+        }).join('')}
       </nav>
 
       <div class="recent-header-row">
-        <span class="section-label">RECENT</span>
+        <h2 class="section-label" id="recent-heading">Recent</h2>
         <div class="recent-divider-line"></div>
       </div>
 
-      <div class="recent-list">
-        ${state.recentChats.map(c => `
-          <div class="recent-item ${c.active ? 'selected' : ''}" data-chat-id="${c.id}">
-            <div class="recent-item-title-wrap" data-chat-id="${c.id}">
-              ${icon('ghost', 16, 'recent-star-icon')}
-              <span class="recent-title-text">${c.title}</span>
-            </div>
-            ${state.recentChats.length > 1 ? `
-              <button class="btn-delete-recent" data-chat-id="${c.id}" title="Delete setup" aria-label="Delete ${c.title}">${icon('close', 14)}</button>
-            ` : ''}
-          </div>
-        `).join('')}
-      </div>
+      <ul class="recent-list" aria-labelledby="recent-heading">
+        ${state.recentChats.map(c => {
+          const status = conversationStatus(convById.get(c.id) || {}, c.active, state);
+          const [statusIcon, statusLabel] = RECENT_STATUS[status];
+          const title = esc(c.title);
+          return `
+            <li class="recent-item ${c.active ? 'selected' : ''}">
+              <button type="button" id="recent-${esc(c.id)}" class="recent-item-title-wrap" data-chat-id="${esc(c.id)}" ${c.active ? 'aria-current="true"' : ''}>
+                <span class="recent-status-icon status-${status}" aria-hidden="true">${icon(statusIcon, 14)}</span>
+                <span class="sr-only">${statusLabel}:</span>
+                <span class="recent-title-text">${title}</span>
+              </button>
+              ${state.recentChats.length > 1 ? `
+                <button type="button" class="btn-delete-recent" data-chat-id="${esc(c.id)}" title="Delete chat" aria-label="Delete ${title}">${icon('close', 14)}</button>
+              ` : ''}
+            </li>
+          `;
+        }).join('')}
+      </ul>
 
       <div class="sidebar-bottom">
-        <button id="btn-open-settings" class="btn-sidebar-bottom ${state.activePage === 'settings' ? 'active' : ''}">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
+        <button type="button" id="btn-open-settings" class="btn-sidebar-bottom ${state.activePage === 'settings' ? 'active' : ''}" ${state.activePage === 'settings' ? 'aria-current="page"' : ''}>
+          ${icon('settings', 15)}
           <span>Settings</span>
-          <span id="safety-chip-btn" class="safety-dot" title="Safety: ${safety}. Click for Zero-Trust policy." aria-label="Safety ${safety}">
-            <span class="safety-dot-orb"></span>
-            <span class="safety-dot-label">${safety}</span>
-          </span>
+        </button>
+        <button type="button" id="safety-chip-btn" class="safety-dot safety-${esc(safety)}" title="Safety level: ${esc(safetyLabel)}. Change it in Settings." aria-label="Safety level ${esc(safetyLabel)}. Open safety settings">
+          <span class="safety-dot-orb" aria-hidden="true"></span>
+          <span class="safety-dot-label">${esc(safetyLabel)}</span>
         </button>
       </div>
     </div>
   `;
 
-  container.querySelector('#btn-new-chat').onclick = () => {
-    store.createConversation();
-  };
+  container.querySelector('#btn-new-chat').onclick = () => store.createConversation();
 
   container.querySelectorAll('.nav-item').forEach(btn => {
-    btn.onclick = () => {
-      const page = btn.getAttribute('data-page');
-      store.setActivePage(page);
-    };
+    btn.onclick = () => store.setActivePage(btn.getAttribute('data-page'));
   });
 
   container.querySelectorAll('.recent-item-title-wrap').forEach(item => {
-    item.onclick = (e) => {
-      e.stopPropagation();
-      const chatId = item.getAttribute('data-chat-id');
-      store.switchConversation(chatId);
-    };
+    item.onclick = () => store.switchConversation(item.getAttribute('data-chat-id'));
   });
 
   container.querySelectorAll('.btn-delete-recent').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
-      const chatId = btn.getAttribute('data-chat-id');
-      store.closeConversation(chatId);
+      store.closeConversation(btn.getAttribute('data-chat-id'));
     };
   });
 
-  container.querySelector('#safety-chip-btn').onclick = (e) => {
-    e.stopPropagation();
+  container.querySelector('#safety-chip-btn').onclick = () => {
     sounds.play('ui.click');
-    const level = (store.getState().settings?.safetyLevel || 'strict').toUpperCase();
-    alert(`Zero-Trust Security Level: ${level}\n- All machine alterations require explicit approval\n- Typosquat distance & CVEs scanned via OSV.dev\n- Hash matching enforced for all binaries`);
+    store.setActivePage('settings');
+    requestAnimationFrame(() => {
+      const section = document.getElementById('settings-safety');
+      section?.scrollIntoView({ block: 'start' });
+      document.getElementById('setting-safety')?.focus({ preventScroll: true });
+    });
   };
 
-  container.querySelector('#btn-open-settings').onclick = () => {
-    store.setActivePage('settings');
-  };
+  container.querySelector('#btn-open-settings').onclick = () => store.setActivePage('settings');
 }

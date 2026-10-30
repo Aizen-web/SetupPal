@@ -7,6 +7,7 @@ import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { apiClient } from '../api/client.js';
 import { icon } from './icon.js';
+import { esc } from './html.js';
 
 const KEYS = [
   {
@@ -47,7 +48,6 @@ const KEYS = [
   },
 ];
 
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const mask = (k) => (k.length > 10 ? `${k.slice(0, 5)}••••••••${k.slice(-4)}` : '••••••••');
 
 function syncAccountsState(id, value) {

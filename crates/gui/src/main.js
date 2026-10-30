@@ -20,6 +20,37 @@ import { renderHistoryView } from './components/history-view.js';
 import { renderAccountsView } from './components/accounts-view.js';
 import { renderSettingsView } from './components/settings-view.js';
 import { renderAnimationLab } from './components/animation-lab.js';
+import { isModalOpen } from './components/modal.js';
+
+const VIEWS = {
+  chats: renderChatView,
+  downloads: renderDownloadsView,
+  history: renderHistoryView,
+  accounts: renderAccountsView,
+  settings: renderSettingsView,
+};
+
+/** Views rebuild their DOM on every update; keep keyboard focus (and caret) on the same control. */
+function captureFocus() {
+  const el = document.activeElement;
+  if (!el || el === document.body || !el.id) return null;
+  const hasSelection = typeof el.selectionStart === 'number';
+  return {
+    id: el.id,
+    start: hasSelection ? el.selectionStart : null,
+    end: hasSelection ? el.selectionEnd : null,
+  };
+}
+
+function restoreFocus(saved) {
+  if (!saved) return;
+  const el = document.getElementById(saved.id);
+  if (!el || el === document.activeElement) return;
+  el.focus({ preventScroll: true });
+  if (saved.start !== null && typeof el.setSelectionRange === 'function') {
+    try { el.setSelectionRange(saved.start, saved.end); } catch { /* input types without selection */ }
+  }
+}
 
 function initApp() {
   const appContainer = document.getElementById('app');
@@ -29,11 +60,10 @@ function initApp() {
     document.documentElement.classList.toggle('document-hidden', document.hidden);
   });
 
-  // Create layout DOM structure
   appContainer.innerHTML = `
-    <div id="sidebar-container"></div>
-    <div id="main-view-container" style="flex: 1; display: flex; height: 100vh; overflow: hidden;"></div>
-    <div id="task-panel-container"></div>
+    <aside id="sidebar-container" class="sidebar-host"></aside>
+    <main id="main-view-container" class="main-view"></main>
+    <aside id="task-panel-container" class="task-panel-host" aria-label="Tasks" hidden></aside>
     <div id="modal-container"></div>
   `;
 
@@ -50,68 +80,37 @@ function initApp() {
 
   function render() {
     const state = store.getState();
-    document.documentElement.dataset.bgIntensity = state.settings.backgroundIntensity || 'subtle';
+    const focus = captureFocus();
 
-    // 1. Sidebar
     renderSidebar(sidebarEl);
+    (VIEWS[state.activePage] || renderChatView)(mainViewEl);
 
-    // 2. Active Main View
-    switch (state.activePage) {
-      case 'chats':
-        renderChatView(mainViewEl);
-        break;
-      case 'downloads':
-        renderDownloadsView(mainViewEl);
-        break;
-      case 'history':
-        renderHistoryView(mainViewEl);
-        break;
-      case 'accounts':
-        renderAccountsView(mainViewEl);
-        break;
-      case 'settings':
-        renderSettingsView(mainViewEl);
-        break;
-      default:
-        renderChatView(mainViewEl);
-    }
-
-    // 3. Task Panel — only when chats page has an active plan with steps
+    // Task panel only exists while the chat has a plan with steps
     const hasPlanSteps = Boolean(state.activePlan?.tasks?.length);
     if (state.activePage === 'chats' && hasPlanSteps) {
-      taskPanelEl.style.display = 'block';
-      taskPanelEl.classList.remove('task-panel-collapsed');
+      taskPanelEl.hidden = false;
+      taskPanelEl.classList.toggle('is-collapsed', !state.tasksOpen);
       renderTaskPanel(taskPanelEl);
     } else {
-      taskPanelEl.style.display = 'none';
-      taskPanelEl.classList.add('task-panel-collapsed');
+      taskPanelEl.hidden = true;
       taskPanelEl.innerHTML = '';
     }
 
-    // 4. Animation Lab Modal
     renderAnimationLab(modalEl);
+    restoreFocus(focus);
   }
 
-  // Subscribe to reactive state updates
-  store.subscribe(() => {
-    render();
-  });
-
-  // Initial render
+  store.subscribe(render);
   render();
 
-  // Keyboard Shortcuts: Esc to stop execution
+  // Esc stops whatever is running: a streaming reply first, then a plan run. Dialogs handle their own Esc.
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      simulation.stopRun();
-    }
+    if (e.key !== 'Escape' || e.defaultPrevented || isModalOpen()) return;
+    if (store.getState().isChatGenerating) bridge.stopChat();
+    else simulation.stopRun();
   });
 
-  // Connect to Zero-Trust Backend
   bridge.init();
-
-  console.log("👻 SetupPal Zero-Trust GUI initialized. Connected to installer_core backend.");
 }
 
-// Start app on DOM load
 window.addEventListener('DOMContentLoaded', initApp);
