@@ -3,6 +3,7 @@
  */
 
 import { sounds } from '../audio/sound-engine.js';
+import { normalizeMascotState } from '../mascot/animations.js';
 import { pixelLine } from '../mascot/pixel-lines.js';
 import { getUiSettings, setUiSettings, TEXT_SIZES } from './prefs.js';
 
@@ -455,7 +456,8 @@ class Store {
   /* ---------------------------------------------------------------- */
 
   setMascotState(state, speech = null) {
-    this.state.mascotState = state;
+    const nextState = normalizeMascotState(state);
+    this.state.mascotState = nextState;
     if (speech !== null) {
       this.state.mascotSpeech = speech;
     }
@@ -467,11 +469,11 @@ class Store {
     }
     const mascotSvg = document.querySelector('[data-mascot-live="true"]');
     if (mascotSvg) {
-      if (mascotSvg.dataset.state === state) {
+      if (mascotSvg.dataset.state === nextState) {
         mascotSvg.dataset.state = '';
         void mascotSvg.getBoundingClientRect();
       }
-      mascotSvg.dataset.state = state;
+      mascotSvg.dataset.state = nextState;
     }
   }
 

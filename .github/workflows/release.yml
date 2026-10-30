@@ -66,10 +66,54 @@ jobs:
           Write-Host "Found $($exe.FullName)"
           "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
           "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+
+      - name: Generate SHA-256 checksum
+        id: checksum
+        shell: pwsh
+        run: |
+          $exe = Get-Item -LiteralPath "${{ steps.artifact.outputs.path }}"
+          $hash = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumName = "$($exe.Name).sha256"
+          $checksumPath = Join-Path $exe.DirectoryName $checksumName
+          # Common format: "<hash>  <filename>"
+          Set-Content -LiteralPath $checksumPath -Value "$hash  $($exe.Name)" -NoNewline
+          Write-Host "SHA256 $hash -> $checksumPath"
+          "path=$checksumPath" >> $env:GITHUB_OUTPUT
+          "name=$checksumName" >> $env:GITHUB_OUTPUT
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
 
       - name: Upload NSIS artifact
         uses: actions/upload-artifact@v4
         with:
           name: SetupPal-NSIS
-          path: ${{ steps.artifact.outputs.path }}
+          path: |
+            ${{ steps.artifact.outputs.path }}
+            ${{ steps.checksum.outputs.path }}
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: SetupPal ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ## SetupPal ${{ github.ref_name }}
+
+            Windows NSIS installer (current-user). After install, open **Accounts** and paste a Nebius Token Factory API key to use NVIDIA Nemotron for chat and planning.
+
+            ### Verify download
+
+            ```powershell
+            Get-FileHash .\${{ steps.artifact.outputs.name }} -Algorithm SHA256
+            # Expected: ${{ steps.checksum.outputs.sha256 }}
+            ```
+
+            See the repository [README](https://github.com/Aizen-web/SetupPal#readme) for judge quick start and [docs/DEMO.md](https://github.com/Aizen-web/SetupPal/blob/main/docs/DEMO.md) for the demo script.
+          files: |
+            ${{ steps.artifact.outputs.path }}
+            ${{ steps.checksum.outputs.path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

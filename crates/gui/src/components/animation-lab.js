@@ -79,7 +79,7 @@ export function renderAnimationLab(container) {
   if (labSvg) {
     labSvg.dataset.state = state.mascotState;
     labSvg.dataset.mode = state.mode;
-    if (state.mode === 'hacker' || state.mascotState === 'glasses-on') labSvg.dataset.glasses = 'true';
+    if (state.mode === 'hacker') labSvg.dataset.glasses = 'true';
     applyPlaybackSettings(labSvg);
   }
 
@@ -117,7 +117,7 @@ export function renderAnimationLab(container) {
     const svg = getLabSvg();
     if (svg) {
       svg.dataset.mode = store.getState().mode;
-      svg.dataset.glasses = String(anim === 'glasses-on' || store.getState().mode === 'hacker');
+      svg.dataset.glasses = String(store.getState().mode === 'hacker');
       svg.dataset.state = '';
       void svg.offsetWidth;
       svg.dataset.state = anim;
@@ -133,9 +133,7 @@ export function renderAnimationLab(container) {
       const sound = btn.getAttribute('data-sound');
       if (sound) sounds.play(sound);
 
-      if (anim === 'glasses-on') store.setModeManual('hacker');
-      if (anim === 'glasses-off') store.setModeManual('chill');
-      if (anim === 'celebrate' && !motionReduced()) {
+      if (anim === 'success' && !motionReduced()) {
         try {
           confetti({ particleCount: 50, spread: 50, origin: { y: 0.5 } });
         } catch (e) {}

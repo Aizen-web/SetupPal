@@ -1446,6 +1446,7 @@
 .mascot-container {
   flex: 0 0 auto;
   cursor: pointer;
+  overflow: visible;
 }
 
 .mascot-container svg {
@@ -1586,6 +1587,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: visible;
 }
 
 .lab-status-text {
@@ -1749,6 +1751,7 @@
   border-radius: 50%;
   background: none;
   cursor: pointer;
+  overflow: visible;
 }
 
 .mascot-button svg { display: block; }

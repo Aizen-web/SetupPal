@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Hackathon submission pack:** judge-facing README (Nebius Token Factory + NVIDIA Nemotron), [SUBMISSION.md](SUBMISSION.md) Devpost copy, demo recording guide in [docs/DEMO.md](docs/DEMO.md), and GitHub Release publishing (NSIS + SHA-256) on `v*` tags.
 - **SetupPal** public release: an AI-assisted, zero-trust environment and package orchestrator for Windows.
 - **AI chat** with streaming replies, plan proposals from recipes or a pinned LLM provider, and a **plan card** as the single source of truth for what will run.
 - **Safety Engine** in Rust: closed action schema, traffic-light risk ratings (Green / Yellow / Red), source transparency, hash checks, OSV and optional Tavily consensus, and user-scope execution.

@@ -1,6 +1,6 @@
 /**
  * SetupPal: Chat & Execution Workspace View
- * Calm empty state (Pixel + headline + starters + composer), a slim active chat with
+ * Calm empty state (Pixel + open prompt + composer), a slim active chat with
  * Pixel docked in the header, a quiet plan card, and the Hacker-mode terminal tab.
  */
 
@@ -34,51 +34,6 @@ const chatUi = {
 };
 
 let noticeTimer = null;
-
-const STARTERS = [
-  {
-    key: 'web',
-    title: 'Web',
-    hint: 'Node, TypeScript, Vite',
-    prompt: 'set up fullstack Node.js and TypeScript web environment',
-    iconName: 'code',
-  },
-  {
-    key: 'python',
-    title: 'Python',
-    hint: 'venv, PyTorch, Jupyter',
-    prompt: 'setup Python AI data science venv',
-    iconName: 'package',
-  },
-  {
-    key: 'cpp',
-    title: 'C++',
-    hint: 'Compilers, CMake',
-    prompt: 'set me up for C++20 dev',
-    iconName: 'bolt',
-  },
-  {
-    key: 'minecraft',
-    title: 'Minecraft',
-    hint: 'Fabric mods for Java',
-    prompt: 'Modded Minecraft Java with Fabric',
-    iconName: 'package',
-  },
-  {
-    key: 'everyday',
-    title: 'Everyday',
-    hint: '7-Zip, VLC, and Git',
-    prompt: '7-Zip, VLC, and Git',
-    iconName: 'download',
-  },
-  {
-    key: 'obs',
-    title: 'OBS Studio',
-    hint: 'Record and stream',
-    prompt: 'OBS Studio',
-    iconName: 'bolt',
-  },
-];
 
 const VERDICT_ICON = { GREEN: 'check', YELLOW: 'alert', RED: 'shieldX' };
 const VERDICT_CLASS = { GREEN: 'badge-green', YELLOW: 'badge-yellow', RED: 'badge-red' };
@@ -215,19 +170,7 @@ function renderEmptyState() {
   return `
     <div class="welcome-block">
       <h2 class="welcome-title">What should we set up?</h2>
-      <p class="welcome-sub">Runtimes, dev tools, and apps that install unattended from the command line.</p>
-
-      <div class="starter-pills" role="group" aria-label="Suggestions">
-        ${STARTERS.map(s => `
-          <button type="button" class="starter-pill" data-prompt="${esc(s.prompt)}">
-            <span class="starter-pill-icon" aria-hidden="true">${icon(s.iconName, 16)}</span>
-            <span class="starter-pill-copy">
-              <span class="starter-pill-title">${esc(s.title)}</span>
-              <span class="starter-pill-hint">${esc(s.hint)}</span>
-            </span>
-          </button>
-        `).join('')}
-      </div>
+      <p class="welcome-sub">Tell Pixel what you want installed or set up.</p>
     </div>
   `;
 }
@@ -634,7 +577,7 @@ function bindHeader(container) {
     mascot.onclick = () => {
       pixelVoice.trigger('poke');
       setTimeout(() => {
-        if (store.getState().mascotState === 'celebrate') store.setMascotState('idle');
+        if (store.getState().mascotState === 'success') store.setMascotState('idle');
       }, 2400);
     };
   }

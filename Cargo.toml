@@ -11,6 +11,12 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Zero-Trust Orchestrator Team"]
+repository = "https://github.com/Aizen-web/SetupPal"
+homepage = "https://github.com/Aizen-web/SetupPal"
+description = "Zero-trust AI environment and package orchestrator for Windows (Nebius Token Factory + NVIDIA Nemotron)"
+readme = "README.md"
+keywords = ["ai", "nebius", "nemotron", "installer", "zero-trust"]
+categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 tokio = { version = "1.38", features = ["full"] }

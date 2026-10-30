@@ -12,7 +12,7 @@
 export function createPixelSvg(size = 140, idPrefix = '', { live = false } = {}) {
   const p = idPrefix ? `${idPrefix}-` : '';
   return `
-<svg id="${p}ghost-root" class="ghost-root pet-root pet-ghost" ${live ? 'data-mascot-live="true"' : ''} viewBox="0 0 200 200" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pixel the ghost">
+<svg id="${p}ghost-root" class="ghost-root pet-root pet-ghost" ${live ? 'data-mascot-live="true"' : ''} viewBox="-12 -12 224 224" width="${size}" height="${size}" overflow="visible" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pixel the ghost">
   <defs>
     <filter id="${p}neon-glow" x="-20%" y="-20%" width="140%" height="140%">
       <feGaussianBlur stdDeviation="3" result="blur" />
