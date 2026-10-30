@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::config::CoreError;
+use crate::config::{fixed_secret, CoreError, SecretProvider};
 
 pub const TAVILY_SEARCH_URL: &str = "https://api.tavily.com/search";
 
@@ -39,7 +39,7 @@ pub trait TavilyVerifier: Send + Sync {
 /// Live HTTP client querying Tavily API (`https://api.tavily.com/search`).
 #[derive(Clone)]
 pub struct HttpTavilyVerifier {
-    api_key: String,
+    api_key: SecretProvider,
     endpoint: String,
     http: reqwest::Client,
 }
@@ -49,7 +49,7 @@ impl std::fmt::Debug for HttpTavilyVerifier {
         formatter
             .debug_struct("HttpTavilyVerifier")
             .field("endpoint", &self.endpoint)
-            .field("has_api_key", &!self.api_key.is_empty())
+            .field("has_api_key", &(self.api_key)().is_some())
             .finish()
     }
 }
@@ -91,10 +91,17 @@ impl HttpTavilyVerifier {
             .build()
             .unwrap_or_default();
         Self {
-            api_key: api_key.into(),
+            api_key: fixed_secret(Some(api_key.into())),
             endpoint: TAVILY_SEARCH_URL.to_string(),
             http,
         }
+    }
+
+    /// Reads the key on every call, so saving or removing it takes effect immediately.
+    pub fn with_key_provider(provider: SecretProvider) -> Self {
+        let mut client = Self::new(String::new());
+        client.api_key = provider;
+        client
     }
 
     pub fn with_custom_endpoint(api_key: impl Into<String>, endpoint: impl Into<String>) -> Self {
@@ -111,6 +118,10 @@ impl TavilyVerifier for HttpTavilyVerifier {
         software_name: &str,
         candidate_url: &str,
     ) -> Result<TavilyVerificationResult, CoreError> {
+        let api_key = (self.api_key)()
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| CoreError::Config("TAVILY_API_KEY is not set".to_string()))?;
         let candidate_parsed = Url::parse(candidate_url)
             .map_err(|e| CoreError::Validation(format!("Invalid candidate URL `{candidate_url}`: {e}")))?;
         let candidate_host = candidate_parsed
@@ -129,7 +140,7 @@ impl TavilyVerifier for HttpTavilyVerifier {
         let res = self
             .http
             .post(&self.endpoint)
-            .bearer_auth(&self.api_key)
+            .bearer_auth(&api_key)
             .json(&payload)
             .send()
             .await?;
@@ -200,5 +211,22 @@ mod tests {
         let debug = format!("{verifier:?}");
         assert!(!debug.contains("test-tavily-secret"));
         assert!(debug.contains("has_api_key"));
+    }
+
+    #[tokio::test]
+    async fn missing_key_is_a_config_error_and_is_read_per_call() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let verifier = HttpTavilyVerifier::with_key_provider(Arc::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            None
+        }));
+        for _ in 0..2 {
+            let err = verifier.verify_source("x", "https://example.com").await.unwrap_err();
+            assert!(matches!(err, CoreError::Config(_)));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

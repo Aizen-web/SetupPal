@@ -4,18 +4,20 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "app": "powershell -ExecutionPolicy Bypass -File ./launch-app.ps1",
-    "start": "powershell -ExecutionPolicy Bypass -File ./launch-app.ps1",
     "dev": "vite",
-    "dev:all": "concurrently --kill-others --names api,ui --prefix-colors magenta,cyan \"cd ../.. && cargo run -p installer_gui\" \"vite --open\"",
+    "tauri": "tauri",
+    "app": "tauri dev",
+    "build:app": "tauri build",
     "build": "vite build",
-    "check:animations": "node ./scripts/check-animations.js"
+    "check:animations": "node ./scripts/check-animations.js",
+    "check:keys": "node ./scripts/check-keys.js"
   },
   "devDependencies": {
-    "concurrently": "^10.0.6",
+    "@tauri-apps/cli": "^2",
     "vite": "^8.3.5"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2",
     "canvas-confetti": "^1.9.4",
     "lucide": "^1.61.0"
   }

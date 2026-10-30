@@ -86,6 +86,7 @@ pub struct GitHubReleasesAdapter {
     http: reqwest::Client,
     os_provider: Arc<dyn OsProvider>,
     base_url: String,
+    token: Option<crate::config::SecretProvider>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -118,6 +119,21 @@ impl GitHubReleasesAdapter {
             http: registry_http_client(60),
             os_provider,
             base_url: DEFAULT_GITHUB_API_BASE_URL.to_string(),
+            token: None,
+        }
+    }
+
+    /// Sends the token as a bearer credential on GitHub API calls only (never on asset downloads).
+    pub fn with_token_provider(mut self, token: crate::config::SecretProvider) -> Self {
+        self.token = Some(token);
+        self
+    }
+
+    fn api_request(&self, url: &str) -> reqwest::RequestBuilder {
+        let request = self.http.get(url);
+        match self.token.as_ref().and_then(|token| token()).map(|t| t.trim().to_string()) {
+            Some(token) if !token.is_empty() => request.bearer_auth(token),
+            _ => request,
         }
     }
 
@@ -130,6 +146,7 @@ impl GitHubReleasesAdapter {
             http,
             os_provider,
             base_url,
+            token: None,
         }
     }
 
@@ -284,7 +301,7 @@ impl SourceAdapter for GitHubReleasesAdapter {
         })?;
 
         let url = format!("{}/repos/{}/{}/releases", self.base_url, owner, repo);
-        let response = self.http.get(&url).send().await?;
+        let response = self.api_request(&url).send().await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(AdapterError::PackageNotFound {
                 adapter: AdapterKind::GitHubReleases,
@@ -538,4 +555,19 @@ mod tests {
         let err = adapter.install(&meta, None, &ctx).await.unwrap_err();
         assert!(err.to_string().contains("no checksum"));
     }
-}
+
+    #[test]
+    fn api_requests_carry_the_github_token_only_when_one_is_set() {
+        let plain = GitHubReleasesAdapter::new(Arc::new(MockOsProvider::new()));
+        let request = plain.api_request("https://api.github.com/x").build().unwrap();
+        assert!(request.headers().get("authorization").is_none());
+
+        let with_token = GitHubReleasesAdapter::new(Arc::new(MockOsProvider::new()))
+            .with_token_provider(crate::config::fixed_secret(Some("ghp_test".to_string())));
+        let request = with_token.api_request("https://api.github.com/x").build().unwrap();
+        assert_eq!(request.headers().get("authorization").unwrap(), "Bearer ghp_test");
+
+        let empty = GitHubReleasesAdapter::new(Arc::new(MockOsProvider::new()))
+            .with_token_provider(crate::config::fixed_secret(Some("  ".to_string())));
+        assert!(empty.api_request("https://api.github.com/x").build().unwrap().headers().get("authorization").is_none());
+    }}

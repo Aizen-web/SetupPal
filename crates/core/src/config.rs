@@ -2,6 +2,15 @@ use std::env;
 use std::path::PathBuf;
 use thiserror::Error;
 
+/// Looks up a secret (for example a Tavily or GitHub key) at the moment it is needed, so a key
+/// saved while the app is running takes effect without a restart. Never log what it returns.
+pub type SecretProvider = std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
+/// A provider that always returns the same value (or nothing).
+pub fn fixed_secret(value: Option<String>) -> SecretProvider {
+    std::sync::Arc::new(move || value.clone())
+}
+
 /// Top-level error enum for `installer_core`.
 /// Zero `.unwrap()` or `.expect()` calls are permitted in production code.
 #[derive(Debug, Error)]
@@ -76,7 +85,12 @@ impl CoreConfig {
     /// Automatically loads a `.env` file if present in the current directory.
     pub fn from_env() -> Self {
         Self::load_dotenv_file(PathBuf::from(".env"));
+        Self::from_process_env()
+    }
 
+    /// Like [`Self::from_env`] but never reads a `.env` file. The desktop app uses this in
+    /// release builds, where keys come from the OS keychain.
+    pub fn from_process_env() -> Self {
         let provider = env::var("SETUPPAL_PROVIDER")
             .ok()
             .map(|v| v.trim().to_string())
@@ -125,7 +139,7 @@ impl CoreConfig {
     }
 
     /// Minimal, dependency-free `.env` parser so `.env` works out of the box.
-    fn load_dotenv_file(path: PathBuf) {
+    pub fn load_dotenv_file(path: PathBuf) {
         let Ok(contents) = std::fs::read_to_string(path) else {
             return;
         };

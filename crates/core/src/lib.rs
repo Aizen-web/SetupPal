@@ -29,7 +29,7 @@ pub use installability::{
     apply_to_safety_report, check_plan, first_manual, manual_guide, Installability, ManualGuide,
     ManualReason, StepInstallability,
 };
-pub use config::{CoreConfig, CoreError};
+pub use config::{fixed_secret, CoreConfig, CoreError, SecretProvider};
 pub use events::{AgentEvent, EventBus};
 pub use executor::{
     ExecutionOptions, Executor, PlanExecutionSummary, StepExecutionResult, StepRunStatus,

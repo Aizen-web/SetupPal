@@ -4,4 +4,4 @@ cd /d "%~dp0"
 if not exist "crates\gui\node_modules" (
     call npm --prefix crates/gui install || exit /b 1
 )
-call npm --prefix crates/gui run dev:all
+call npm --prefix crates/gui run app

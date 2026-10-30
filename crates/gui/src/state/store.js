@@ -144,10 +144,10 @@ class Store {
       accounts: {
         displayName: localStorage.getItem('setuppal_display_name') || 'Local User',
         avatarColor: 'lavender',
-        githubConnected: !!localStorage.getItem('setuppal_github_user'),
-        githubUsername: localStorage.getItem('setuppal_github_user') || '',
+        // Key status comes from the backend (OS keychain); nothing key-like is kept in localStorage.
+        githubConnected: false,
         nebiusConnected: false,
-        tavilyConnected: !!localStorage.getItem('setuppal_tavily_key'),
+        tavilyConnected: false,
         stats: {
           messages: 0,
           toolsExecuted: 0,

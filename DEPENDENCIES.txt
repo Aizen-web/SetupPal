@@ -28,10 +28,9 @@ Development Dependencies:
   - vite: ^8.3.5
     Use: Lightning-fast ESM dev server and production asset bundler
 
-Native Desktop Wrappers & Runners:
-  - Microsoft Edge App Launcher (launch-app.ps1):
-    Runs the app natively in an isolated 1100x720 window with zero overhead
-  - Electron (Optional alternative packaging): ^45.0.0
+Native Desktop Shell:
+  - Tauri v2 (crates/gui/src-tauri; CLI via @tauri-apps/cli, API via @tauri-apps/api)
+    Runs the app in one WebView2 window; `npm run app` = tauri dev, `npm run build:app` = NSIS installer
 
 To install GUI dependencies:
   cd "crates/gui"

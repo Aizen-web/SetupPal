@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main SetupPal window may ask the shell for the local backend address and token. Nothing else is granted.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": ["allow-backend-info"]
+}

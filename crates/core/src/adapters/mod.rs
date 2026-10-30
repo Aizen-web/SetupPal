@@ -280,6 +280,18 @@ impl AdapterRegistry {
         reg
     }
 
+    /// System adapters where GitHub API calls carry the user's token (read per request).
+    pub fn with_github_token(
+        os_provider: Arc<dyn crate::os::OsProvider>,
+        github_token: crate::config::SecretProvider,
+    ) -> Self {
+        let mut reg = Self::with_system_defaults(os_provider.clone());
+        reg.register(Arc::new(
+            github::GitHubReleasesAdapter::new(os_provider).with_token_provider(github_token),
+        ));
+        reg
+    }
+
     pub fn register(&mut self, adapter: Arc<dyn SourceAdapter>) {
         self.adapters.insert(adapter.kind(), adapter);
     }

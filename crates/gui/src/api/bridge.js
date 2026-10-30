@@ -6,6 +6,8 @@
 import { apiClient } from './client.js';
 import { store } from '../state/store.js';
 import { setLastContext, motionReduced, getSafetyLevel } from '../state/prefs.js';
+import { migrateLegacyKeys } from '../state/key-migration.js';
+import { refreshKeyStatus } from '../state/key-status.js';
 import { sounds } from '../audio/sound-engine.js';
 import { pixelVoice } from '../mascot/voicelines.js';
 import confetti from 'canvas-confetti';
@@ -101,6 +103,7 @@ export class BackendBridge {
       console.log("Zero-Trust Backend Connected:", health);
       this.setupEventStream();
       this.refreshHistory();
+      this.syncKeys();
     } else {
       // Rapid retry with progressive backoff: 80ms, 150ms, 300ms, 600ms, max 1500ms
       const delay = Math.min(80 * Math.pow(1.7, attempt), 1500);
@@ -108,6 +111,17 @@ export class BackendBridge {
         console.warn(`Backend initializing... Retrying in ${Math.round(delay)}ms (attempt ${attempt + 1})`);
       }
       setTimeout(() => this.init(attempt + 1), delay);
+    }
+  }
+
+  /** Moves any old localStorage keys into the OS keychain, then loads key status from the backend. */
+  async syncKeys() {
+    try {
+      await migrateLegacyKeys((name, value) => apiClient.saveKey(name, value));
+      await refreshKeyStatus();
+      await apiClient.checkHealth();
+    } catch (err) {
+      console.warn('Key sync failed:', err?.message || err);
     }
   }
 

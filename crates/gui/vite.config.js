@@ -1,34 +1,21 @@
 import { defineConfig } from 'vite';
 
+// The UI runs inside the Tauri webview and talks to the embedded backend directly (address and
+// token come from the `backend_info` command), so there is no dev proxy. `tauri dev` starts this
+// server through `beforeDevCommand` and loads http://localhost:5173.
 export default defineConfig({
   root: '.',
+  clearScreen: false,
   server: {
-    host: '127.0.0.1',
+    host: 'localhost',
     port: 5173,
+    strictPort: true,
     open: false,
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:3001',
-        changeOrigin: true,
-        // Keep Vite's proxy alive longer than the backend's 120-second AI stream timeout.
-        timeout: 130000,
-        proxyTimeout: 130000,
-        configure: (proxy, _options) => {
-          proxy.on('error', (err, _req, res) => {
-            if (res && !res.headersSent && typeof res.writeHead === 'function') {
-              res.writeHead(503, {
-                'Content-Type': 'application/json',
-                'Retry-After': '1',
-              });
-              res.end(JSON.stringify({ error: 'Backend initializing', message: err.message }));
-            }
-          });
-        },
-      }
-    }
+    watch: { ignored: ['**/src-tauri/**'] },
   },
   build: {
     outDir: 'dist',
-    emptyOutDir: true
-  }
+    emptyOutDir: true,
+    target: 'es2021',
+  },
 });

@@ -247,6 +247,22 @@ impl SafetyEngine {
         }
     }
 
+    /// Like [Self::with_system_defaults], but the Tavily and GitHub keys are read at the moment
+    /// they are used, so keys saved while the app runs apply to the next evaluation.
+    pub fn with_secret_providers(
+        os_provider: Arc<dyn crate::os::OsProvider>,
+        tavily_key: crate::config::SecretProvider,
+        github_token: crate::config::SecretProvider,
+        events: EventBus,
+    ) -> Self {
+        Self {
+            adapters: AdapterRegistry::with_github_token(os_provider, github_token),
+            osv: Arc::new(HttpOsvClient::new()),
+            tavily: Some(Arc::new(HttpTavilyVerifier::with_key_provider(tavily_key))),
+            events,
+        }
+    }
+
     async fn verify_with_tavily(
         &self,
         software_name: &str,

@@ -21,7 +21,7 @@ Anything else gets a **Manual setup guide** instead of an install plan. SetupPal
 
 - `crates/core` (`installer_core`): All domain logic, traits, OS abstraction, system scanner, recipes, LLM client, safety engine, adapters, executor, verifier, healer, and state transaction log.
 - `crates/cli` (`installer_cli`): Terminal app built on `installer_core` using `clap`, `colored`, and `indicatif`.
-- `crates/gui` (`installer_gui` + vanilla JavaScript + Vite): The desktop app sharing `installer_core`. The target shell is a real **Tauri v2** app that embeds the local API server and ships as an NSIS installer. This is being implemented per [FINISH_PLAN.md](FINISH_PLAN.md); until then the GUI runs as an Axum server plus a Vite dev server in an Edge app window.
+- `crates/gui` (`installer_gui` + vanilla JavaScript + Vite): The desktop app sharing `installer_core`. A real **Tauri v2** app (crates/gui/src-tauri) that embeds the local Axum API on a random 127.0.0.1 port, protected by a per-launch bearer token, and ships as an NSIS installer.
 
 ## Quick Start
 
@@ -43,16 +43,18 @@ cargo run -p installer_cli -- plan "set me up for C++20 dev" --json
 
 ### Desktop app
 
-The Tauri v2 build (one-command dev and build scripts) is tracked in [FINISH_PLAN.md](FINISH_PLAN.md). The current interim launcher is:
+Requires Node.js, the Rust MSVC toolchain, and the WebView2 runtime (preinstalled on Windows 10/11). The Tauri CLI is installed through npm.
 
 ```bash
 npm --prefix crates/gui install
-npm --prefix crates/gui run app
+npm --prefix crates/gui run app         # tauri dev: starts Vite and opens one SetupPal window
+npm --prefix crates/gui run build:app   # tauri build: NSIS installer in target/release/bundle/nsis
 ```
 
+`start-app.bat` runs the same `app` script. There is no fixed port: the backend binds `127.0.0.1:0` and the window asks the shell for the address and token (`backend_info` command). Run `scripts/check.ps1` for the Rust tests, frontend build, and JS checks.
 ## Provider and Tavily configuration
 
-Copy `.env.example` to `.env` and add keys locally. Never put real keys in `.env.example`, commit `.env`, or paste keys into docs.
+In the desktop app, open **Accounts** and paste your keys: they are saved to Windows Credential Manager (service `SetupPal`) and are never shown again. For development and the CLI you can instead copy `.env.example` to `.env` and add keys locally (the app reads `.env` only in debug builds or with `SETUPPAL_DEV=1`). Never put real keys in `.env.example`, commit `.env`, or paste keys into docs.
 
 ```dotenv
 # Which AI provider to use: nebius (production) or nim (testing).
@@ -68,7 +70,7 @@ TAVILY_API_KEY=
 - `SETUPPAL_PROVIDER=nebius|nim` selects the provider explicitly. If it is unset, SetupPal uses Nebius when its key exists, otherwise NIM. `NVIDIA_API_KEY` is also accepted in place of `NIM_API_KEY`.
 - Chat and the planner use the same provider and model.
 - Tavily is an optional backend safety source verifier.
-- In the finished Tauri app, keys are stored in the OS keychain; `.env` remains a developer fallback.
+- Key lookup order: OS keychain, then process environment, then `.env` (developer fallback only). Saving a Tavily or GitHub key in Accounts applies to the next plan without a restart. Old browser-stored keys are moved to the keychain on first launch.
 
 ## Chat and appearance
 

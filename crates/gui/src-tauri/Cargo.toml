@@ -4,9 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+build = "build.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 installer_core = { path = "../../core" }
+tauri = { version = "2", features = [] }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -20,3 +25,12 @@ uuid.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
 tokio-util.workspace = true
+getrandom = "0.3"
+subtle = "2"
+hex.workspace = true
+keyring = { version = "3", features = ["windows-native"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile.workspace = true

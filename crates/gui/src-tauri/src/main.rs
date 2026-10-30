@@ -1,20 +1,24 @@
-//! SetupPal Zero-Trust Backend API & SSE Server
+//! SetupPal desktop shell and zero-trust backend.
 //!
-//! Exposes installer_core domain logic to the modern UI frontend via HTTP & Server-Sent Events (SSE).
+//! One Tauri process: it starts the Axum API on `127.0.0.1:<random port>`, generates a per-launch
+//! bearer token, and hands both to the webview through the `backend_info` command.
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod auth;
 mod intent;
+mod keys;
 
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
-    http::{header, Method, StatusCode},
+    extract::{Path as AxumPath, State},
+    http::{header, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -22,11 +26,10 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::sync::CancellationToken;
-use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use installer_core::llm::{ConfigKeyStore, KeyStore, ProviderClient, ProviderKind, ResolvedProvider};
+use installer_core::llm::{ProviderClient, ProviderKind, ResolvedProvider};
 use installer_core::{
     check_plan, first_manual, manual_guide, apply_to_safety_report, AllowedBinary, CoreConfig,
     EventBus, ExecutionOptions, FailureContext, Healer, LlmClient, PlanSafetyReport, Planner,
@@ -34,6 +37,7 @@ use installer_core::{
     SystemScanner, TrustCategory, OsProvider, Plan,
 };
 use intent::{IntentStreamFilter, SetupIntent};
+use keys::{normalize_api_key, KeyName, Keys};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -47,6 +51,8 @@ pub struct AppState {
     pub llm: Arc<ProviderClient>,
     pub planner: Arc<Planner>,
     pub state_logger: StateLogger,
+    /// Keychain-backed secrets (provider keys, Tavily, GitHub). Values never leave the backend.
+    pub keys: Arc<Keys>,
     /// Server-side plans keyed by `plan_id` (never trust a client-supplied plan body).
     pub plans: Arc<RwLock<HashMap<String, (Plan, PlanSafetyReport)>>>,
     /// Active execute runs keyed by client `run_id`.
@@ -55,44 +61,58 @@ pub struct AppState {
     pub safety_level: Arc<RwLock<String>>,
 }
 
-/// Reads provider keys per request (local `.env`, then process environment, then startup config)
-/// so a key added to `.env` works without a restart.
-struct LocalKeyStore {
-    startup: ConfigKeyStore,
+/// Address and token the webview needs. Delivered by the `backend_info` command only.
+#[derive(Clone, Serialize)]
+struct BackendInfo {
+    api_base: String,
+    token: String,
 }
 
-impl KeyStore for LocalKeyStore {
-    fn api_key(&self, kind: ProviderKind) -> Option<String> {
-        kind.key_env_names()
-            .iter()
-            .find_map(|name| resolve_env_key(name, None))
-            .or_else(|| self.startup.api_key(kind).as_deref().and_then(normalize_api_key))
+// Not derived: a `Debug` impl on this type would put the token in logs.
+impl std::fmt::Debug for BackendInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackendInfo").field("api_base", &self.api_base).finish_non_exhaustive()
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,installer_gui=debug,installer_core=debug".into()),
-        )
-        .init();
+#[tauri::command]
+fn backend_info(info: tauri::State<'_, BackendInfo>) -> BackendInfo {
+    info.inner().clone()
+}
 
-    info!("Initializing SetupPal Zero-Trust Core...");
+/// Builds the shared state. Debug builds (or `SETUPPAL_DEV=1`) also read `.env` as a developer fallback.
+fn build_app_state(keys: Arc<Keys>) -> anyhow::Result<AppState> {
+    let mut config = if keys.dev_fallback() {
+        if let Some(path) = keys.dotenv_path() {
+            CoreConfig::load_dotenv_file(path.clone());
+        }
+        CoreConfig::from_process_env()
+    } else {
+        CoreConfig::from_process_env()
+    };
+    // An installed app has no meaningful working directory, so keep its history in the user's
+    // data folder. Developer runs and an explicit ORCHESTRATOR_STATE_LOG keep the old path.
+    if !keys.dev_fallback() && std::env::var_os("ORCHESTRATOR_STATE_LOG").is_none() {
+        let dir = installer_core::paths::setuppal_data_dir()?;
+        std::fs::create_dir_all(&dir)?;
+        config.state_log_path = dir.join("state.jsonl");
+    }
 
-    let config = CoreConfig::from_env();
     let events = EventBus::default();
     let os_provider: Arc<dyn OsProvider> = Arc::new(PlatformOsProvider::new());
     let scanner = Arc::new(SystemScanner::new(os_provider.clone(), events.clone()));
-    let safety_engine = Arc::new(SafetyEngine::with_system_defaults(os_provider.clone(), config.tavily_api_key.clone(), events.clone()));
+    let safety_engine = Arc::new(SafetyEngine::with_secret_providers(
+        os_provider.clone(),
+        keys.provider(KeyName::TavilyApiKey),
+        keys.provider(KeyName::GithubToken),
+        events.clone(),
+    ));
     let recipes = RecipeStore::load_from_dir_or_embedded(&config.recipes_dir)?;
-    let keys = Arc::new(LocalKeyStore { startup: ConfigKeyStore::from_config(&config) });
-    let llm = Arc::new(ProviderClient::with_key_store(config.clone(), keys)?);
+    let llm = Arc::new(ProviderClient::with_key_store(config.clone(), keys.clone())?);
     let planner = Arc::new(Planner::new(recipes.clone(), llm.clone(), events.clone()));
     let state_logger = StateLogger::new(config.state_log_path.clone(), events.clone());
 
-    let app_state = AppState {
+    Ok(AppState {
         config,
         events,
         os_provider,
@@ -102,17 +122,16 @@ async fn main() -> anyhow::Result<()> {
         llm,
         planner,
         state_logger,
+        keys,
         plans: Arc::new(RwLock::new(HashMap::new())),
         runs: Arc::new(Mutex::new(HashMap::new())),
         safety_level: Arc::new(RwLock::new("strict".to_string())),
-    };
+    })
+}
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT]);
-
-    let app = Router::new()
+/// Every API route, before auth is applied.
+fn api_router(state: AppState) -> Router {
+    Router::new()
         .route("/api/health", get(health_handler))
         .route("/api/doctor", get(doctor_handler))
         .route("/api/recipes", get(recipes_handler))
@@ -125,40 +144,51 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/undo", post(undo_handler))
         .route("/api/events", get(events_handler))
         .route("/api/test-key", post(test_provider_key_handler))
-        .layer(cors)
-        .with_state(app_state);
-
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3001);
-
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    info!("🚀 SetupPal Zero-Trust Backend running on http://{}", addr);
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    if let Err(e) = axum::serve(listener, app).await {
-        error!("Axum server error: {:?}", e);
-    }
-
-    Ok(())
+        .route("/api/keys", post(save_key_handler))
+        .route("/api/keys/status", get(key_status_handler))
+        .route("/api/keys/:name", delete(delete_key_handler))
+        .with_state(state)
 }
 
-fn read_dotenv_value(name: &str) -> Option<String> {
-    let content = std::fs::read_to_string(".env").ok()?;
-    for line in content.lines() {
-        let line = line.trim().trim_start_matches('\u{feff}');
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let line = line.strip_prefix("export ").unwrap_or(line).trim();
-        if let Some(val) = line.strip_prefix(&format!("{name}=")) {
-            if let Some(clean) = normalize_api_key(val) {
-                return Some(clean);
-            }
-        }
-    }
-    None
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,installer_gui=debug,installer_core=debug".into()),
+        )
+        .init();
+
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![backend_info])
+        .setup(|app| {
+            use tauri::Manager;
+            info!("Initializing SetupPal Zero-Trust Core...");
+
+            let keys = Arc::new(Keys::new(Arc::new(keys::KeyringStore), keys::dev_fallback_enabled()));
+            let state = build_app_state(keys)?;
+
+            let listener = tauri::async_runtime::block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))?;
+            let port = listener.local_addr()?.port();
+            let token = auth::generate_token().map_err(|e| anyhow::anyhow!("no secure random source: {e}"))?;
+
+            let router = auth::secure(
+                api_router(state),
+                auth::AuthState::new(token.clone(), port),
+                cfg!(debug_assertions),
+            );
+            // The token is deliberately absent from this log line.
+            info!("SetupPal backend listening on 127.0.0.1:{port}");
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = axum::serve(listener, router).await {
+                    error!("Axum server error: {:?}", e);
+                }
+            });
+
+            app.manage(BackendInfo { api_base: format!("http://127.0.0.1:{port}"), token });
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running SetupPal");
 }
 
 /// Provider fields for `/api/health`, from the same resolver chat and planning use.
@@ -184,8 +214,8 @@ fn provider_status(llm: &ProviderClient) -> serde_json::Value {
 async fn health_handler(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
-    let has_tavily_key =
-        resolve_env_key("TAVILY_API_KEY", state.config.tavily_api_key.as_deref()).is_some();
+    let has_tavily_key = state.keys.resolve(KeyName::TavilyApiKey).is_some();
+    let has_github_token = state.keys.resolve(KeyName::GithubToken).is_some();
 
     let safety_level = state.safety_level.read().await.clone();
     let mut health = serde_json::json!({
@@ -195,6 +225,7 @@ async fn health_handler(
         "safety_level": safety_level,
         "deterministic_gates": true,
         "has_tavily_key": has_tavily_key,
+        "has_github_token": has_github_token,
     });
     if let (Some(target), serde_json::Value::Object(fields)) =
         (health.as_object_mut(), provider_status(&state.llm))
@@ -336,26 +367,6 @@ pub fn create_metadata_for_plan(plan: &Plan, safety_report: &PlanSafetyReport) -
     }).collect()
 }
 
-fn normalize_api_key(raw: &str) -> Option<String> {
-    let clean = raw
-        .trim()
-        .trim_start_matches('\u{feff}')
-        .trim_matches('"')
-        .trim_matches('\'')
-        .trim();
-    if clean.is_empty() || clean == "nvapi-REPLACE_WITH_YOUR_KEY" {
-        None
-    } else {
-        Some(clean.to_string())
-    }
-}
-
-fn resolve_env_key(name: &str, configured: Option<&str>) -> Option<String> {
-    read_dotenv_value(name)
-        .or_else(|| std::env::var(name).ok().and_then(|value| normalize_api_key(&value)))
-        .or_else(|| configured.and_then(normalize_api_key))
-}
-
 #[derive(Debug, Deserialize)]
 pub struct TestKeyRequest {
     /// A pasted key to test once; empty means "test the configured key".
@@ -379,6 +390,9 @@ async fn test_provider_key_handler(
     State(state): State<AppState>,
     Json(req): Json<TestKeyRequest>,
 ) -> Json<TestKeyResponse> {
+    if let Some(service @ ("tavily" | "github")) = req.provider.as_deref() {
+        return test_service_key(&state, service, &req.api_key).await;
+    }
     let kind = match req.provider.as_deref() {
         Some(value) => ProviderKind::parse(value),
         None => state.llm.selected().ok(),
@@ -386,7 +400,7 @@ async fn test_provider_key_handler(
     let Some(kind) = kind else {
         return Json(TestKeyResponse {
             valid: false,
-            message: "Unknown provider. Use `nebius` or `nim`.".to_string(),
+            message: "Unknown provider. Use `nebius`, `nim`, `tavily`, or `github`.".to_string(),
             model_tested: String::new(),
             provider: String::new(),
         });
@@ -407,7 +421,7 @@ async fn test_provider_key_handler(
         return respond(
             false,
             format!(
-                "No key to test. Paste one, or add {} to your local environment.",
+                "No key to test. Paste one, or save it first (environment: {}).",
                 kind.key_env_names().join(" or ")
             ),
         );
@@ -449,6 +463,89 @@ async fn test_provider_key_handler(
     }
 }
 
+/// Tests a Tavily or GitHub credential with one cheap request. Response bodies are never echoed.
+async fn test_service_key(state: &AppState, service: &str, pasted: &str) -> Json<TestKeyResponse> {
+    let (name, label) = if service == "tavily" {
+        (KeyName::TavilyApiKey, "Tavily")
+    } else {
+        (KeyName::GithubToken, "GitHub")
+    };
+    let respond = |valid: bool, message: String| {
+        Json(TestKeyResponse {
+            valid,
+            message,
+            model_tested: String::new(),
+            provider: label.to_string(),
+        })
+    };
+    let Some(key) = normalize_api_key(pasted).or_else(|| state.keys.resolve(name)) else {
+        return respond(false, format!("No {label} key to test. Paste one, or save it first."));
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("SetupPal")
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return respond(false, "HTTP client initialization failed.".to_string()),
+    };
+    let request = if service == "tavily" {
+        client
+            .post(installer_core::safety::tavily::TAVILY_SEARCH_URL)
+            .bearer_auth(&key)
+            .json(&serde_json::json!({ "query": "ping", "max_results": 1 }))
+    } else {
+        client.get("https://api.github.com/rate_limit").bearer_auth(&key)
+    };
+    match request.send().await {
+        Ok(response) if response.status().is_success() => respond(true, format!("{label} key works.")),
+        Ok(response) if matches!(response.status(), StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => {
+            respond(false, format!("HTTP {}: {label} rejected this key.", response.status()))
+        }
+        Ok(response) => respond(false, format!("HTTP {} from {label}.", response.status())),
+        Err(error) => respond(false, format!("Network request failed: {}", error.without_url())),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveKeyRequest {
+    name: String,
+    value: String,
+}
+
+/// Stores a key in the OS keychain. The value is never echoed back or logged.
+async fn save_key_handler(
+    State(state): State<AppState>,
+    Json(req): Json<SaveKeyRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let name = KeyName::parse(&req.name)
+        .ok_or((StatusCode::BAD_REQUEST, "Unknown key name.".to_string()))?;
+    let value = keys::validate_value(&req.value)
+        .map_err(|reason| (StatusCode::BAD_REQUEST, reason.to_string()))?;
+    state
+        .keys
+        .save(name, &value)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "name": name.as_str(), "saved": true })))
+}
+
+async fn delete_key_handler(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let name = KeyName::parse(&name)
+        .ok_or((StatusCode::BAD_REQUEST, "Unknown key name.".to_string()))?;
+    state
+        .keys
+        .remove(name)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "name": name.as_str(), "removed": true })))
+}
+
+/// Booleans only: never a key, a mask, or a prefix.
+async fn key_status_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(state.keys.status())
+}
 fn describe_provider_status(status: StatusCode, model: &str) -> String {
     match status {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
@@ -1161,7 +1258,7 @@ async fn execute_handler(
     };
 
     let verifier = installer_core::Verifier::new(state.os_provider.clone(), state.events.clone());
-    let adapters = installer_core::AdapterRegistry::with_system_defaults(state.os_provider.clone());
+    let adapters = installer_core::AdapterRegistry::with_github_token(state.os_provider.clone(), state.keys.provider(KeyName::GithubToken));
     let executor = installer_core::Executor::new(
         adapters,
         state.os_provider.clone(),
@@ -1440,6 +1537,7 @@ async fn events_handler(
 #[cfg(test)]
 mod provider_selection_tests {
     use super::*;
+    use installer_core::llm::KeyStore;
 
     struct FixedKeys {
         nebius: bool,
