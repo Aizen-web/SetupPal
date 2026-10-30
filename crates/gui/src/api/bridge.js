@@ -26,6 +26,27 @@ function planTitle(plan) {
   return goal.slice(0, 45) + '…';
 }
 
+/** Readable install step label with version when known (R23). */
+export function installStepLabel(pkg, eco, version, fallbackDescription) {
+  const channel = eco === 'winget' ? 'winget'
+    : eco === 'pypi' ? 'pip'
+    : (eco || 'package');
+  const name = (() => {
+    if (eco === 'winget' && pkg && pkg.includes('.')) {
+      const last = pkg.split('.').pop();
+      return last || pkg;
+    }
+    return pkg || 'package';
+  })();
+  if (version && version !== 'latest') {
+    return `Install ${name} ${version} (${channel})`;
+  }
+  if (fallbackDescription && /^Install /i.test(fallbackDescription)) {
+    return fallbackDescription;
+  }
+  return `Install ${name} (${channel})`;
+}
+
 /** Map `/api/plan` (or remediation) JSON into the UI `activePlan` shape. */
 export function toActivePlan(data, { verifiedManual = false } = {}) {
   const plan = data?.plan;
@@ -41,6 +62,8 @@ export function toActivePlan(data, { verifiedManual = false } = {}) {
     subtitleParts.push('SetupPal checked: this installs unattended through winget.');
   }
   if (plan.summary) subtitleParts.push(plan.summary);
+  const notes = Array.isArray(safety?.notes) ? safety.notes.filter(Boolean) : [];
+  if (notes.length) subtitleParts.push(notes[0]);
 
   return {
     planId: plan.plan_id,
@@ -58,9 +81,10 @@ export function toActivePlan(data, { verifiedManual = false } = {}) {
       const verdict = rating.toUpperCase();
       const pkg = s.step?.params?.package_id;
       const eco = s.step?.params?.ecosystem;
+      const version = s.step?.params?.version || meta.resolved_version || null;
       let title = s.description;
       if (s.step?.action === 'install_package' && pkg) {
-        title = eco === 'winget' ? `Install ${pkg} (winget)` : `Install ${pkg} (${eco || 'package'})`;
+        title = installStepLabel(pkg, eco, version, s.description);
       }
       return {
         id: s.id,
@@ -99,7 +123,24 @@ export function intentGroundedInUserText(intent, historyMessages = []) {
     if (userBlob.includes(t)) return true;
     // Publisher.Package → check last segment
     const last = t.split('.').pop();
-    return last && last.length >= 2 && userBlob.includes(last);
+    if (last && last.length >= 2 && userBlob.includes(last)) return true;
+    // Multi-word goal ("Fabric for Minecraft Java"): every meaningful word must come from the user.
+    const words = t.split(/[^a-z0-9+#.]+/).filter(w => w && !GOAL_FILLER_WORDS.has(w));
+    return words.length > 0 && words.every(w => userBlob.includes(w));
+  });
+}
+
+const GOAL_FILLER_WORDS = new Set([
+  'a', 'an', 'and', 'the', 'for', 'with', 'to', 'of', 'on', 'in', 'my', 'plus',
+  'set', 'setup', 'up', 'install', 'installer', 'latest', 'version', 'app', 'mod', 'mods', 'modded', 'loader',
+]);
+
+function setPlanPending(conversationId, label) {
+  store.setState(s => {
+    if (!label) {
+      return s.planPending?.conversationId === conversationId ? { ...s, planPending: null } : s;
+    }
+    return { ...s, planPending: { conversationId, label } };
   });
 }
 
@@ -612,6 +653,8 @@ export class BackendBridge {
           if (event.type === 'message.delta' && typeof event.text === 'string') {
             pendingText += event.text;
             if (frame === null) frame = requestAnimationFrame(flush);
+          } else if (event.type === 'plan.pending') {
+            setPlanPending(conversationId, 'Working out what to install…');
           } else if (event.type === 'message.intent') {
             intent = event.intent || null;
             console.log('[SetupPal] message.intent', intent);
@@ -654,10 +697,13 @@ export class BackendBridge {
 
       if (intent) {
         await this.handleIntent(conversationId, intent, store.getConversationMessages(conversationId));
+      } else {
+        setPlanPending(conversationId, null);
       }
 
       return { reply, context: completed.context || null, intent };
     } catch (error) {
+      setPlanPending(conversationId, null);
       if (frame !== null) {
         cancelAnimationFrame(frame);
         flush();
@@ -711,6 +757,14 @@ export class BackendBridge {
   }
 
   async handleIntent(conversationId, intent, historyMessages = []) {
+    try {
+      await this.buildPlanFromIntent(conversationId, intent, historyMessages);
+    } finally {
+      setPlanPending(conversationId, null);
+    }
+  }
+
+  async buildPlanFromIntent(conversationId, intent, historyMessages) {
     if (!intent?.kind) return;
 
     // The model's "manual" verdict is only a claim: the backend checks the item against winget, so
@@ -748,43 +802,20 @@ export class BackendBridge {
       store.persistConversations();
     };
 
-    // Immediate status row while resolution / safety run (R14).
-    const statusId = 'plan_status_' + Date.now();
-    store.setState(s => {
-      if (s.activeConversationId !== conversationId) return s;
-      return {
-        ...s,
-        chatMessages: [
-          ...s.chatMessages,
-          {
-            id: statusId,
-            sender: 'assistant',
-            text: 'Checking packages…',
-            options: [],
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            planAttached: false,
-            isStatus: true,
-          },
-        ],
-      };
-    });
+    // Pending card stays up while packages resolve and the safety checks run (R14).
+    setPlanPending(conversationId, 'Working out what to install…');
 
     const clearStatus = (extra = {}) => {
       store.setState(s => ({
         ...s,
         ...extra,
-        chatMessages: (s.chatMessages || []).filter(m => m.id !== statusId),
+        planPending: s.planPending?.conversationId === conversationId ? null : s.planPending,
       }));
     };
 
     try {
       if (!this.isBackendOnline) await this.waitForConnection(3000);
-      store.setState(s => ({
-        ...s,
-        chatMessages: (s.chatMessages || []).map(m =>
-          m.id === statusId ? { ...m, text: 'Running safety checks…' } : m
-        ),
-      }));
+      setPlanPending(conversationId, 'Checking packages and running safety checks…');
       const data = await apiClient.createPlan(goal, {
         context: conversationSummary(historyMessages),
         verifyManual,
@@ -796,9 +827,31 @@ export class BackendBridge {
         return;
       }
 
+      if (data?.kind === 'broad') {
+        // Broad requests stay in chat — no manual card (R18).
+        clearStatus({ activePlan: null, manualGuide: null, packageConfirm: null });
+        return;
+      }
+
+      if (data?.kind === 'confirm' && data?.suggestion) {
+        clearStatus({
+          activePlan: null,
+          manualGuide: null,
+          packageConfirm: {
+            typed: data.typed || '',
+            suggestion: data.suggestion,
+            ecosystem: data.ecosystem || 'pypi',
+            conversationId,
+          },
+        });
+        store.persistConversations();
+        return;
+      }
+
       if (data?.kind === 'manual' || (data?.item && data?.reason && !data?.plan)) {
         clearStatus({
           activePlan: null,
+          packageConfirm: null,
           manualGuide: {
             item: data.item,
             reason: data.detail || data.reason,
@@ -819,7 +872,9 @@ export class BackendBridge {
       clearStatus({
         activePlan,
         manualGuide: null,
+        packageConfirm: null,
         tasksOpen: true,
+        scrollToPlan: true,
         // Prior plan is replaced; chat keeps one live card (R2 / R19).
         replacedPlanNote: store.getState().activePlan
           ? `Previous plan (${store.getState().activePlan.title}) was replaced.`

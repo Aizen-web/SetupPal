@@ -111,11 +111,22 @@ pub struct IntentStreamFilter {
     loose: LooseJsonFilter,
     /// Visible reply with every intent removed (or never present).
     visible: String,
+    opened_reported: bool,
 }
 
 impl IntentStreamFilter {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// True exactly once, as soon as a fenced intent block starts streaming.
+    pub fn take_intent_opened(&mut self) -> bool {
+        let opened = self.capturing || !self.intent_body.trim().is_empty();
+        if opened && !self.opened_reported {
+            self.opened_reported = true;
+            return true;
+        }
+        false
     }
 
     /// Feed a provider delta. Returns the slice that is safe to show the user.
@@ -225,6 +236,8 @@ struct LooseJsonFilter {
     /// The object closed and is a known intent; waiting to see if only whitespace follows.
     closed: bool,
     trailing_ws: String,
+    /// The previous plain character was whitespace (a mid-line intent object may follow it).
+    prev_space: bool,
 }
 
 impl Default for LooseJsonFilter {
@@ -240,6 +253,7 @@ impl Default for LooseJsonFilter {
             key_checked: false,
             closed: false,
             trailing_ws: String::new(),
+            prev_space: false,
         }
     }
 }
@@ -336,7 +350,15 @@ impl LooseJsonFilter {
         if c == '\n' {
             self.at_line_start = true;
             self.fence_probe.clear();
+            self.prev_space = true;
             out.push(c);
+            return;
+        }
+        let after_space = self.prev_space;
+        self.prev_space = c.is_whitespace();
+        if !self.at_line_start && after_space && c == '{' && !self.in_code {
+            self.pending.push('{');
+            self.depth = 1;
             return;
         }
         if self.at_line_start {
@@ -382,7 +404,7 @@ fn trim_trailing_blank_lines(s: &str) -> String {
     s.trim_end_matches(['\n', '\r', ' ', '\t']).to_string()
 }
 
-fn parse_intent_json(raw: &str) -> Result<SetupIntent, IntentParseError> {
+pub fn parse_intent_json(raw: &str) -> Result<SetupIntent, IntentParseError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(IntentParseError::Empty);
@@ -551,6 +573,25 @@ mod tests {
         assert_eq!(forwarded, "Ready to install.\n\n");
         assert_eq!(visible, "Ready to install.");
         assert!(matches!(intent, Ok(Some(SetupIntent::Install { .. }))));
+    }
+
+    #[test]
+    fn trailing_json_after_a_sentence_is_still_stripped() {
+        let reply = r#"Audacity is not installable here. {"kind":"manual","item":"Audacity","reason":"Needs a wizard","alternatives":["VLC"]}"#;
+        let (visible, intent) = split_intent_block(reply);
+        assert_eq!(visible.trim(), "Audacity is not installable here.");
+        assert!(matches!(intent, Ok(Some(SetupIntent::Manual { .. }))));
+    }
+
+    #[test]
+    fn intent_opening_is_reported_once() {
+        let mut filter = IntentStreamFilter::new();
+        let _ = filter.push("Setting that up.\n\n");
+        assert!(!filter.take_intent_opened());
+        let _ = filter.push("```setuppal-intent\n{\"kind\":");
+        assert!(filter.take_intent_opened());
+        let _ = filter.push("\"install\",\"goal\":\"vlc\"}\n```");
+        assert!(!filter.take_intent_opened());
     }
 
     #[test]

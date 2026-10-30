@@ -3,6 +3,7 @@
 //! Shares 100% of domain logic across the CLI (`installer_cli`) and Tauri v2 GUI (`installer_gui`).
 
 pub mod adapters;
+pub mod alternatives;
 pub mod cleanup;
 pub mod config;
 pub mod discovery;
@@ -28,9 +29,13 @@ pub use adapters::{
     FetchedArtifact, GitHubReleasesAdapter, ModrinthAdapter, NpmAdapter, PackageMetadata,
     PyPIAdapter, SourceAdapter, VendorUrlAdapter, VerificationResult, WingetAdapter,
 };
+pub use alternatives::{
+    alternatives_for, detect_category, filter_same_category, is_broad_request, Alternative,
+    AppCategory,
+};
 pub use installability::{
-    apply_to_safety_report, check_plan, first_manual, manual_guide, Installability, ManualGuide,
-    ManualReason, StepInstallability,
+    apply_to_safety_report, check_plan, first_manual, manual_guide, manual_guide_with_installed,
+    Installability, ManualGuide, ManualReason, StepInstallability,
 };
 pub use config::{fixed_secret, CoreConfig, CoreError, SecretProvider};
 pub use events::{AgentEvent, EventBus};

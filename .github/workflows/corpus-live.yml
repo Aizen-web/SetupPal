@@ -1,0 +1,101 @@
+name: Corpus live (manual)
+
+# Manual job for release-gate persona / prompt corpus work.
+#
+# What this workflow can do on GitHub Actions (headless):
+#   1. Always run the key-free deterministic corpus schema/fixture check.
+#   2. If NEBIUS_API_KEY or NIM_API_KEY is present, run the ignored Rust
+#      `live_corpus` model tests (`cargo test -p installer_gui live_corpus -- --ignored`).
+#
+# What it cannot do here without a desktop UI:
+#   The CDP live runner (`run-corpus.mjs --live`) needs a running SetupPal
+#   webview with --remote-debugging-port=9333. That is not feasible on a stock
+#   windows-latest GHA image. Run that locally (or on a VM with an interactive
+#   session) after starting the app — see scripts/persona-tests/personas.mjs.
+#
+# Secrets (optional for the cargo live_corpus step):
+#   NEBIUS_API_KEY  — production provider
+#   NIM_API_KEY     — NVIDIA NIM test provider
+# Provider selection follows SETUPPAL_PROVIDER=nebius|nim (defaults to Nebius when its key exists).
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "SETUPPAL_PROVIDER (nebius or nim)"
+        required: false
+        default: "nebius"
+      run_cargo_live_corpus:
+        description: "Run ignored cargo live_corpus when API keys are present"
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  deterministic-and-optional-live:
+    name: Deterministic corpus (+ optional cargo live_corpus)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crates/gui/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Deterministic corpus (key-free)
+        shell: pwsh
+        run: node scripts/persona-tests/run-corpus.mjs --deterministic
+
+      - name: Note about CDP live UI suite
+        shell: pwsh
+        run: |
+          Write-Host @"
+          Skipping run-corpus.mjs --live on GHA: no interactive SetupPal webview.
+          Local/VM recipe:
+            `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9333'
+            npx tauri dev   # from crates/gui
+            node scripts/persona-tests/run-corpus.mjs --live
+          "@
+
+      - name: Detect provider secrets
+        id: keys
+        shell: pwsh
+        env:
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+          NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
+        run: |
+          $hasNebius = -not [string]::IsNullOrWhiteSpace($env:NEBIUS_API_KEY)
+          $hasNim = -not [string]::IsNullOrWhiteSpace($env:NIM_API_KEY)
+          "has_nebius=$($hasNebius.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "has_nim=$($hasNim.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if ($hasNebius) { Write-Host "NEBIUS_API_KEY present" } else { Write-Host "NEBIUS_API_KEY missing" }
+          if ($hasNim) { Write-Host "NIM_API_KEY present" } else { Write-Host "NIM_API_KEY missing" }
+
+      - name: cargo live_corpus (ignored; needs keys + network)
+        if: ${{ inputs.run_cargo_live_corpus && (steps.keys.outputs.has_nebius == 'true' || steps.keys.outputs.has_nim == 'true') }}
+        shell: pwsh
+        env:
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+          NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
+          SETUPPAL_PROVIDER: ${{ inputs.provider }}
+        run: |
+          Write-Host "SETUPPAL_PROVIDER=$env:SETUPPAL_PROVIDER"
+          cargo test -p installer_gui live_corpus -- --ignored --nocapture
+
+      - name: Skip cargo live_corpus (no keys)
+        if: ${{ inputs.run_cargo_live_corpus && steps.keys.outputs.has_nebius != 'true' && steps.keys.outputs.has_nim != 'true' }}
+        shell: pwsh
+        run: |
+          Write-Host "No NEBIUS_API_KEY / NIM_API_KEY secrets — skipped ignored live_corpus tests."
+          Write-Host "Deterministic corpus already passed."

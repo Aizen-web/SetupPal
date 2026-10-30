@@ -8,7 +8,7 @@ use crate::adapters::{
     FetchedArtifact, PackageMetadata, SourceAdapter, VerificationResult,
 };
 use crate::os::OsProvider;
-use crate::safety::policy::{is_url_domain_allowlisted, is_valid_sha256_hex};
+use crate::safety::policy::{is_shared_upload_url, is_url_domain_allowlisted, is_valid_sha256_hex};
 use crate::types::AdapterKind;
 
 pub const FABRIC_INSTALLER_ID: &str = "fabric-installer";
@@ -103,6 +103,11 @@ impl SourceAdapter for VendorUrlAdapter {
         }
         if package_id.starts_with("https://") || package_id.starts_with("http://") {
             match is_url_domain_allowlisted(package_id) {
+                Ok(true) if is_shared_upload_url(package_id) => {
+                    return Err(AdapterError::Other(format!(
+                        "{package_id} is on a site anyone can upload to; use its registry adapter instead"
+                    )))
+                }
                 Ok(true) => {}
                 Ok(false) => {
                     return Err(AdapterError::UnapprovedDomain {

@@ -31,7 +31,8 @@ use uuid::Uuid;
 
 use installer_core::llm::{ProviderClient, ProviderKind, ResolvedProvider};
 use installer_core::{
-    apply_to_safety_report, check_plan, first_manual, manual_guide, AllowedBinary, CoreConfig,
+    apply_to_safety_report, check_plan, first_manual, is_broad_request,
+    manual_guide_with_installed, AllowedBinary, CoreConfig,
     EventBus, ExecutionOptions, FailureContext, Healer, LlmClient, OsProvider, Plan,
     PlanSafetyReport, Planner, PlatformOsProvider, RecipeStore, RiskRating, SafetyEngine,
     StateLogger, SystemProfile, SystemScanner, TrustCategory,
@@ -399,15 +400,118 @@ pub fn create_metadata_for_plan(
             let (verdict_title, verdict_desc) = report
                 .map(|r| r.user_facing_translation())
                 .unwrap_or(("Verified source", "Passed security checks.".to_string()));
+            let resolved_version = match &s.step {
+                installer_core::Step::InstallPackage { version, .. } => version.clone(),
+                _ => None,
+            };
             serde_json::json!({
                 "step_id": s.id,
                 "source_domain": domain,
                 "source_url": url,
                 "verdict_title": verdict_title,
                 "verdict_desc": verdict_desc,
+                "resolved_version": resolved_version,
             })
         })
         .collect()
+}
+
+/// Fills install-step versions from adapter metadata when the plan left them unset (R23).
+async fn enrich_plan_versions(plan: &mut Plan, state: &AppState) {
+    let adapters = installer_core::AdapterRegistry::with_system_defaults(state.os_provider.clone());
+    for step in &mut plan.steps {
+        let installer_core::Step::InstallPackage {
+            package_id,
+            version,
+            source_adapter,
+            ..
+        } = &mut step.step
+        else {
+            continue;
+        };
+        if version.as_ref().is_some_and(|v| !v.is_empty() && v != "latest") {
+            // Keep an explicit version in the step label.
+            if !step.description.contains(version.as_deref().unwrap_or("")) {
+                if let Some(v) = version.as_deref() {
+                    step.description =
+                        format_install_label(&step.description, package_id, v, *source_adapter);
+                }
+            }
+            continue;
+        }
+        let Some(adapter) = adapters.get(*source_adapter) else {
+            continue;
+        };
+        if let Ok(meta) = adapter.resolve_metadata(package_id, None).await {
+            if !meta.resolved_version.is_empty() && meta.resolved_version != "latest" {
+                *version = Some(meta.resolved_version.clone());
+                step.description = format_install_label(
+                    &step.description,
+                    package_id,
+                    &meta.resolved_version,
+                    *source_adapter,
+                );
+            }
+        }
+    }
+}
+
+fn format_install_label(
+    previous: &str,
+    package_id: &str,
+    version: &str,
+    adapter: installer_core::AdapterKind,
+) -> String {
+    let eco = match adapter {
+        installer_core::AdapterKind::Winget => "winget",
+        installer_core::AdapterKind::Npm => "npm",
+        installer_core::AdapterKind::PyPI => "pip",
+        installer_core::AdapterKind::Cargo => "cargo",
+        _ => "package",
+    };
+    let name = if previous.to_ascii_lowercase().starts_with("install ") {
+        // Prefer a human title already in the description over a raw id.
+        let rest = previous["Install ".len()..].trim();
+        let cut = rest
+            .find(" (")
+            .or_else(|| rest.find(char::is_numeric))
+            .unwrap_or(rest.len());
+        let candidate = rest[..cut].trim();
+        if candidate.is_empty() {
+            package_id
+        } else {
+            candidate
+        }
+    } else {
+        package_id
+    };
+    format!("Install {name} {version} ({eco})")
+}
+
+fn parse_confirm_validation(msg: &str) -> Option<serde_json::Value> {
+    // "plan validation error: confirm:PyPI:reqeusts:requests"
+    let idx = msg.find("confirm:")?;
+    let rest = &msg[idx + "confirm:".len()..];
+    let mut parts = rest.splitn(3, ':');
+    let eco = parts.next()?.trim();
+    let typed = parts.next()?.trim();
+    let suggestion = parts.next()?.trim();
+    if typed.is_empty() || suggestion.is_empty() {
+        return None;
+    }
+    let eco_l = eco.to_ascii_lowercase();
+    let ecosystem = match eco_l.as_str() {
+        "pypi" => "pypi",
+        "npm" => "npm",
+        "winget" => "winget",
+        _ => eco_l.as_str(),
+    };
+    Some(serde_json::json!({
+        "kind": "confirm",
+        "typed": typed,
+        "suggestion": suggestion,
+        "ecosystem": ecosystem,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -628,7 +732,7 @@ fn describe_provider_status(status: StatusCode, model: &str) -> String {
 }
 
 /// Reported in the context viewer so a reply can be traced to the prompt that produced it.
-const PROMPT_VERSION: &str = "v26-release-scope";
+const PROMPT_VERSION: &str = "v28-backend-decides";
 
 const STATIC_SYSTEM_PROMPT: &str = "\
 Role\n\
@@ -636,27 +740,28 @@ You are Pixel, SetupPal's assistant: a friendly little ghost who helps people se
 \n\
 Scope\n\
 SetupPal installs anything that installs unattended and passes safety checks: winget, npm, pip, cargo, and CLI installers (Fabric for Minecraft Java). Game, music, chat, and dev apps are fine (LMMS, Discord, Steam, Roblox). A window or sign-in after install is fine.\n\
-Out of scope: Microsoft Store-only apps (Minecraft Bedrock), vendor-page drivers, apps with no unattended installer. If unsure, emit an install intent; SetupPal checks.\n\
+Out of scope: Microsoft Store-only apps (Minecraft Bedrock), vendor-page drivers. If unsure, emit an install intent; SetupPal checks.\n\
 \n\
 How to work\n\
 - Answer the latest message using the whole conversation. Short replies like `php` continue the topic.\n\
 - PC facts are included. Mention a fact only when it changes the answer. Never invent facts.\n\
-- Broad request (\"I want to game\", \"I make music\"): ask what they play or need, offer 2 to 4 installable options in that category. Do not emit manual.\n\
-- Clear request: one sentence on what you'll set up, then the intent block. Don't list steps; the plan card shows them. Never change a package name the user typed—ask if it looks misspelled.\n\
-- New install requests replace any prior plan; do not insist the old plan finish first.\n\
+- Broad request (\"I want to game\", \"I make music\"): ask what they play or need, offer 2 to 4 installable options in that category. No block yet.\n\
+- Named request (\"vlc\", \"modded Minecraft Java with Fabric\") or agreement (\"yes\", \"do it\", \"set it up\"): one sentence on what you'll set up, then the intent block. Don't ask to confirm; the plan card does that. Don't list steps.\n\
+- Never change a package name the user typed; ask if it looks misspelled.\n\
 \n\
 Manual setup guide\n\
 Only when the user named a specific out-of-scope item: start with **Manual setup guide**, say why, short steps, then \"SetupPal can install instead:\" with 2 to 4 same-category options that are not already installed.\n\
 \n\
-Ending a reply\n\
-When they asked for or agreed on what to install, end with one fenced block (fence lines alone):\n\
+Intent block\n\
+Only when you are setting something up, end the reply with one fenced block (fence lines alone). Write the goal in the user's words. Chat, questions, and option lists get plain text and no block:\n\
 ```setuppal-intent\n\
 {\"kind\":\"install\",\"goal\":\"vlc\"}\n\
 ```\n\
-Out-of-scope named item: {\"kind\":\"manual\",\"item\":\"Minecraft Bedrock\",\"reason\":\"only sold in the Microsoft Store\"}. Never emit the block while still asking a question.\n\
+Out-of-scope named item: {\"kind\":\"manual\",\"item\":\"Minecraft Bedrock\",\"reason\":\"only sold in the Microsoft Store\"}.\n\
+No block, no plan: if you say you'll set something up, include it. Skip it only while asking a question.\n\
 \n\
 Style\n\
-Plain words, short replies, markdown ok. Don't open with a greeting after the first message. Don't mirror slang. Never claim you installed or checked anything. Never send an empty reply.";
+Plain words, short replies. Don't open with a greeting after the first message. Don't mirror slang. Never claim you installed or checked anything.";
 
 /// Plain-text facts about this PC. Minecraft details are only added when the chat is about Minecraft.
 fn format_host_facts(
@@ -755,6 +860,28 @@ struct PromptContext {
     recent: Vec<ChatMessageItem>,
     /// How many older messages were folded into the notes.
     compacted: usize,
+    /// True once an assistant turn in this chat already told a joke (R20).
+    joke_used: bool,
+}
+
+/// Heuristic: prior assistant text already contained a joke.
+fn assistant_told_joke(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    const MARKERS: &[&str] = &[
+        "why did the ghost",
+        "why did the",
+        "knock knock",
+        "knock-knock",
+        "lettuce",
+        "who's there",
+        "who is there",
+        "ba dum",
+        "here's a joke",
+        "here is a joke",
+        "joke:",
+        "pun intended",
+    ];
+    MARKERS.iter().any(|m| t.contains(m))
 }
 
 const MEMORY_NOTE_CHARS: usize = 1800;
@@ -799,7 +926,13 @@ fn build_context(raw: &[ChatMessageItem], user_prompt: &str, keep_recent: usize)
         Some(format!("{}{}", head, lines.join("\n")))
     };
 
-    let recent = recent
+    let joke_used = older
+        .iter()
+        .chain(recent.iter())
+        .filter(|m| m.role != "user")
+        .any(|m| assistant_told_joke(&m.content));
+
+    let recent: Vec<ChatMessageItem> = recent
         .iter()
         .map(|m| ChatMessageItem {
             role: if m.role == "user" {
@@ -815,6 +948,7 @@ fn build_context(raw: &[ChatMessageItem], user_prompt: &str, keep_recent: usize)
         memory_note,
         recent,
         compacted: older.len(),
+        joke_used,
     }
 }
 
@@ -879,6 +1013,13 @@ async fn chat_stream_handler(
         "facts": host_facts,
     });
 
+    let os_provider = state.os_provider.clone();
+    let installed_names: Vec<String> = profile
+        .installed_tools
+        .iter()
+        .map(|t| t.binary.executable_name().to_ascii_lowercase())
+        .collect();
+
     let (sender, receiver) = mpsc::channel(32);
     tokio::spawn(async move {
         if send_chat_event(
@@ -892,17 +1033,15 @@ async fn chat_stream_handler(
             return;
         }
 
-        match call_ai_chat_stream(
-            &provider,
-            &raw_msg,
-            &context,
-            &host_facts,
-            max_tokens,
-            &sender,
-        )
-        .await
-        {
+        let mut attempt = call_ai_chat_stream(&provider, &raw_msg, &context, &host_facts, max_tokens, &sender).await;
+        if matches!(&attempt, Err(m) if m == EMPTY_REPLY_ERROR) {
+            // Nothing visible was streamed for an empty reply, so one quiet retry is safe.
+            attempt = call_ai_chat_stream(&provider, &raw_msg, &context, &host_facts, max_tokens, &sender).await;
+        }
+        match attempt {
             Ok((reply, intent)) => {
+                let (reply, intent) = overrule_false_manual(os_provider.as_ref(), reply, intent).await;
+                let intent = intent.map(|i| drop_installed_alternatives(i, &installed_names));
                 if let Some(intent) = intent {
                     let _ = send_chat_event(
                         &sender,
@@ -954,6 +1093,12 @@ fn build_chat_messages(
         "role": "system",
         "content": STATIC_SYSTEM_PROMPT
     })];
+    if context.joke_used {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": "joke_used: true. You already told a joke in this chat. Do not tell another."
+        }));
+    }
     if let Some(note) = &context.memory_note {
         messages.push(serde_json::json!({
             "role": "system",
@@ -1072,7 +1217,7 @@ async fn call_ai_chat_stream(
     }
 
     let (reply, intent_result) = filter.finish();
-    let intent = match intent_result {
+    let mut intent = match intent_result {
         Ok(intent) => intent,
         Err(kind) => {
             warn!(?kind, "setuppal-intent block present but failed validation");
@@ -1080,10 +1225,273 @@ async fn call_ai_chat_stream(
         }
     };
 
+    let reply = strip_empty_fences(&reply);
     if !reply.chars().any(char::is_alphanumeric) {
-        return Err("AI provider returned no usable reply text. Please try again.".to_string());
+        return Err(EMPTY_REPLY_ERROR.to_string());
+    }
+    // "coding tools" or "some apps" names no program, so it is not an install request.
+    if matches!(&intent, Some(SetupIntent::Install { goal, items }) if items.is_empty() && is_vague_goal(goal)) {
+        intent = None;
+    }
+    // kind:manual requires a specifically named out-of-scope item (R18).
+    if matches!(&intent, Some(SetupIntent::Manual { item, .. }) if item.trim().is_empty() || is_broad_request(item) || is_vague_goal(item)) {
+        intent = None;
+    }
+    // Mirrors the app's own check: the goal has to come from what the user said.
+    if let Some(SetupIntent::Install { goal, .. }) = &intent {
+        let said = user_said_blob(user_prompt, context);
+        if !goal_in_user_text(goal, &said) {
+            intent = None;
+        }
+    }
+    // A reply that asks a question and promises nothing is not an install request.
+    if intent.is_some() && reply.trim_end().ends_with('?') && !reply_promises_install(&reply) {
+        intent = None;
+    }
+
+    if intent.is_none() && (reply_commits_to_setup(user_prompt, &reply) || reply_is_manual_guide(&reply)) {
+        let _ = send_chat_event(sender, "plan.pending", serde_json::json!({})).await;
+        intent = tokio::select! {
+            _ = sender.closed() => return Err("Chat stream was cancelled.".to_string()),
+            extracted = extract_install_intent(&client, provider, user_prompt, context, &reply) => extracted,
+        };
     }
     Ok((reply, intent))
+}
+
+/// The model's "manual-only" call is a claim, not a verdict. When winget has one exact,
+/// unattended-installable match for the item, the claim is wrong: turn it into an install
+/// intent and say so, so the chat text and the plan card agree.
+async fn overrule_false_manual(
+    os: &dyn installer_core::OsProvider,
+    reply: String,
+    intent: Option<SetupIntent>,
+) -> (String, Option<SetupIntent>) {
+    let Some(SetupIntent::Manual { item, .. }) = &intent else {
+        return (reply, intent);
+    };
+    let Some(id) = installer_core::resolver::resolve_winget_id(os, item).await else {
+        return (reply, intent);
+    };
+    let plan = installer_core::resolver::single_winget_plan(item, &id);
+    if first_manual(&check_plan(&plan, os).await).is_some() {
+        return (reply, intent);
+    }
+    info!(item = %item, winget_id = %id, "model called an installable app manual-only; overruled");
+    let goal = item.clone();
+    (
+        format!("I can set up {item} for you."),
+        Some(SetupIntent::Install { goal, items: Vec::new() }),
+    )
+}
+
+const EMPTY_REPLY_ERROR: &str = "AI provider returned no usable reply text. Please try again.";
+
+/// "SetupPal can install instead" must never offer something already on the PC,
+/// and must stay in the same category as the blocked item (R18/R22).
+fn drop_installed_alternatives(intent: SetupIntent, installed: &[String]) -> SetupIntent {
+    match intent {
+        SetupIntent::Manual { item, reason, alternatives } => {
+            // Broad / unnamed manual claims are dropped entirely — chat should ask instead.
+            if item.trim().is_empty() || is_broad_request(&item) {
+                return SetupIntent::Manual {
+                    item,
+                    reason,
+                    alternatives: Vec::new(),
+                };
+            }
+            let category = installer_core::detect_category(&item)
+                .unwrap_or(installer_core::AppCategory::Utilities);
+            let mut alternatives: Vec<String> = alternatives
+                .into_iter()
+                .filter(|alt| {
+                    let lower = alt.to_ascii_lowercase();
+                    !installed.iter().any(|tool| {
+                        lower
+                            .split(|c: char| !c.is_ascii_alphanumeric())
+                            .any(|word| word == tool)
+                    })
+                })
+                .collect();
+            alternatives = installer_core::filter_same_category(&alternatives, category);
+            if alternatives.len() < 2 {
+                alternatives = installer_core::alternatives_for(category, installed, 4)
+                    .into_iter()
+                    .map(|a| a.name)
+                    .collect();
+            }
+            SetupIntent::Manual { item, reason, alternatives }
+        }
+        other => other,
+    }
+}
+
+const AGREEMENT_REPLIES: &[&str] = &[
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "do it", "go", "go ahead", "set it up",
+    "install it", "please", "yes please", "lets go", "let's go", "sounds good", "do that",
+    "go for it", "proceed", "continue", "start", "lets do it", "let's do it",
+];
+
+const COMMIT_PHRASES: &[&str] = &[
+    "i will set up", "i'll set up", "i will install", "i'll install", "i can set up",
+    "i can install", "setting up", "installing", "let's set up", "let's get", "i'll get",
+];
+
+/// The user agreed, or the reply promised an install, yet no intent block arrived.
+fn reply_commits_to_setup(user_prompt: &str, reply: &str) -> bool {
+    if reply.trim_end().ends_with('?') {
+        return false;
+    }
+    let said: String = user_prompt
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '\'')
+        .collect();
+    let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
+    if AGREEMENT_REPLIES.contains(&said.as_str()) {
+        return true;
+    }
+    reply_promises_install(&reply)
+}
+
+fn user_said_blob(user_prompt: &str, context: &PromptContext) -> String {
+    let mut blob = user_prompt.to_lowercase();
+    for item in context.recent.iter().filter(|i| i.role == "user") {
+        blob.push('\n');
+        blob.push_str(&item.content.to_lowercase());
+    }
+    blob
+}
+
+fn goal_in_user_text(goal: &str, said: &str) -> bool {
+    const FILLER: &[&str] = &[
+        "a", "an", "and", "the", "for", "with", "to", "of", "on", "in", "my", "plus", "set", "setup", "up",
+        "install", "installer", "latest", "version", "app", "mod", "mods", "modded", "loader",
+    ];
+    let g = goal.to_lowercase();
+    let g = g.trim();
+    if g.is_empty() {
+        return false;
+    }
+    if said.contains(g) {
+        return true;
+    }
+    if let Some(last) = g.rsplit('.').next() {
+        if last.len() >= 2 && said.contains(last) {
+            return true;
+        }
+    }
+    let words: Vec<&str> = g
+        .split(|c: char| !(c.is_ascii_alphanumeric() || "+#.".contains(c)))
+        .filter(|w| !w.is_empty() && !FILLER.contains(w))
+        .collect();
+    !words.is_empty() && words.iter().all(|w| said.contains(w))
+}
+
+fn reply_is_manual_guide(reply: &str) -> bool {
+    reply.trim_start().to_lowercase().starts_with("**manual setup guide**")
+}
+
+const VAGUE_GOAL_WORDS: &[&str] = &[
+    "some", "any", "tools", "tool", "apps", "app", "software", "programs", "program", "things", "stuff",
+    "coding", "code", "learning", "learn", "to", "start", "started", "beginner", "dev", "development", "developer", "programming", "gaming", "game", "games",
+    "music", "setup", "essentials", "basics", "everything", "and", "the", "a", "for", "my", "pc", "computer",
+];
+
+/// True when a goal only names a category, never a program.
+fn is_vague_goal(goal: &str) -> bool {
+    goal.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .all(|w| VAGUE_GOAL_WORDS.contains(&w))
+}
+
+fn reply_promises_install(reply: &str) -> bool {
+    let reply = reply.to_lowercase().replace('\u{2019}', "'");
+    COMMIT_PHRASES.iter().any(|p| reply.contains(p))
+}
+
+/// Removes code fences with nothing inside (a leftover of a stripped block).
+fn strip_empty_fences(reply: &str) -> String {
+    let mut out = reply.to_string();
+    while let Some(start) = out.find("```") {
+        let after = &out[start + 3..];
+        let Some(end) = after.find("```") else { break };
+        if after[..end].trim().is_empty() {
+            out.replace_range(start..start + 6 + end, "");
+        } else {
+            break;
+        }
+    }
+    out.trim_end().to_string()
+}
+
+const INTENT_EXTRACT_PROMPT: &str = "\
+You turn a chat into a SetupPal install request. Reply with one JSON object only, no other text.\n\
+If the user asked for or agreed to install something specific: {\"kind\":\"install\",\"goal\":\"<what to install, in the user's words>\"}\n\
+If the assistant said SetupPal cannot install a specific app and gave a manual guide: {\"kind\":\"manual\",\"item\":\"<app name>\",\"reason\":\"<short reason>\"}\n\
+Otherwise: {\"kind\":\"none\"}";
+
+/// One small non-streaming call that recovers the intent the chat reply forgot to include.
+async fn extract_install_intent(
+    client: &reqwest::Client,
+    provider: &ResolvedProvider,
+    user_prompt: &str,
+    context: &PromptContext,
+    reply: &str,
+) -> Option<SetupIntent> {
+    let mut transcript = String::new();
+    for item in context.recent.iter().rev().take(6).rev() {
+        let who = if item.role == "user" { "User" } else { "Assistant" };
+        transcript.push_str(&format!("{who}: {}\n", clip(&item.content, 300)));
+    }
+    transcript.push_str(&format!("User: {}\nAssistant: {}", clip(user_prompt, 300), clip(reply, 300)));
+
+    let body = serde_json::json!({
+        "model": provider.model,
+        "messages": [
+            { "role": "system", "content": INTENT_EXTRACT_PROMPT },
+            { "role": "user", "content": transcript },
+        ],
+        "temperature": 0,
+        "max_tokens": 120,
+        "stream": false
+    });
+    let response = client
+        .post(provider.chat_completions_url())
+        .bearer_auth(provider.api_key())
+        .json(&body)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        warn!(status = %response.status(), "intent extraction call failed");
+        return None;
+    }
+    let value: serde_json::Value = response.json().await.ok()?;
+    let content = value["choices"][0]["message"]["content"].as_str()?;
+    parse_extracted_intent(content)
+}
+
+fn parse_extracted_intent(content: &str) -> Option<SetupIntent> {
+    let content = content.rsplit("</think>").next().unwrap_or(content);
+    let start = content.find('{')?;
+    let end = content.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    let json = &content[start..=end];
+    let kind = serde_json::from_str::<serde_json::Value>(json).ok()?;
+    if kind["kind"] != "install" && kind["kind"] != "manual" {
+        return None;
+    }
+    match intent::parse_intent_json(json) {
+        Ok(intent) => Some(intent),
+        Err(kind) => {
+            warn!(?kind, "extracted intent failed validation");
+            None
+        }
+    }
 }
 
 async fn consume_chat_sse_line(
@@ -1119,6 +1527,9 @@ async fn consume_chat_sse_line(
                     serde_json::json!({ "text": forward }),
                 )
                 .await?;
+            }
+            if filter.take_intent_opened() {
+                send_chat_event(sender, "plan.pending", serde_json::json!({})).await?;
             }
         }
         return Ok(false);
@@ -1180,6 +1591,14 @@ async fn plan_handler(
         })
         .filter(|c| !c.is_empty());
 
+    // Broad / category-only goals are chat questions, never a manual card (R18).
+    if req.verify_manual && is_broad_request(&req.goal) {
+        return Ok(Json(serde_json::json!({
+            "kind": "broad",
+            "message": "Ask what they need and offer 2 to 4 installable options in that category.",
+        })));
+    }
+
     let mut plan = if req.verify_manual {
         let goal = req.goal.trim();
         match installer_core::resolver::resolve_winget_id(state.os_provider.as_ref(), goal).await {
@@ -1187,7 +1606,7 @@ async fn plan_handler(
             None => return Ok(Json(serde_json::json!({ "kind": "no_match" }))),
         }
     } else {
-        state
+        match state
             .planner
             .create_plan_with_context(
                 &req.goal,
@@ -1196,7 +1615,16 @@ async fn plan_handler(
                 context.as_deref(),
             )
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        {
+            Ok(plan) => plan,
+            Err(e) => {
+                let msg = e.to_string();
+                if let Some(payload) = parse_confirm_validation(&msg) {
+                    return Ok(Json(payload));
+                }
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, msg));
+            }
+        }
     };
     uniquify_plan_id(&mut plan);
 
@@ -1206,7 +1634,18 @@ async fn plan_handler(
         else {
             unreachable!("first_manual only returns ManualOnly");
         };
-        let guide = manual_guide(&manual.item, *reason, detail, &state.recipes);
+        if is_broad_request(&manual.item) {
+            return Ok(Json(serde_json::json!({
+                "kind": "broad",
+                "message": "Ask what they need and offer 2 to 4 installable options in that category.",
+            })));
+        }
+        let installed: Vec<String> = profile
+            .installed_tools
+            .iter()
+            .map(|t| t.binary.executable_name().to_ascii_lowercase())
+            .collect();
+        let guide = manual_guide_with_installed(&manual.item, *reason, detail, &installed);
         return Ok(Json(serde_json::json!(guide)));
     }
 
@@ -1216,6 +1655,7 @@ async fn plan_handler(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     apply_to_safety_report(&install_checks, &mut safety_report);
+    enrich_plan_versions(&mut plan, &state).await;
     let step_metadata = create_metadata_for_plan(&plan, &safety_report);
 
     state
@@ -1799,6 +2239,63 @@ mod prompt_tests {
     }
 
     #[test]
+    fn agreement_or_a_promised_install_triggers_intent_recovery() {
+        assert!(reply_commits_to_setup("do it", "I will set up Fabric for Minecraft Java."));
+        assert!(reply_commits_to_setup("Set it up!", "On it."));
+        assert!(reply_commits_to_setup("fabric", "I'll set up Fabric for Minecraft Java."));
+        assert!(!reply_commits_to_setup("do it", "Which version of Python do you want?"));
+        assert!(!reply_commits_to_setup("what is winget", "Winget is Windows' package manager."));
+    }
+
+    #[test]
+    fn category_only_goals_are_vague_but_named_programs_are_not() {
+        assert!(is_vague_goal("coding tools"));
+        assert!(is_vague_goal("some gaming apps"));
+        assert!(!is_vague_goal("vlc"));
+        assert!(!is_vague_goal("Node.js"));
+        assert!(!is_vague_goal("modded Minecraft Java with Fabric"));
+        assert!(reply_is_manual_guide("  **Manual setup guide** Audacity..."));
+    }
+
+    #[test]
+    fn empty_fences_are_removed_but_real_code_stays() {
+        assert_eq!(strip_empty_fences("Options: VS Code.\n``` ```"), "Options: VS Code.");
+        assert_eq!(strip_empty_fences("Run:\n```\nwinget list\n```"), "Run:\n```\nwinget list\n```");
+        assert!(reply_promises_install("I\u{2019}ll set up VLC"));
+    }
+
+    #[test]
+    fn manual_alternatives_skip_what_is_already_installed() {
+        let intent = SetupIntent::Manual {
+            item: "Minecraft Bedrock".into(),
+            reason: "Store only".into(),
+            alternatives: vec!["Git".into(), "Python 3.12".into(), "Steam".into(), "Prism Launcher".into()],
+        };
+        let got = drop_installed_alternatives(intent, &["git".to_string(), "python".to_string(), "steam".to_string()]);
+        match got {
+            SetupIntent::Manual { alternatives, .. } => {
+                assert!(!alternatives.iter().any(|a| a == "Git" || a.contains("Python") || a == "Steam"));
+                assert!(alternatives.len() >= 2 && alternatives.len() <= 4);
+                // Same category as Minecraft Bedrock (gaming), not dev tools.
+                assert!(alternatives.iter().any(|a| {
+                    a.contains("Discord") || a.contains("Epic") || a.contains("OBS") || a.contains("Roblox") || a.contains("Afterburner")
+                }));
+            }
+            _ => panic!("expected manual"),
+        }
+    }
+
+    #[test]
+    fn extracted_intent_accepts_install_only() {
+        let got = parse_extracted_intent(
+            "<think>hm</think>\n```json\n{\"kind\":\"install\",\"goal\":\"Fabric for Minecraft Java\"}\n```",
+        );
+        assert!(matches!(got, Some(SetupIntent::Install { ref goal, .. }) if goal == "Fabric for Minecraft Java"));
+        assert!(parse_extracted_intent("{\"kind\":\"none\"}").is_none());
+        assert!(parse_extracted_intent("no json here").is_none());
+    }
+
+    #[test]
     fn compacted_notes_label_assistant_turns_neutrally() {
         let history: Vec<ChatMessageItem> = (0..10)
             .flat_map(|i| {
@@ -1814,6 +2311,36 @@ mod prompt_tests {
         assert!(note.contains("- Assistant: answer 0"));
         assert!(!note.contains("- Pixel:"));
         assert_eq!(context.recent.len(), 2);
+        assert!(!context.joke_used);
+    }
+
+    #[test]
+    fn joke_used_is_detected_and_injected_into_chat_messages() {
+        let history = vec![
+            message("user", "hi"),
+            message("assistant", "Why did the ghost cross the road? To get to the other side!"),
+            message("user", "install vlc"),
+        ];
+        let context = build_context(&history, "install vlc", 6);
+        assert!(context.joke_used);
+        let messages = build_chat_messages("install vlc", &context, "- OS: test");
+        assert!(messages.iter().any(|m| {
+            m["role"] == "system"
+                && m["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("joke_used: true")
+        }));
+    }
+
+    #[test]
+    fn confirm_validation_parses_into_payload() {
+        let payload = parse_confirm_validation("plan validation error: confirm:PyPI:reqeusts:requests")
+            .expect("payload");
+        assert_eq!(payload["kind"], "confirm");
+        assert_eq!(payload["typed"], "reqeusts");
+        assert_eq!(payload["suggestion"], "requests");
+        assert_eq!(payload["ecosystem"], "pypi");
     }
 
     #[test]
@@ -1889,5 +2416,192 @@ mod project_dir_tests {
     fn an_invalid_folder_is_an_error_even_for_non_npm_plans() {
         let plan = plan_with(Ecosystem::Winget, AdapterKind::Winget);
         assert!(resolve_working_dir(&plan, Some("Z:\\definitely\\not\\here")).is_err());
+    }
+}
+
+/// Live prompt corpus against the real provider. Run:
+/// `cargo test -p installer_gui live_corpus -- --ignored --nocapture`
+#[cfg(test)]
+mod live_corpus {
+    use super::*;
+
+    enum Expect {
+        Install(&'static str),
+        Manual(&'static str),
+        Nothing,
+    }
+
+    fn turn(role: &str, content: &str) -> ChatMessageItem {
+        ChatMessageItem { role: role.into(), content: content.into() }
+    }
+
+    async fn ask(provider: &ResolvedProvider, history: &[ChatMessageItem], message: &str) -> (String, Option<SetupIntent>) {
+        let context = build_context(history, message, 6);
+        let (tx, mut rx) = mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        call_ai_chat_stream(provider, message, &context, "- OS: Windows 11 (x86_64)\n- Detected tools: git, node", 800, &tx)
+            .await
+            .expect("provider call")
+    }
+
+    fn has_numbered_steps(reply: &str) -> bool {
+        reply.lines().filter(|l| {
+            let t = l.trim_start();
+            t.len() > 2 && t.as_bytes()[0].is_ascii_digit() && (t[1..].starts_with(". ") || t[1..].starts_with(") "))
+        }).count() >= 2
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a provider key and network"]
+    async fn model_follows_the_prompt() {
+        let keys = Arc::new(Keys::with_dotenv(
+            Arc::new(keys::KeyringStore),
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../.env")),
+        ));
+        let state = build_app_state(keys).expect("state");
+        let provider = state.llm.resolve().expect("a provider key");
+        println!("provider={} model={}", provider.kind.id(), provider.model);
+
+        let fabric_hist = vec![
+            turn("user", "Modded Minecraft Java with Fabric"),
+            turn("assistant", "Modded Minecraft Java with Fabric sounds like fun!"),
+        ];
+        let cases: Vec<(&str, Vec<ChatMessageItem>, &str, Expect)> = vec![
+            ("named app", vec![], "install vlc", Expect::Install("vlc")),
+            ("named app 2", vec![], "I need audacity", Expect::Install("audacity")),
+            ("pip", vec![], "pip install requests", Expect::Install("requests")),
+            ("npm", vec![], "install typescript globally with npm", Expect::Install("typescript")),
+            ("game launcher", vec![], "set up discord for me", Expect::Install("discord")),
+            ("fabric first message", vec![], "Modded Minecraft Java with Fabric", Expect::Install("fabric")),
+            ("fabric agree", fabric_hist.clone(), "set it up", Expect::Install("fabric")),
+            ("fabric agree 2", fabric_hist, "do it", Expect::Install("fabric")),
+            ("store only", vec![], "install Minecraft Bedrock", Expect::Manual("bedrock")),
+            ("broad gaming", vec![], "I want to game on my new pc", Expect::Nothing),
+            ("broad music", vec![], "I make music", Expect::Nothing),
+            ("broad dev", vec![], "I'm learning to code", Expect::Nothing),
+            ("smalltalk", vec![], "hi", Expect::Nothing),
+            ("question", vec![], "what can you set up for me?", Expect::Nothing),
+        ];
+
+        let runs = 2;
+        let mut failures = Vec::new();
+        for (label, history, message, expect) in &cases {
+            for run in 1..=runs {
+                let (reply, intent) = ask(&provider, history, message).await;
+                let (reply, intent) = overrule_false_manual(state.os_provider.as_ref(), reply, intent).await;
+                let problem = match (expect, &intent) {
+                    (Expect::Install(w), Some(SetupIntent::Install { goal, .. })) if goal.to_lowercase().contains(w) => None,
+                    (Expect::Manual(w), Some(SetupIntent::Manual { item, .. })) if item.to_lowercase().contains(w) => None,
+                    (Expect::Manual(w), Some(SetupIntent::Install { goal, .. })) if goal.to_lowercase().contains(w) => None,
+                    (Expect::Nothing, None) => None,
+                    (_, got) => Some(format!("intent was {got:?}")),
+                }
+                .or_else(|| has_numbered_steps(&reply).then(|| "reply lists steps".to_string()))
+                .or_else(|| (reply.contains("setuppal-intent") || reply.contains("\"kind\"")).then(|| "intent leaked into the reply".to_string()));
+                println!("[{label} #{run}] {} {:?} :: {}", if problem.is_none() { "ok" } else { "FAIL" }, problem, reply.replace('\n', " ").chars().take(110).collect::<String>());
+                if let Some(p) = problem {
+                    failures.push(format!("{label} #{run}: {p}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[tokio::test]
+    #[ignore = "debug: raw reply for a greeting"]
+    async fn raw_greeting() {
+        let keys = Arc::new(Keys::with_dotenv(
+            Arc::new(keys::KeyringStore),
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../.env")),
+        ));
+        let state = build_app_state(keys).expect("state");
+        let provider = state.llm.resolve().expect("provider");
+        let context = build_context(&[], "hi", 6);
+        let body = serde_json::json!({
+            "model": provider.model,
+            "messages": build_chat_messages("hi", &context, "- OS: Windows 11"),
+            "temperature": 0.5, "max_tokens": 800, "stream": false
+        });
+        let res = reqwest::Client::new().post(provider.chat_completions_url()).bearer_auth(provider.api_key()).json(&body).send().await.unwrap();
+        println!("RAW {}", res.text().await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs winget and network; resolves and checks only, installs nothing"]
+    async fn winget_resolver_and_gate() {
+        let os: Arc<dyn installer_core::OsProvider> = Arc::new(installer_core::os::PlatformOsProvider::new());
+        let ids = [
+            ("audacity", "Audacity.Audacity"), ("ripgrep", "BurntSushi.ripgrep.MSVC"), ("jq", "jqlang.jq"),
+            ("notepad++", "Notepad++.Notepad++"), ("lmms", "LMMS.LMMS"), ("discord", "Discord.Discord"),
+            ("obs studio", "OBSProject.OBSStudio"), ("7-zip", "7zip.7zip"), ("vlc", "VideoLAN.VLC"),
+            ("Audacity.Audacity", "Audacity.Audacity"),
+        ];
+        let mut bad = Vec::new();
+        for (query, want) in ids {
+            let got = installer_core::resolver::resolve_winget_id(os.as_ref(), query).await;
+            println!("resolve {query:18} -> {got:?}");
+            if got.as_deref() != Some(want) { bad.push(format!("{query}: wanted {want}, got {got:?}")); }
+        }
+        for app in ["LMMS", "Discord", "Spotify", "Steam", "Epic Games Launcher", "Roblox", "HWiNFO", "MSI Afterburner", "Notepad++"] {
+            let Some(id) = installer_core::resolver::resolve_winget_id(os.as_ref(), app).await else {
+                println!("gate {app:20} -> no unique winget match");
+                bad.push(format!("{app}: no unique winget match"));
+                continue;
+            };
+            let plan = installer_core::resolver::single_winget_plan(app, &id);
+            let manual = first_manual(&check_plan(&plan, os.as_ref()).await).is_some();
+            println!("gate {app:20} -> {id} manual={manual}");
+            if manual { bad.push(format!("{app} ({id}) wrongly manual-only")); }
+        }
+        let bedrock = installer_core::resolver::resolve_winget_id(os.as_ref(), "Minecraft Bedrock").await;
+        println!("gate Minecraft Bedrock    -> {bedrock:?}");
+        if let Some(id) = bedrock {
+            let plan = installer_core::resolver::single_winget_plan("Minecraft Bedrock", &id);
+            if first_manual(&check_plan(&plan, os.as_ref()).await).is_none() {
+                bad.push(format!("Minecraft Bedrock ({id}) should not be installable"));
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs network and the saved Tavily key; evaluates plans, runs nothing"]
+    async fn live_safety_on_real_plans() {
+        use installer_core::{AdapterKind, Ecosystem, PlanSource, PlannedStep, RiskRating, Step};
+        let keys = Arc::new(Keys::with_dotenv(
+            Arc::new(keys::KeyringStore),
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../.env")),
+        ));
+        let state = build_app_state(keys).expect("state");
+        let profile = state.scanner.scan().await.expect("scan");
+
+        let plan = state.planner.create_plan("Modded Minecraft Java with Fabric", &profile, None).await.expect("recipe plan");
+        let report = state.safety_engine.evaluate_plan(&plan).await.expect("report");
+        for (s, r) in plan.steps.iter().zip(&report.step_reports) {
+            println!("recipe  {:?} {:<42} {}", r.rating, s.description.chars().take(42).collect::<String>(), r.reasons.first().cloned().unwrap_or_default().chars().take(70).collect::<String>());
+        }
+        assert!(report.can_execute, "the Fabric recipe must be executable");
+        assert!(report.step_reports.iter().all(|r| r.rating == RiskRating::Green), "recipe should be all green");
+
+        let fake = |repo: &str| installer_core::Plan {
+            plan_id: "hostile".into(),
+            goal: repo.into(),
+            summary: "x".into(),
+            source: PlanSource::Llm { model: "m".into() },
+            steps: vec![PlannedStep {
+                id: "step-1".into(),
+                description: format!("Install {repo}"),
+                step: Step::InstallPackage {
+                    ecosystem: Ecosystem::GitHub,
+                    package_id: repo.into(),
+                    version: None,
+                    source_adapter: AdapterKind::GitHubReleases,
+                },
+            }],
+        };
+        let fake_report = state.safety_engine.evaluate_plan(&fake("obs-free-tools/obs-studio")).await.expect("report");
+        println!("hostile {:?} {:?}", fake_report.overall_rating, fake_report.step_reports[0].reasons);
+        assert_eq!(fake_report.overall_rating, RiskRating::Red, "a copycat repo must be blocked");
+        assert!(!fake_report.can_execute);
     }
 }

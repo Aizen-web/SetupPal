@@ -35,7 +35,7 @@ pub fn classify_failure(failure: &FailureContext) -> &'static str {
     "other"
 }
 
-fn remediation_is_noop(plan: &Plan, failure: &FailureContext) -> bool {
+pub(crate) fn remediation_is_noop(plan: &Plan, failure: &FailureContext) -> bool {
     if plan.steps.is_empty() {
         return true;
     }
@@ -323,6 +323,61 @@ mod tests {
         assert!(text.contains("Access is denied"));
         assert!(text.contains("partial output"));
         assert!(text.contains("step-1"));
+    }
+
+    #[test]
+    fn noop_remediation_is_dropped_for_not_found_and_isolated_env_only() {
+        let not_found = FailureContext::new(
+            "step-1",
+            Some(0x8A150011u32 as i32),
+            "",
+            "No package found matching input criteria for ripgrep",
+            sample_profile(),
+            vec![],
+            1,
+        );
+        let same_pkg = llm_plan(
+            "fix",
+            vec![crate::types::PlannedStep {
+                id: "fix-1".to_string(),
+                description: "Install ripgrep".to_string(),
+                step: Step::InstallPackage {
+                    ecosystem: Ecosystem::Winget,
+                    package_id: "ripgrep".to_string(),
+                    version: None,
+                    source_adapter: crate::types::AdapterKind::Winget,
+                },
+            }],
+        );
+        assert!(remediation_is_noop(&same_pkg, &not_found));
+
+        let only_env = llm_plan(
+            "fix",
+            vec![crate::types::PlannedStep {
+                id: "fix-1".to_string(),
+                description: "Create env".to_string(),
+                step: Step::CreateIsolatedEnv {
+                    kind: crate::types::IsolationKind::PythonVenv,
+                    path: std::path::PathBuf::from(r"C:\Users\me\.venvs\x"),
+                },
+            }],
+        );
+        assert!(remediation_is_noop(&only_env, &not_found));
+
+        let different = llm_plan(
+            "fix",
+            vec![crate::types::PlannedStep {
+                id: "fix-1".to_string(),
+                description: "Install BurntSushi.ripgrep.MSVC".to_string(),
+                step: Step::InstallPackage {
+                    ecosystem: Ecosystem::Winget,
+                    package_id: "BurntSushi.ripgrep.MSVC".to_string(),
+                    version: None,
+                    source_adapter: crate::types::AdapterKind::Winget,
+                },
+            }],
+        );
+        assert!(!remediation_is_noop(&different, &not_found));
     }
 
     #[tokio::test]

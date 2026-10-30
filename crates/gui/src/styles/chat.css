@@ -148,7 +148,7 @@
   text-transform: uppercase;
 }
 
-/* Timestamps show on hover / keyboard focus only (ui.md 6.1) */
+/* Timestamps show on hover / keyboard focus only (docs/UI.md 6.1) */
 .chat-timestamp {
   font-size: 11px;
   color: var(--ink-soft);
@@ -1065,12 +1065,64 @@
 }
 
 /* ========================================================
+   Plan pending card ("Generating plan")
+   ======================================================== */
+.plan-pending-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.plan-pending-row .plan-subtitle { margin-bottom: 0; }
+
+.plan-pending-spinner {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--accent);
+  animation: plan-pending-spin 800ms linear infinite;
+}
+
+@keyframes plan-pending-spin {
+  to { transform: rotate(360deg); }
+}
+
+.plan-pending-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.plan-pending-skeleton i {
+  display: block;
+  height: 38px;
+  border-radius: var(--radius-md, 10px);
+  background: linear-gradient(90deg, var(--border) 0%, var(--bg-surface) 50%, var(--border) 100%);
+  background-size: 200% 100%;
+  opacity: .55;
+  animation: plan-pending-shimmer 1.4s ease-in-out infinite;
+}
+
+.plan-pending-skeleton i:nth-child(2) { width: 86%; animation-delay: 120ms; }
+.plan-pending-skeleton i:nth-child(3) { width: 70%; animation-delay: 240ms; }
+
+@keyframes plan-pending-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* ========================================================
    Motion preferences
    ======================================================== */
 @media (prefers-reduced-motion: reduce) {
   .chat-bubble.is-new { animation: none; }
   .choice-card, .choice-radio::after, .sys-chev, .chat-continue-btn { transition: none; }
   .chat-typing-indicator i,
-  .chat-stream-caret { animation: none; }
+  .chat-stream-caret,
+  .plan-pending-spinner,
+  .plan-pending-skeleton i { animation: none; }
   .chat-typing-indicator i { opacity: .8; }
 }

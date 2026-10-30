@@ -27,6 +27,9 @@ struct PyPiResponse {
     info: PyPiInfo,
     #[serde(default)]
     urls: Vec<PyPiFile>,
+    /// All releases; used for first-publish age (R13).
+    #[serde(default)]
+    releases: std::collections::HashMap<String, Vec<PyPiFile>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,10 +158,18 @@ impl SourceAdapter for PyPIAdapter {
 
         let best_file = Self::select_best_file(&body.urls);
         let uploaded = best_file.as_ref().and_then(|f| f.upload_time_iso_8601.clone());
+        let first_publish = body
+            .releases
+            .values()
+            .flatten()
+            .filter_map(|f| f.upload_time_iso_8601.as_deref())
+            .min()
+            .map(str::to_string);
 
         let mut meta = PackageMetadata::bare(AdapterKind::PyPI, body.info.name, body.info.version);
         meta.published_at = parse_rfc3339(uploaded.as_deref());
-        meta.age_days = age_days_since(uploaded.as_deref());
+        meta.age_days = age_days_since(first_publish.as_deref())
+            .or_else(|| age_days_since(uploaded.as_deref()));
         meta.download_url = best_file.as_ref().map(|f| f.url.clone());
         meta.expected_sha256 = best_file
             .and_then(|f| f.digests.sha256)

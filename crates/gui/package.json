@@ -13,7 +13,8 @@
     "check:keys": "node ./scripts/check-keys.js",
     "check:offline": "node ./scripts/check-offline.js",
     "check:formatter": "node ./scripts/check-formatter.js",
-    "check:run-log": "node ./scripts/check-run-log.js"
+    "check:run-log": "node ./scripts/check-run-log.js",
+    "check:plan-ui": "node ./scripts/check-plan-ui.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

@@ -1,6 +1,6 @@
 /**
  * SetupPal: Component Styles
- * Exact match to ui.md and reference design
+ * Exact match to docs/UI.md and reference design
  */
 
 /* ========================================================
@@ -1285,6 +1285,11 @@
   gap: 16px;
   overflow-y: auto;
 }
+
+.confirm-card { max-width: 440px; }
+.confirm-message { color: var(--ink-soft); font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.confirm-yes.is-danger { background: #b4443a; border-color: #b4443a; color: #fff; }
 
 .modal-header {
   display: flex;

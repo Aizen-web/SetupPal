@@ -1,6 +1,6 @@
 /**
  * SetupPal: Pixel the ghost, the only mascot.
- * Group IDs follow ui.md 11.4 so ghost.css can target each part.
+ * Group IDs follow docs/UI.md 11.4 so ghost.css can target each part.
  */
 
 /**

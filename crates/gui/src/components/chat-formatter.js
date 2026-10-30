@@ -12,7 +12,7 @@
  *
  * Plus standard markdown: headings, lists, task lists, tables, quotes, code blocks, alerts.
  *
- * Design rules (see ui.md 6.1, 16):
+ * Design rules (see docs/UI.md 6.1, 16):
  *   - one signal per status: icon + word, colour only reinforces
  *   - no decorative emoji, no internal labels ("Section 1", "Live scan")
  *   - things that do not apply are muted, never red

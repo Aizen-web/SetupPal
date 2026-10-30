@@ -6,7 +6,11 @@ use crate::llm::LlmClient;
 use crate::os::OsProvider;
 use crate::plan_scope::validate_plan_scope;
 use crate::recipes::RecipeStore;
-use crate::resolver::{resolve_winget_id, single_winget_plan};
+use crate::resolver::{
+    close_popular_match, is_exact_popular_name, parse_registry_goal, resolve_winget_id,
+    single_registry_plan, single_winget_plan,
+};
+use strsim::levenshtein;
 use crate::types::{Plan, SystemProfile};
 
 /// Converts `Goal + SystemProfile + Optional<UntrustedContext>` into a validated `Plan`.
@@ -77,7 +81,27 @@ impl Planner {
             }
         }
 
-        // 2. Deterministic winget resolve (exact ID or one clear search hit)
+        // 2. pip/npm: exact popular names plan directly; close typos ask first (R11).
+        if untrusted_context.is_none() {
+            if let Some((eco, name)) = parse_registry_goal(trimmed_goal) {
+                if is_exact_popular_name(eco, &name) {
+                    let plan = single_registry_plan(eco, &name, None);
+                    self.validate_plan_structure(&plan)?;
+                    validate_plan_scope(&plan)?;
+                    self.events.emit(AgentEvent::PlanGenerated {
+                        plan: Box::new(plan.clone()),
+                    });
+                    return Ok(plan);
+                }
+                if let Some(suggestion) = close_popular_match(eco, &name) {
+                    return Err(CoreError::Validation(format!(
+                        "confirm:{eco:?}:{name}:{suggestion}"
+                    )));
+                }
+            }
+        }
+
+        // 3. Deterministic winget resolve (exact ID or one clear search hit)
         if untrusted_context.is_none() {
             if let Some(id) = resolve_winget_id(self.os.as_ref(), trimmed_goal).await {
                 let plan = single_winget_plan(trimmed_goal, &id);
@@ -90,7 +114,7 @@ impl Planner {
             }
         }
 
-        // 3. Fall back to the pinned provider with JSON Schema enforcement
+        // 4. Fall back to the pinned provider with JSON Schema enforcement
         self.events.emit(AgentEvent::LlmPlanningFallback {
             goal: trimmed_goal.to_string(),
             model: self.llm.model_name().to_string(),
@@ -111,6 +135,30 @@ impl Planner {
             .propose_plan(&llm_goal, profile, untrusted_context)
             .await?;
         plan.goal = trimmed_goal.to_string();
+
+        // Reject LLM plans that silently rename a typed registry package (R11).
+        if let Some((eco, typed)) = parse_registry_goal(trimmed_goal) {
+            for step in &plan.steps {
+                if let crate::types::Step::InstallPackage {
+                    ecosystem,
+                    package_id,
+                    ..
+                } = &step.step
+                {
+                    if *ecosystem == eco
+                        && !package_id.eq_ignore_ascii_case(&typed)
+                        && (1..=2).contains(&levenshtein(
+                            &typed.to_ascii_lowercase(),
+                            &package_id.to_ascii_lowercase(),
+                        ))
+                    {
+                        return Err(CoreError::Validation(format!(
+                            "confirm:{eco:?}:{typed}:{package_id}"
+                        )));
+                    }
+                }
+            }
+        }
 
         self.validate_plan_structure(&plan)?;
         validate_plan_scope(&plan)?;
@@ -154,7 +202,7 @@ mod tests {
     use super::*;
     use crate::llm::mock::{llm_plan, sample_profile, verify_step, MockLlmClient, RecordedLlmCall};
     use crate::os::mock::{ok, MockOsProvider};
-    use crate::types::{AllowedBinary, PlanSource, Step};
+    use crate::types::{AllowedBinary, Ecosystem, PlanSource, Step};
 
     fn planner_with(llm: Arc<MockLlmClient>) -> (Planner, EventBus) {
         let events = EventBus::default();
@@ -210,6 +258,38 @@ mod tests {
             saw_recipe |= matches!(event, AgentEvent::RecipeMatched { .. });
         }
         assert!(saw_recipe);
+    }
+
+    #[tokio::test]
+    async fn pip_typos_ask_instead_of_planning_a_rename() {
+        let llm = Arc::new(MockLlmClient::new());
+        let (planner, _) = planner_with(llm.clone());
+        for goal in ["pip install reqeusts", "npm i lodahs", "pip install colourama"] {
+            let err = planner
+                .create_plan(goal, &sample_profile(), None)
+                .await
+                .expect_err(goal);
+            let msg = err.to_string();
+            assert!(msg.contains("confirm:"), "{goal} -> {msg}");
+            assert!(!msg.contains("InstallPackage"), "{goal}");
+        }
+        assert!(llm.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn exact_pip_package_plans_without_the_model() {
+        let llm = Arc::new(MockLlmClient::new());
+        let (planner, _) = planner_with(llm.clone());
+        let plan = planner
+            .create_plan("pip install requests", &sample_profile(), None)
+            .await
+            .expect("exact");
+        assert!(matches!(
+            &plan.steps[0].step,
+            Step::InstallPackage { package_id, ecosystem: Ecosystem::PyPI, .. }
+                if package_id == "requests"
+        ));
+        assert!(llm.calls().is_empty());
     }
 
     #[tokio::test]

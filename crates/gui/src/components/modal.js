@@ -77,6 +77,50 @@ export function bindModal(dialog, { onClose, backdrop = null }) {
   }
 }
 
+function escHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * In-app replacement for window.confirm (native dialogs are blocked in the Tauri webview and
+ * would block the UI thread). Mounted on <body>, so view re-renders never remove it.
+ * Resolves true on confirm, false on cancel, Esc, or a backdrop click.
+ */
+export function confirmDialog({ title, message = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false }) {
+  return new Promise((resolve) => {
+    const previous = document.activeElement;
+    const host = document.createElement('div');
+    host.className = 'modal-backdrop';
+    host.innerHTML = `
+      <div class="modal-card confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title" tabindex="-1">
+        <h2 class="modal-title" id="confirm-title">${escHtml(title)}</h2>
+        ${message ? `<p class="confirm-message">${escHtml(message)}</p>` : ''}
+        <div class="confirm-actions">
+          <button type="button" class="btn-review" data-confirm="no">${escHtml(cancelLabel)}</button>
+          <button type="button" class="btn-review confirm-yes${danger ? ' is-danger' : ''}" data-confirm="yes">${escHtml(confirmLabel)}</button>
+        </div>
+      </div>`;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      host.remove();
+      if (previous && typeof previous.focus === 'function' && document.contains(previous)) previous.focus();
+      resolve(value);
+    };
+    host.querySelector('[data-confirm="yes"]').addEventListener('click', () => finish(true));
+    host.querySelector('[data-confirm="no"]').addEventListener('click', () => finish(false));
+    document.body.appendChild(host);
+    bindModal(host.querySelector('[role="dialog"]'), { onClose: () => finish(false), backdrop: host });
+    // Default focus on the safe choice.
+    host.querySelector('[data-confirm="no"]').focus();
+  });
+}
+
 export function isModalOpen() {
   return Boolean(document.querySelector('[role="dialog"][aria-modal="true"]'));
 }

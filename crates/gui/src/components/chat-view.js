@@ -12,6 +12,7 @@ import { pixelVoice } from '../mascot/voicelines.js';
 import { createPixelSvg } from '../mascot/pixel.js';
 import { renderMessage } from './chat-message.js';
 import { esc, safeHttpsUrl } from './html.js';
+import { confirmDialog } from './modal.js';
 import { icon } from './icon.js';
 import { contextButtonHtml, contextModalHtml, bindContextPanel, isContextOpen } from './context-panel.js';
 import { registerSlashCommand, listSlashCommands, matchSlashCommands, runSlashCommand } from './slash-commands.js';
@@ -125,7 +126,13 @@ registerSlashCommand({
       say('Nothing to undo yet. Changes from approved runs show up in History.');
       return;
     }
-    if (!confirm(`Roll back this change on your PC?\n\n${tx.summary}`)) {
+    const ok = await confirmDialog({
+      title: 'Roll back this change?',
+      message: tx.summary,
+      confirmLabel: 'Roll back',
+      danger: true,
+    });
+    if (!ok) {
       say('Undo cancelled.');
       return;
     }
@@ -225,6 +232,27 @@ function renderEmptyState() {
   `;
 }
 
+function renderPackageConfirm(confirm) {
+  if (!confirm?.suggestion) return '';
+  const typed = confirm.typed || 'that name';
+  const suggestion = confirm.suggestion;
+  const eco = confirm.ecosystem || 'package';
+  return `
+    <section class="plan-card package-confirm-card" aria-labelledby="package-confirm-title">
+      <div class="plan-card-head">
+        <div class="plan-card-head-text">
+          <h2 class="plan-title" id="package-confirm-title">Did you mean ${esc(suggestion)}?</h2>
+          <p class="plan-subtitle"><code>${esc(typed)}</code> was not found in ${esc(eco)}. SetupPal will not rename it without asking.</p>
+        </div>
+      </div>
+      <div class="plan-actions-row">
+        <button type="button" class="btn-review confirm-yes" data-confirm-pkg="${esc(suggestion)}" data-confirm-eco="${esc(eco)}">Yes, install ${esc(suggestion)}</button>
+        <button type="button" class="btn-review" data-confirm-dismiss="1">Keep looking</button>
+      </div>
+    </section>
+  `;
+}
+
 function renderManualGuide(guide) {
   if (!guide) return '';
   const alts = Array.isArray(guide.alternatives) ? guide.alternatives : [];
@@ -252,6 +280,21 @@ function renderManualGuide(guide) {
           </div>
         </div>
       ` : ''}
+    </section>
+  `;
+}
+
+function renderPlanPending(pending) {
+  return `
+    <section class="plan-card plan-pending-card" role="status" aria-live="polite" aria-busy="true">
+      <div class="plan-pending-row">
+        <span class="plan-pending-spinner" aria-hidden="true"></span>
+        <div class="plan-card-head-text">
+          <h2 class="plan-title">Generating plan</h2>
+          <p class="plan-subtitle">${esc(pending.label)}</p>
+        </div>
+      </div>
+      <div class="plan-pending-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>
     </section>
   `;
 }
@@ -406,6 +449,7 @@ export function renderChatView(container) {
   const isWorking = Boolean(plan?.tasks?.some((task) => task.status === 'running'));
   const isGenerating = Boolean(state.isChatGenerating);
   const hasMessages = Boolean(state.chatMessages && state.chatMessages.length > 0);
+  const planPending = state.planPending?.conversationId === state.activeConversationId ? state.planPending : null;
   const showTerminal = isHacker && state.terminalTab === 'terminal';
 
   // Preserve scroll position (the DOM is rebuilt below)
@@ -483,8 +527,11 @@ export function renderChatView(container) {
                 })).join('')}
               </div>
             ` : renderEmptyState()}
-            ${renderPlanCard(plan)}
-            ${!plan?.tasks?.length ? renderManualGuide(state.manualGuide) : ''}
+            ${planPending ? renderPlanPending(planPending) : `
+              ${renderPackageConfirm(state.packageConfirm)}
+              ${renderPlanCard(plan)}
+              ${!plan?.tasks?.length && !state.packageConfirm ? renderManualGuide(state.manualGuide) : ''}
+            `}
           </div>
         `}
       </div>
@@ -519,9 +566,39 @@ export function renderChatView(container) {
 
   bindHeader(container);
   bindPlanCard(container, plan);
+  bindPackageConfirm(container);
   bindMessages(container);
   bindComposer(container, prevValue);
-  restoreScroll(container, { newMsgIds, firstRender, wasAtBottom, prevScrollTop });
+  const scrollToPlan = Boolean(state.scrollToPlan);
+  if (scrollToPlan) {
+    store.setState(s => (s.scrollToPlan ? { ...s, scrollToPlan: false } : s));
+  }
+  restoreScroll(container, { newMsgIds, firstRender, wasAtBottom, prevScrollTop, scrollToPlan });
+}
+
+function bindPackageConfirm(container) {
+  const yes = container.querySelector('[data-confirm-pkg]');
+  if (yes) {
+    yes.onclick = () => {
+      const name = yes.getAttribute('data-confirm-pkg');
+      const eco = yes.getAttribute('data-confirm-eco') || 'pypi';
+      const goal = eco === 'npm' ? `npm install ${name}`
+        : eco === 'winget' ? `install ${name}`
+        : `pip install ${name}`;
+      store.setState(s => ({ ...s, packageConfirm: null }));
+      const conversationId = store.getState().activeConversationId;
+      // Include the confirmed name so intent grounding accepts the rename the user just approved.
+      const history = [
+        ...(store.getState().chatMessages || []),
+        { sender: 'user', text: goal },
+      ];
+      bridge.handleIntent(conversationId, { kind: 'install', goal, items: [] }, history);
+    };
+  }
+  const dismiss = container.querySelector('[data-confirm-dismiss]');
+  if (dismiss) {
+    dismiss.onclick = () => store.setState(s => ({ ...s, packageConfirm: null }));
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -884,7 +961,7 @@ function bindComposer(container, prevValue) {
   };
 }
 
-function restoreScroll(container, { newMsgIds, firstRender, wasAtBottom, prevScrollTop }) {
+function restoreScroll(container, { newMsgIds, firstRender, wasAtBottom, prevScrollTop, scrollToPlan = false }) {
   const scrollArea = container.querySelector('.workspace-scroll-area');
   if (!scrollArea) return;
 
@@ -897,6 +974,16 @@ function restoreScroll(container, { newMsgIds, firstRender, wasAtBottom, prevScr
   const chatStream = container.querySelector('#chat-thread-stream');
   if (!chatStream) return;
   requestAnimationFrame(() => {
+    // Plan card appeared: bring it into view without resetting the thread to the top (R23).
+    if (scrollToPlan) {
+      const card = scrollArea.querySelector('.plan-card:not(.plan-pending-card)');
+      if (card) {
+        const offset = card.getBoundingClientRect().top - scrollArea.getBoundingClientRect().top;
+        scrollArea.scrollTop = Math.max(0, scrollArea.scrollTop + offset - 12);
+        return;
+      }
+    }
+
     const newEls = newMsgIds
       .map(id => [...chatStream.querySelectorAll('[data-msg-id]')].find(el => el.getAttribute('data-msg-id') === String(id)))
       .filter(Boolean);

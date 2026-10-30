@@ -33,6 +33,18 @@ pub fn package_covered_by_goal(package_id: &str, goal: &str) -> bool {
     false
 }
 
+/// The name a download should be judged by: the Fabric installer counts as "fabric", a URL by
+/// its file name, and a registry id (`owner/repo`, mod slug) as written.
+fn download_subject(id: &str) -> &str {
+    if id.eq_ignore_ascii_case(crate::adapters::vendor::FABRIC_INSTALLER_ID) {
+        return "fabric";
+    }
+    if id.starts_with("https://") || id.starts_with("http://") {
+        return id.rsplit('/').find(|s| !s.is_empty()).unwrap_or(id);
+    }
+    id
+}
+
 fn goal_allows_all_installs(plan: &Plan) -> bool {
     match &plan.source {
         PlanSource::Recipe { .. } => true, // recipe triggers are stack phrases; steps are the recipe
@@ -62,10 +74,17 @@ pub fn validate_plan_scope(plan: &Plan) -> Result<(), CoreError> {
     }
 
     for step in &plan.steps {
-        if let Step::InstallPackage { package_id, .. } = &step.step {
-            if !package_covered_by_goal(package_id, &plan.goal) {
+        let requested = match &step.step {
+            Step::InstallPackage { package_id, .. } => Some(package_id.as_str()),
+            Step::DownloadArtifact { id, .. } if matches!(plan.source, PlanSource::Llm { .. }) => {
+                Some(download_subject(id))
+            }
+            _ => None,
+        };
+        if let Some(name) = requested {
+            if !package_covered_by_goal(name, &plan.goal) {
                 return Err(CoreError::Validation(format!(
-                    "plan includes unrequested package `{package_id}` (goal: {})",
+                    "plan includes unrequested package `{name}` (goal: {})",
                     plan.goal
                 )));
             }
@@ -251,6 +270,31 @@ mod tests {
             ],
         };
         assert!(validate_plan_scope(&plan).is_err());
+    }
+
+    #[test]
+    fn ai_plans_cannot_add_unrequested_downloads() {
+        let download = |id: &str| PlannedStep {
+            id: format!("dl-{id}"),
+            description: "download".into(),
+            step: Step::DownloadArtifact {
+                adapter: AdapterKind::Modrinth,
+                id: id.into(),
+                version: "1".into(),
+                destination: PathBuf::from("%APPDATA%/.minecraft/mods/x.jar"),
+                expected_sha256: None,
+            },
+        };
+        let plan = |steps| Plan {
+            plan_id: "p".into(),
+            goal: "fabric with sodium".into(),
+            summary: "x".into(),
+            source: PlanSource::Llm { model: "test".into() },
+            steps,
+        };
+        validate_plan_scope(&plan(vec![download("fabric-installer"), download("sodium")])).expect("requested");
+        let err = validate_plan_scope(&plan(vec![download("sodium"), download("xray-hack")])).expect_err("extra");
+        assert!(err.to_string().contains("xray-hack"));
     }
 
     #[test]

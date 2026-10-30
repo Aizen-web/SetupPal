@@ -3,6 +3,8 @@
 Applies to: the desktop app (a Tauri v2 window around the same web UI). The website reuses the same tokens, mascot and components.
 Supersedes: v0.2 of this file and `SetupPal-UI-Style-Guide.md` (v0.1).
 
+> **Pixel bubbles are flavor only.** They are short, ambiguous, and fun. They never state install facts and **never quote or paraphrase the user**. Facts belong in the plan card, Task panel, terminal, and History (see section 11.3).
+
 ---
 
 ## 0. What changed

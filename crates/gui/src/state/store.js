@@ -11,7 +11,7 @@ const ACTIVE_CONV_KEY = 'setuppal_active_conv_id_v2';
 const LEGACY_PET_KEY = 'setuppal_active_pet';
 const DEFAULT_TITLE = 'New setup';
 
-/** Minimum time in a mode before auto mode switches back (ui.md 2.3). */
+/** Minimum time in a mode before auto mode switches back (docs/UI.md 2.3). */
 export const MODE_MIN_DWELL_MS = 2000;
 
 function generateConvId() {
@@ -27,6 +27,7 @@ function createNewConversation(title = DEFAULT_TITLE) {
     chatMessages: [],
     activePlan: null,
     manualGuide: null,
+    packageConfirm: null,
     terminalLogs: [],
   };
 }
@@ -122,6 +123,11 @@ class Store {
       // Active plan and terminal log (restored from the active conversation)
       activePlan: activeConv.activePlan || null,
       manualGuide: activeConv.manualGuide || null,
+      packageConfirm: activeConv.packageConfirm || null,
+      // { conversationId, label } while a plan is being generated; never persisted
+      planPending: null,
+      // When true, chat-view scrolls the plan card into view without jumping to the top (R23).
+      scrollToPlan: false,
       terminalTab: 'terminal', // 'terminal' | 'chat' (Hacker mode tab strip)
       terminalLogs: activeConv.terminalLogs || [],
 
@@ -230,13 +236,14 @@ class Store {
       let changed = false;
       const convs = this.state.conversations.map(c => {
         if (c.id === this.state.activeConversationId) {
-          if (c.chatMessages !== this.state.chatMessages || c.activePlan !== this.state.activePlan || c.manualGuide !== this.state.manualGuide || c.terminalLogs !== this.state.terminalLogs) {
+          if (c.chatMessages !== this.state.chatMessages || c.activePlan !== this.state.activePlan || c.manualGuide !== this.state.manualGuide || c.packageConfirm !== this.state.packageConfirm || c.terminalLogs !== this.state.terminalLogs) {
             changed = true;
             return {
               ...c,
               chatMessages: this.state.chatMessages,
               activePlan: this.state.activePlan,
               manualGuide: this.state.manualGuide,
+              packageConfirm: this.state.packageConfirm,
               terminalLogs: (this.state.terminalLogs || []).slice(-100),
               updatedAt: Date.now()
             };
@@ -258,7 +265,7 @@ class Store {
     const s = this.state;
     return (s.conversations || []).map(c => (
       c.id === s.activeConversationId
-        ? { ...c, chatMessages: s.chatMessages, activePlan: s.activePlan, manualGuide: s.manualGuide, terminalLogs: s.terminalLogs, updatedAt: Date.now() }
+        ? { ...c, chatMessages: s.chatMessages, activePlan: s.activePlan, manualGuide: s.manualGuide, packageConfirm: s.packageConfirm, terminalLogs: s.terminalLogs, updatedAt: Date.now() }
         : c
     ));
   }
@@ -275,6 +282,7 @@ class Store {
       isChatGenerating: false,
       activePlan: null,
       manualGuide: null,
+      packageConfirm: null,
       terminalLogs: newConv.terminalLogs,
       activePage: 'chats',
       recentChats: toRecent(allConvs, newConv.id),
@@ -303,6 +311,7 @@ class Store {
       isChatGenerating: (targetConv.chatMessages || []).some(message => message.isStreaming),
       activePlan: targetConv.activePlan || null,
       manualGuide: targetConv.manualGuide || null,
+      packageConfirm: targetConv.packageConfirm || null,
       terminalLogs: targetConv.terminalLogs || [],
       activePage: 'chats',
       recentChats: toRecent(updatedConvs, targetConv.id),
@@ -338,6 +347,7 @@ class Store {
       isChatGenerating: (nextConv.chatMessages || []).some(message => message.isStreaming),
       activePlan: nextConv.activePlan || null,
       manualGuide: nextConv.manualGuide || null,
+      packageConfirm: nextConv.packageConfirm || null,
       terminalLogs: nextConv.terminalLogs || [],
       recentChats: toRecent(remaining, nextActiveId),
     });

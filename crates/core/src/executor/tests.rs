@@ -123,6 +123,7 @@ fn plan_report(steps: &[(&str, RiskRating)]) -> PlanSafetyReport {
         overall_score: 50,
         step_reports,
         can_execute: overall != RiskRating::Red,
+        notes: Vec::new(),
     }
 }
 

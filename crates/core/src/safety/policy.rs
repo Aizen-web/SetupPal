@@ -1,7 +1,7 @@
 use std::path::Path;
 use url::Url;
 
-use crate::types::Step;
+use crate::types::{AdapterKind, Plan, Step, VendorInstaller};
 
 /// Hardcoded allowlist of official package registries and vendor download domains.
 /// Any URL outside this allowlist triggers an immediate `RiskRating::Red` hard block.
@@ -33,6 +33,22 @@ pub const ALLOWED_DOWNLOAD_DOMAINS: &[&str] = &[
     "aka.ms",
     "sh.rustup.rs",
     "static.rust-lang.org",
+];
+
+/// Allowlisted hosts that serve anyone's uploads. Being on one says nothing about who published
+/// a file, so raw links to them are refused; the registry adapter checks the project instead.
+pub const SHARED_UPLOAD_HOSTS: &[&str] = &[
+    "github.com",
+    "api.github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "api.modrinth.com",
+    "cdn.modrinth.com",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+    "crates.io",
+    "static.crates.io",
 ];
 
 /// Shell metacharacters forbidden inside `RunVerifyCommand` arguments or package identifiers.
@@ -82,6 +98,35 @@ pub fn is_url_domain_allowlisted(raw_url: &str) -> Result<bool, String> {
         host_lower == domain || host_lower.ends_with(&format!(".{domain}"))
     });
     Ok(allowed)
+}
+
+/// True when `raw_url` points at a host from [SHARED_UPLOAD_HOSTS].
+pub fn is_shared_upload_url(raw_url: &str) -> bool {
+    Url::parse(raw_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| SHARED_UPLOAD_HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))))
+}
+
+/// A vendor installer runs its jar with `java -jar`, so it may only run the file an earlier
+/// step of the same plan downloaded through the vendor's own release feed.
+pub fn vendor_installer_source_ok(plan: &Plan, step_index: usize) -> bool {
+    let Some(Step::RunVendorInstaller { installer, installer_path, .. }) =
+        plan.steps.get(step_index).map(|s| &s.step)
+    else {
+        return true;
+    };
+    let wanted_id = match installer {
+        VendorInstaller::FabricClient => crate::adapters::vendor::FABRIC_INSTALLER_ID,
+    };
+    let same_path = |p: &Path| p.to_string_lossy().eq_ignore_ascii_case(&installer_path.to_string_lossy());
+    plan.steps[..step_index].iter().any(|s| {
+        matches!(
+            &s.step,
+            Step::DownloadArtifact { adapter: AdapterKind::OfficialVendorUrl, id, destination, .. }
+                if id.eq_ignore_ascii_case(wanted_id) && same_path(destination)
+        )
+    })
 }
 
 /// Validates that a string does not contain any shell metacharacters (`; | & > < $ \` `).
@@ -178,14 +223,24 @@ pub fn evaluate_step_policy(step: &Step, description: &str) -> Vec<String> {
             violations.extend(scan_for_destructive_patterns(package_id));
         }
         Step::DownloadArtifact {
+            adapter,
             id,
             version,
             destination,
             expected_sha256,
-            ..
         } => {
             if id.starts_with("http://") || id.starts_with("https://") {
                 match is_url_domain_allowlisted(id) {
+                    Ok(true) if is_shared_upload_url(id) => violations.push(format!(
+                        "Raw link `{id}` is on a site anyone can upload to; download it through the {} registry so the project can be checked",
+                        match adapter {
+                            AdapterKind::Modrinth => "Modrinth",
+                            AdapterKind::PyPI => "PyPI",
+                            AdapterKind::Npm => "npm",
+                            AdapterKind::Cargo => "crates.io",
+                            _ => "GitHub Releases",
+                        }
+                    )),
                     Ok(true) => {}
                     Ok(false) => violations.push(format!(
                         "Artifact URL `{id}` uses an unapproved domain"
@@ -326,6 +381,20 @@ mod tests {
         assert_eq!(is_url_domain_allowlisted("https://static.crates.io/crates/x"), Ok(true));
         assert_eq!(is_url_domain_allowlisted("https://evil-github.com/x"), Ok(false));
         assert!(is_url_domain_allowlisted("http://github.com/x").is_err());
+    }
+
+    #[test]
+    fn raw_links_to_shared_upload_hosts_are_blocked() {
+        let step = |id: &str| Step::DownloadArtifact {
+            adapter: AdapterKind::OfficialVendorUrl,
+            id: id.to_string(),
+            version: "1".to_string(),
+            destination: PathBuf::from("%LOCALAPPDATA%/SetupPal/downloads/x.jar"),
+            expected_sha256: None,
+        };
+        assert!(!evaluate_step_policy(&step("https://github.com/evil/x/releases/download/v1/x.jar"), "x").is_empty());
+        assert!(!evaluate_step_policy(&step("https://cdn.modrinth.com/data/x/x.jar"), "x").is_empty());
+        assert!(evaluate_step_policy(&step("https://maven.fabricmc.net/net/fabricmc/x.jar"), "x").is_empty());
     }
 
     #[test]

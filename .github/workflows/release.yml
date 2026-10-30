@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-nsis:
+    name: Build NSIS installer
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crates/gui/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install WebView2 evergreen bootstrapper deps
+        shell: pwsh
+        run: |
+          # windows-latest images usually include WebView2 Runtime; ensure tauri CLI can build.
+          Write-Host "Building SetupPal NSIS bundle via npm run build:app"
+
+      - name: npm ci (gui)
+        working-directory: crates/gui
+        run: npm ci
+
+      - name: Build app (NSIS)
+        working-directory: crates/gui
+        shell: pwsh
+        run: npm run build:app
+
+      - name: Locate NSIS artifact
+        id: artifact
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "target/release/bundle/nsis",
+            "crates/gui/src-tauri/target/release/bundle/nsis"
+          )
+          $dir = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $dir) {
+            Get-ChildItem -Recurse -Filter *.exe -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match 'bundle[\\/]nsis' } |
+              Select-Object -First 5 FullName
+            throw "NSIS bundle directory not found"
+          }
+          $exe = Get-ChildItem -LiteralPath $dir -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "No .exe in $dir" }
+          Write-Host "Found $($exe.FullName)"
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload NSIS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SetupPal-NSIS
+          path: ${{ steps.artifact.outputs.path }}
+          if-no-files-found: error

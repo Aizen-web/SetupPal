@@ -11,7 +11,9 @@ try {
         @{ Name = "Key migration"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:keys") },
         @{ Name = "Chat formatter"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:formatter") },
         @{ Name = "Run log"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:run-log") },
-        @{ Name = "Offline assets and CSP"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:offline") }
+        @{ Name = "Plan UI"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:plan-ui") },
+        @{ Name = "Offline assets and CSP"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:offline") },
+        @{ Name = "Persona corpus (deterministic)"; Command = "node"; Args = @("scripts/persona-tests/run-corpus.mjs", "--deterministic") }
     )
 
     foreach ($check in $checks) {

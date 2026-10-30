@@ -1,6 +1,6 @@
 /**
  * SetupPal: Cozy 8-Bit Web Audio Sound Engine
- * Implements audio event map from ui.md Section 14
+ * Implements audio event map from docs/UI.md Section 14
  */
 
 class SoundEngine {

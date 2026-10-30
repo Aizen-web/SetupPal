@@ -1,9 +1,15 @@
 //! Turns a plain app name ("LMMS", "Roblox", "install vlc please") into one exact winget
 //! package ID, or nothing. Used for manual overrides and for install intents so the LLM never
 //! invents IDs.
+//!
+//! Registry typos (pip/npm/winget) look up the exact name first. When it is missing but a close
+//! popular match exists, callers get a confirmation payload instead of a silently renamed plan.
+
+use strsim::levenshtein;
 
 use crate::installability::winget_show;
 use crate::os::OsProvider;
+use crate::safety::typosquat::{detect_typosquat, top_packages_for_ecosystem};
 use crate::types::{AdapterKind, Ecosystem, Plan, PlanSource, PlannedStep, Step};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,8 +246,17 @@ pub async fn resolve_winget_id(os: &dyn OsProvider, query: &str) -> Option<Strin
 /// A plan with exactly one step: install `id` from winget. Verification is the adapter's own
 /// `winget list --id <id> --exact`, so no extra command step is added.
 pub fn single_winget_plan(query: &str, id: &str) -> Plan {
+    single_winget_plan_versioned(query, id, None)
+}
+
+/// Like [`single_winget_plan`], with an optional resolved version baked into the step label.
+pub fn single_winget_plan_versioned(query: &str, id: &str, version: Option<&str>) -> Plan {
     let query = extract_package_query(query);
     let query = if query.is_empty() { id.to_string() } else { query };
+    let label = match version.filter(|v| !v.is_empty() && *v != "latest") {
+        Some(v) => format!("Install {query} {v} (winget)"),
+        None => format!("Install {query} (winget)"),
+    };
     Plan {
         plan_id: format!("plan-winget-{}", id.to_ascii_lowercase()),
         goal: query.clone(),
@@ -251,12 +266,237 @@ pub fn single_winget_plan(query: &str, id: &str) -> Plan {
         },
         steps: vec![PlannedStep {
             id: "step-1".to_string(),
-            description: format!("Install {query} ({id}) via winget"),
+            description: label,
             step: Step::InstallPackage {
                 ecosystem: Ecosystem::Winget,
                 package_id: id.to_string(),
-                version: None,
+                version: version
+                    .filter(|v| !v.is_empty() && *v != "latest")
+                    .map(str::to_string),
                 source_adapter: AdapterKind::Winget,
+            },
+        }],
+    }
+}
+
+/// Outcome of looking up a user-typed package name without silently renaming it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NameResolve {
+    /// Exact name (or clear winget ID) exists; safe to plan.
+    Exact { package_id: String, ecosystem: Ecosystem },
+    /// Typed name is missing, but a close popular match exists — ask before renaming.
+    Confirm {
+        typed: String,
+        suggestion: String,
+        ecosystem: Ecosystem,
+    },
+    /// Typed name is missing and nothing close is known.
+    Missing { typed: String, ecosystem: Ecosystem },
+}
+
+/// Parses `pip install X` / `npm install X` style goals into ecosystem + package name.
+pub fn parse_registry_goal(goal: &str) -> Option<(Ecosystem, String)> {
+    let trimmed = goal.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let prefixes: &[(&str, Ecosystem)] = &[
+        ("python -m pip install ", Ecosystem::PyPI),
+        ("pip3 install ", Ecosystem::PyPI),
+        ("pip install ", Ecosystem::PyPI),
+        ("npm install ", Ecosystem::Npm),
+        ("npm i ", Ecosystem::Npm),
+        ("npm add ", Ecosystem::Npm),
+        ("yarn add ", Ecosystem::Npm),
+        ("pnpm add ", Ecosystem::Npm),
+    ];
+    let (eco, prefix_len) = prefixes.iter().find_map(|(p, eco)| {
+        lower.starts_with(p).then_some((*eco, p.len()))
+    })?;
+    let name = trimmed
+        .get(prefix_len..)?
+        .split_whitespace()
+        .next()?
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';'));
+    if name.is_empty() || name.starts_with('-') {
+        return None;
+    }
+    Some((eco, name.to_string()))
+}
+
+/// Closest popular package within edit distance 1..=2, if any.
+pub fn close_popular_match(ecosystem: Ecosystem, typed: &str) -> Option<String> {
+    if let Some(hit) = detect_typosquat(ecosystem, typed) {
+        return Some(hit.similar_popular_package);
+    }
+    let req = typed.trim().to_ascii_lowercase();
+    if req.len() < 4 {
+        return None;
+    }
+    let mut best: Option<(usize, String)> = None;
+    for &popular in top_packages_for_ecosystem(ecosystem) {
+        let dist = levenshtein(&req, &popular.to_ascii_lowercase());
+        if (1..=2).contains(&dist) {
+            let replace = match &best {
+                None => true,
+                Some((d, _)) => dist < *d,
+            };
+            if replace {
+                best = Some((dist, popular.to_string()));
+            }
+        }
+    }
+    best.map(|(_, name)| name)
+}
+
+/// True when `typed` is an exact (ASCII case-insensitive) popular package for the ecosystem.
+pub fn is_exact_popular_name(ecosystem: Ecosystem, typed: &str) -> bool {
+    let req = typed.trim().to_ascii_lowercase();
+    top_packages_for_ecosystem(ecosystem)
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(&req))
+}
+
+/// Decides whether a typed registry name may become a plan, or must ask first.
+///
+/// `exact_exists` is the result of looking up the typed name in the registry (or a test double).
+/// Never returns `Exact` with a different package id than `typed` — that would be a silent rename.
+pub fn resolve_typed_name(
+    ecosystem: Ecosystem,
+    typed: &str,
+    exact_exists: bool,
+) -> NameResolve {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return NameResolve::Missing {
+            typed: typed.to_string(),
+            ecosystem,
+        };
+    }
+    if exact_exists || is_exact_popular_name(ecosystem, typed) {
+        return NameResolve::Exact {
+            package_id: typed.to_string(),
+            ecosystem,
+        };
+    }
+    if let Some(suggestion) = close_popular_match(ecosystem, typed) {
+        if !suggestion.eq_ignore_ascii_case(typed) {
+            return NameResolve::Confirm {
+                typed: typed.to_string(),
+                suggestion,
+                ecosystem,
+            };
+        }
+    }
+    NameResolve::Missing {
+        typed: typed.to_string(),
+        ecosystem,
+    }
+}
+
+/// Closest winget search row by name edit distance 1..=2 when no exact match was picked.
+pub fn close_winget_suggestion(query: &str, rows: &[WingetSearchRow]) -> Option<String> {
+    let q = normalize(query);
+    if q.len() < 3 {
+        return None;
+    }
+    let mut best: Option<(usize, String)> = None;
+    for row in rows.iter().filter(|r| !r.id.contains('…')) {
+        let name_n = normalize(&row.name);
+        let id_last = row
+            .id
+            .rsplit('.')
+            .next()
+            .map(normalize)
+            .unwrap_or_default();
+        let dist = levenshtein(&q, &name_n).min(levenshtein(&q, &id_last));
+        if (1..=2).contains(&dist) {
+            let replace = match &best {
+                None => true,
+                Some((d, _)) => dist < *d,
+            };
+            if replace {
+                best = Some((dist, row.id.clone()));
+            }
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+/// Winget resolve that asks before accepting a near-miss instead of silently picking an alias.
+pub async fn resolve_winget_name(os: &dyn OsProvider, query: &str) -> NameResolve {
+    let query = extract_package_query(query);
+    if query.is_empty() {
+        return NameResolve::Missing {
+            typed: query,
+            ecosystem: Ecosystem::Winget,
+        };
+    }
+    if let Some(id) = resolve_winget_id(os, &query).await {
+        // known_alias / exact match — id may differ in casing/publisher form, but was confirmed.
+        return NameResolve::Exact {
+            package_id: id,
+            ecosystem: Ecosystem::Winget,
+        };
+    }
+    let Ok(paths) = os.refresh_and_get_path().await else {
+        return NameResolve::Missing {
+            typed: query,
+            ecosystem: Ecosystem::Winget,
+        };
+    };
+    let Some(winget) = os.which_in_paths("winget", &paths) else {
+        return NameResolve::Missing {
+            typed: query,
+            ecosystem: Ecosystem::Winget,
+        };
+    };
+    let Ok(out) = os.run_command(&winget, &winget_search_args(&query), &paths).await else {
+        return NameResolve::Missing {
+            typed: query,
+            ecosystem: Ecosystem::Winget,
+        };
+    };
+    let rows = parse_winget_search(&out.stdout);
+    if let Some(suggestion) = close_winget_suggestion(&query, &rows) {
+        return NameResolve::Confirm {
+            typed: query,
+            suggestion,
+            ecosystem: Ecosystem::Winget,
+        };
+    }
+    NameResolve::Missing {
+        typed: query,
+        ecosystem: Ecosystem::Winget,
+    }
+}
+
+/// Builds a one-step npm or PyPI plan for an exact package name the user confirmed or typed.
+pub fn single_registry_plan(ecosystem: Ecosystem, package_id: &str, version: Option<&str>) -> Plan {
+    let (adapter, label_eco) = match ecosystem {
+        Ecosystem::Npm => (AdapterKind::Npm, "npm"),
+        Ecosystem::PyPI => (AdapterKind::PyPI, "pip"),
+        _ => (AdapterKind::Winget, "winget"),
+    };
+    let label = match version.filter(|v| !v.is_empty() && *v != "latest") {
+        Some(v) => format!("Install {package_id} {v} ({label_eco})"),
+        None => format!("Install {package_id} ({label_eco})"),
+    };
+    Plan {
+        plan_id: format!("plan-{}-{}", label_eco, package_id.to_ascii_lowercase()),
+        goal: package_id.to_string(),
+        summary: format!("Installs {package_id} via {label_eco}."),
+        source: PlanSource::Resolved {
+            query: package_id.to_string(),
+        },
+        steps: vec![PlannedStep {
+            id: "step-1".to_string(),
+            description: label,
+            step: Step::InstallPackage {
+                ecosystem,
+                package_id: package_id.to_string(),
+                version: version
+                    .filter(|v| !v.is_empty() && *v != "latest")
+                    .map(str::to_string),
+                source_adapter: adapter,
             },
         }],
     }
@@ -365,5 +605,69 @@ VLC media player                VideoLAN.VLC                 3.0.21             
             &plan.steps[0].step,
             Step::InstallPackage { package_id, ecosystem: Ecosystem::Winget, .. } if package_id == "LMMS.LMMS"
         ));
+    }
+
+    #[test]
+    fn versioned_winget_label_includes_version() {
+        let plan = single_winget_plan_versioned("LMMS", "LMMS.LMMS", Some("1.2.2"));
+        assert_eq!(plan.steps[0].description, "Install LMMS 1.2.2 (winget)");
+        assert!(matches!(
+            &plan.steps[0].step,
+            Step::InstallPackage { version: Some(v), .. } if v == "1.2.2"
+        ));
+    }
+
+    #[test]
+    fn typos_need_confirmation_and_never_silently_rename() {
+        for (eco, typed, suggestion) in [
+            (Ecosystem::PyPI, "reqeusts", "requests"),
+            (Ecosystem::Npm, "lodahs", "lodash"),
+            (Ecosystem::PyPI, "colourama", "colorama"),
+        ] {
+            let got = resolve_typed_name(eco, typed, false);
+            assert_eq!(
+                got,
+                NameResolve::Confirm {
+                    typed: typed.into(),
+                    suggestion: suggestion.into(),
+                    ecosystem: eco,
+                },
+                "{typed}"
+            );
+            // Exact exists under the misspelling → keep the typed name (typosquat gate handles risk).
+            assert_eq!(
+                resolve_typed_name(eco, typed, true),
+                NameResolve::Exact {
+                    package_id: typed.into(),
+                    ecosystem: eco,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn parse_registry_goal_reads_pip_and_npm() {
+        assert_eq!(
+            parse_registry_goal("pip install reqeusts"),
+            Some((Ecosystem::PyPI, "reqeusts".into()))
+        );
+        assert_eq!(
+            parse_registry_goal("npm i lodahs"),
+            Some((Ecosystem::Npm, "lodahs".into()))
+        );
+        assert_eq!(parse_registry_goal("install vlc"), None);
+    }
+
+    #[test]
+    fn close_winget_row_suggests_near_miss() {
+        let rows = vec![WingetSearchRow {
+            name: "VLC media player".into(),
+            id: "VideoLAN.VLC".into(),
+        }];
+        assert_eq!(
+            close_winget_suggestion("vlcc", &rows).as_deref(),
+            Some("VideoLAN.VLC")
+        );
+        assert_eq!(close_winget_suggestion("zzzz", &rows), None);
     }
 }

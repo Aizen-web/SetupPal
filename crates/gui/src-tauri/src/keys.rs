@@ -442,3 +442,36 @@ mod tests {
         assert!(!err.contains("secret"));
     }
 }
+
+/// Live check of the Tavily integration with the key saved in the OS keychain.
+/// Run: `cargo test -p installer_gui live_tavily -- --ignored --nocapture`. Prints verdicts only.
+#[cfg(test)]
+mod live_tavily {
+    use super::*;
+    use installer_core::safety::tavily::{HttpTavilyVerifier, TavilyVerifier};
+
+    #[tokio::test]
+    #[ignore = "needs a saved Tavily key and network"]
+    async fn official_sources_pass_and_lookalikes_fail() {
+        let keys = Arc::new(Keys::without_dotenv(Arc::new(KeyringStore)));
+        assert!(keys.resolve(KeyName::TavilyApiKey).is_some(), "no Tavily key saved");
+        let verifier = HttpTavilyVerifier::with_key_provider(keys.provider(KeyName::TavilyApiKey));
+        let cases = [
+            ("obs-studio", "https://github.com/obsproject/obs-studio", true, false),
+            ("obs-studio", "https://github.com/obs-free-tools/obs-studio", false, true),
+            ("ripgrep", "https://github.com/BurntSushi/ripgrep", true, false),
+            ("ripgrep", "https://github.com/rg-releases/ripgrep", false, true),
+            ("DS4Windows", "https://ds4-windows.com/download", false, false),
+            ("zoxide", "https://github.com/ajeetdsouza/zoxide", true, false),
+        ];
+        let mut bad = Vec::new();
+        for (name, url, verified, spoofed) in cases {
+            let r = verifier.verify_source(name, url).await.expect("tavily call");
+            println!("{name:18} {url:55} verified={} spoofed={} :: {}", r.is_verified, r.is_spoofed, r.consensus_summary);
+            if r.is_verified != verified || r.is_spoofed != spoofed {
+                bad.push(format!("{name} {url}"));
+            }
+        }
+        assert!(bad.is_empty(), "unexpected verdicts: {bad:?}");
+    }
+}

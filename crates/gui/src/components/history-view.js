@@ -7,6 +7,7 @@ import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { bridge } from '../api/bridge.js';
 import { esc } from './html.js';
+import { confirmDialog } from './modal.js';
 import { icon } from './icon.js';
 
 // Search text survives re-renders while the app is open.
@@ -121,8 +122,15 @@ function buildBodies() {
   return { changesHtml, convHtml, latestRewindable };
 }
 
-function confirmRewind(tx) {
-  if (tx && confirm(`Roll back this change on your PC?\n\n${tx.summary}`)) bridge.rewindLastChange(tx.id);
+async function confirmRewind(tx) {
+  if (!tx) return;
+  const ok = await confirmDialog({
+    title: 'Roll back this change?',
+    message: tx.summary,
+    confirmLabel: 'Roll back',
+    danger: true,
+  });
+  if (ok) bridge.rewindLastChange(tx.id);
 }
 
 function findTx(id) {

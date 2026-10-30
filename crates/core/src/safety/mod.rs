@@ -15,7 +15,7 @@ use crate::safety::osv::{HttpOsvClient, OsvClient};
 pub use crate::safety::tavily::{
     HttpTavilyVerifier, TavilyVerificationResult, TavilyVerifier,
 };
-use crate::types::{Ecosystem, Plan, PlannedStep, Step};
+use crate::types::{AdapterKind, Ecosystem, Plan, PlanSource, PlannedStep, Step};
 
 /// Reason text for steps without an upstream digest (keeps them at least Yellow).
 pub const NO_UPSTREAM_CHECKSUM_REASON: &str = "No upstream checksum available";
@@ -23,6 +23,15 @@ pub const NO_UPSTREAM_CHECKSUM_REASON: &str = "No upstream checksum available";
 pub const CHECKSUM_MISMATCH_REASON: &str = "Pinned checksum does not match the upstream registry";
 /// Reason prefix used when OSV.dev cannot be reached or returns an error.
 pub const OSV_UNAVAILABLE_REASON: &str = "Verification service (OSV.dev) unavailable";
+/// Plan-level note when the plan includes winget steps OSV.dev cannot scan.
+pub const OSV_WINGET_COVERAGE_NOTE: &str =
+    "OSV.dev does not cover winget packages; those steps rely on winget metadata and policy checks.";
+/// Reason prefix when a GitHub repository imitates the official one.
+pub const LOOKALIKE_PROJECT_REASON: &str = "Lookalike project";
+/// Reason prefix when web search could not confirm a GitHub repository is official.
+pub const UNCONFIRMED_PROJECT_REASON: &str = "Could not confirm this is the official project";
+/// Reason prefix when a GitHub repository could not be checked because no Tavily key is saved.
+pub const TAVILY_KEY_MISSING_REASON: &str = "Add a Tavily key in Settings";
 
 /// Traffic-light risk classification.
 /// `Ord` is derived in ascending order of severity (`Green < Yellow < Red`)
@@ -76,6 +85,26 @@ impl SafetyReport {
             return (
                 "Known security flaw",
                 format!("This version has an unresolved security issue. SetupPal recommends {alt} instead."),
+            );
+        }
+        let has_reason = |prefix: &str| self.reasons.iter().any(|r| r.starts_with(prefix));
+        if has_reason(LOOKALIKE_PROJECT_REASON) {
+            let official = self.suggested_alternative.as_deref().unwrap_or("the official project");
+            return (
+                "Lookalike warning",
+                format!("This GitHub project copies the name of {official}. It is likely a fake."),
+            );
+        }
+        if has_reason(UNCONFIRMED_PROJECT_REASON) {
+            return (
+                "Unconfirmed project",
+                "SetupPal couldn't confirm this GitHub project is the official one. Check it before approving.".to_string(),
+            );
+        }
+        if has_reason(TAVILY_KEY_MISSING_REASON) {
+            return (
+                "Unconfirmed project",
+                "Add a Tavily key in Settings so SetupPal can check unfamiliar GitHub projects.".to_string(),
             );
         }
         let mentions_admin = |v: &String| {
@@ -199,6 +228,9 @@ pub struct PlanSafetyReport {
     pub overall_score: u8,
     pub step_reports: Vec<SafetyReport>,
     pub can_execute: bool,
+    /// Plan-level notes shown once on the card summary (not repeated per step).
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 /// Deterministic Zero-Trust Safety Engine.
@@ -282,9 +314,18 @@ impl SafetyEngine {
         let mut step_reports = Vec::with_capacity(plan.steps.len());
         let mut overall_rating = RiskRating::Green;
         let mut overall_score: u8 = 0;
+        let pins_trusted = matches!(plan.source, PlanSource::Recipe { .. });
 
-        for planned_step in &plan.steps {
-            let report = self.evaluate_step(planned_step).await?;
+        for (index, planned_step) in plan.steps.iter().enumerate() {
+            let mut plan_violations = Vec::new();
+            if !policy::vendor_installer_source_ok(plan, index) {
+                plan_violations.push(
+                    "The installer step must run the file an earlier step downloaded from the vendor's release feed"
+                        .to_string(),
+                );
+            }
+            let ctx = StepContext { pins_trusted, plan_violations };
+            let report = self.evaluate_step_in(planned_step, &ctx).await?;
             if report.rating > overall_rating {
                 overall_rating = report.rating;
             }
@@ -298,12 +339,26 @@ impl SafetyEngine {
         }
 
         let can_execute = overall_rating != RiskRating::Red;
+        let mut notes = Vec::new();
+        let has_winget = plan.steps.iter().any(|s| {
+            matches!(
+                &s.step,
+                Step::InstallPackage {
+                    ecosystem: Ecosystem::Winget,
+                    ..
+                }
+            )
+        });
+        if has_winget {
+            notes.push(OSV_WINGET_COVERAGE_NOTE.to_string());
+        }
         let plan_report = PlanSafetyReport {
             plan_id: plan.plan_id.clone(),
             overall_rating,
             overall_score,
             step_reports,
             can_execute,
+            notes,
         };
 
         self.events.emit(AgentEvent::SafetyCheckCompleted {
@@ -313,37 +368,18 @@ impl SafetyEngine {
         Ok(plan_report)
     }
 
-    /// Checks a download URL against the static allowlist, consulting Tavily consensus only
-    /// for hosts outside it.
-    async fn check_download_url(&self, software_name: &str, url: &str, eval: &mut StepEvaluation) {
+    /// Checks a download URL against the static allowlist. The downloader refuses every other
+    /// host, so anything outside it can never run and is blocked here too.
+    fn check_download_url(url: &str, eval: &mut StepEvaluation) {
         match policy::is_url_domain_allowlisted(url) {
             Ok(true) => eval.signals.domain_allowlisted = Some(true),
-            Ok(false) => match self.verify_with_tavily(software_name, url).await {
-                Ok(tavily_res) => {
-                    eval.signals.tavily_verified = Some(tavily_res.is_verified);
-                    eval.signals.tavily_consensus = Some(tavily_res.consensus_summary.clone());
-                    eval.signals.domain_allowlisted = Some(tavily_res.is_verified);
-                    if tavily_res.is_spoofed {
-                        if let Some(warn) = &tavily_res.warning {
-                            eval.reasons.push(format!("TAVILY AI SEARCH SAFETY: {warn}"));
-                        }
-                        if let Some(official) = tavily_res.official_domains.first() {
-                            eval.suggested_alternative = Some(official.clone());
-                        }
-                        eval.raise(100);
-                    } else if !tavily_res.is_verified {
-                        eval.reasons.push(format!(
-                            "Download URL `{url}` is neither in the static allowlist nor verified by Tavily consensus"
-                        ));
-                        eval.raise(95);
-                    }
-                }
-                Err(e) => {
-                    eval.signals.domain_allowlisted = Some(false);
-                    eval.reasons.push(format!("Verification service (Tavily) unavailable: {e}"));
-                    eval.raise(50);
-                }
-            },
+            Ok(false) => {
+                eval.signals.domain_allowlisted = Some(false);
+                eval.reasons.push(format!(
+                    "Download URL `{url}` is not on SetupPal's list of approved download sites"
+                ));
+                eval.raise(95);
+            }
             Err(e) => {
                 eval.signals.domain_allowlisted = Some(false);
                 eval.reasons.push(e);
@@ -352,21 +388,76 @@ impl SafetyEngine {
         }
     }
 
+    /// github.com hosts anyone's code, so a repository is only trusted when it is curated or
+    /// web search (Tavily) confirms it is the project's official home.
+    async fn check_github_project(&self, repo: &str, eval: &mut StepEvaluation) {
+        let repo = repo
+            .trim()
+            .trim_start_matches("https://github.com/")
+            .trim_matches('/');
+        if crate::adapters::github::winget_id_for_repo(repo).is_some() {
+            return;
+        }
+        let name = repo.rsplit('/').next().unwrap_or(repo);
+        match self.verify_with_tavily(name, &format!("https://github.com/{repo}")).await {
+            Ok(res) => {
+                eval.signals.tavily_verified = Some(res.is_verified);
+                eval.signals.tavily_consensus = Some(res.consensus_summary.clone());
+                if res.is_spoofed {
+                    eval.reasons.push(format!(
+                        "{LOOKALIKE_PROJECT_REASON}: {}",
+                        res.warning.as_deref().unwrap_or(&res.consensus_summary)
+                    ));
+                    eval.suggested_alternative = res.official_domains.first().cloned();
+                    eval.raise(100);
+                } else if !res.is_verified {
+                    eval.reasons.push(format!(
+                        "{UNCONFIRMED_PROJECT_REASON}: {}",
+                        res.consensus_summary
+                    ));
+                    eval.raise(45);
+                }
+            }
+            Err(CoreError::Config(_)) => {
+                eval.reasons.push(format!(
+                    "{TAVILY_KEY_MISSING_REASON} to confirm `github.com/{repo}` is the official project"
+                ));
+                eval.raise(45);
+            }
+            Err(e) => {
+                eval.reasons.push(format!("Verification service (Tavily) unavailable: {e}"));
+                eval.raise(45);
+            }
+        }
+    }
+
+    fn check_typosquat(ecosystem: Ecosystem, package_id: &str, eval: &mut StepEvaluation) {
+        if let Some(typo) = typosquat::detect_typosquat(ecosystem, package_id) {
+            eval.reasons.push(format!(
+                "TYPOSQUAT DETECTED: `{}` is edit distance {} from popular {:?} package `{}`",
+                typo.requested_package, typo.edit_distance, ecosystem, typo.similar_popular_package
+            ));
+            eval.suggested_alternative = Some(typo.similar_popular_package.clone());
+            eval.signals.typosquat_match = Some(typo);
+            eval.raise(95);
+        }
+    }
+
     fn check_registry_heuristics(
         package_id: &str,
         meta: &PackageMetadata,
         eval: &mut StepEvaluation,
-        // Winget release date is the latest version; skip age Yellow for winget.
-        apply_version_age: bool,
+        // When true, `meta.age_days` is treated as first-publish / identifier age.
+        apply_age: bool,
     ) {
         eval.signals.package_age_days = meta.age_days;
         eval.signals.download_count = meta.download_count;
 
-        if apply_version_age {
+        if apply_age {
             if let Some(age) = meta.age_days {
                 if age < 30 {
                     eval.reasons.push(format!(
-                        "Young package warning: `{package_id}` was published {age} days ago (< 30 days threshold)"
+                        "Young package warning: `{package_id}` was first published {age} days ago (< 30 days threshold)"
                     ));
                     eval.raise(45);
                 }
@@ -395,12 +486,22 @@ impl SafetyEngine {
         }
     }
 
+    /// Evaluates one step on its own: checksums pinned in the step are treated as untrusted.
     pub async fn evaluate_step(&self, planned_step: &PlannedStep) -> Result<SafetyReport, CoreError> {
+        self.evaluate_step_in(planned_step, &StepContext::default()).await
+    }
+
+    async fn evaluate_step_in(
+        &self,
+        planned_step: &PlannedStep,
+        ctx: &StepContext,
+    ) -> Result<SafetyReport, CoreError> {
         let mut eval = StepEvaluation::default();
 
         // 1. Deterministic Hard Policy Check
-        let policy_violations =
+        let mut policy_violations =
             policy::evaluate_step_policy(&planned_step.step, &planned_step.description);
+        policy_violations.extend(ctx.plan_violations.iter().cloned());
         if !policy_violations.is_empty() {
             for v in &policy_violations {
                 eval.reasons.push(format!("HARD POLICY BLOCK: {v}"));
@@ -418,17 +519,9 @@ impl SafetyEngine {
                 source_adapter,
             } => {
                 // 2a. Levenshtein Typosquatting Radar
-                if let Some(typo) = typosquat::detect_typosquat(*ecosystem, package_id) {
-                    eval.reasons.push(format!(
-                        "TYPOSQUAT DETECTED: `{}` is edit distance {} from popular {:?} package `{}`",
-                        typo.requested_package,
-                        typo.edit_distance,
-                        ecosystem,
-                        typo.similar_popular_package
-                    ));
-                    eval.suggested_alternative = Some(typo.similar_popular_package.clone());
-                    eval.signals.typosquat_match = Some(typo);
-                    eval.raise(95);
+                Self::check_typosquat(*ecosystem, package_id, &mut eval);
+                if *source_adapter == AdapterKind::GitHubReleases {
+                    self.check_github_project(package_id, &mut eval).await;
                 }
 
                 // 2b. OSV.dev Vulnerability Query (fails closed to Yellow)
@@ -470,10 +563,11 @@ impl SafetyEngine {
                             let has_digest = meta.has_upstream_digest();
                             eval.signals.sha256_verified = Some(has_digest);
                             if let Some(url) = &meta.download_url {
-                                self.check_download_url(package_id, url, &mut eval).await;
+                                Self::check_download_url(url, &mut eval);
                             }
-                            let apply_age = !matches!(ecosystem, Ecosystem::Winget);
-                            Self::check_registry_heuristics(package_id, &meta, &mut eval, apply_age);
+                            // Winget adapters only set age_days for young identifiers; established
+                            // packages leave it None so they stay Green. npm/PyPI use first-publish age.
+                            Self::check_registry_heuristics(package_id, &meta, &mut eval, true);
                             if !has_digest {
                                 eval.reasons.push(format!("{NO_UPSTREAM_CHECKSUM_REASON} for `{package_id}`"));
                                 eval.raise(40);
@@ -500,6 +594,14 @@ impl SafetyEngine {
                 ..
             } => {
                 let is_url = id.starts_with("http://") || id.starts_with("https://");
+                if !is_url {
+                    if let Some(ecosystem) = registry_ecosystem(*adapter) {
+                        Self::check_typosquat(ecosystem, id, &mut eval);
+                    }
+                    if *adapter == AdapterKind::GitHubReleases {
+                        self.check_github_project(id, &mut eval).await;
+                    }
+                }
                 let meta = match self.adapters.get(*adapter) {
                     Some(a) => match a.resolve_metadata(id, Some(version)).await {
                         Ok(m) => Some(m),
@@ -522,7 +624,7 @@ impl SafetyEngine {
                     meta.as_ref().and_then(|m| m.download_url.clone())
                 };
                 if let Some(url) = &url {
-                    self.check_download_url(&planned_step.description, url, &mut eval).await;
+                    Self::check_download_url(url, &mut eval);
                 }
 
                 if let Some(m) = &meta {
@@ -541,10 +643,17 @@ impl SafetyEngine {
                         eval.raise(100);
                     }
                     _ if has_upstream => eval.signals.sha256_verified = Some(true),
-                    (Some(_), _) => {
+                    (Some(_), _) if ctx.pins_trusted => {
                         eval.reasons.push(format!(
                             "Checksum for `{id}` is pinned by the plan; the upstream source did not publish one"
                         ));
+                    }
+                    (Some(_), _) => {
+                        eval.signals.sha256_verified = Some(false);
+                        eval.reasons.push(format!(
+                            "{NO_UPSTREAM_CHECKSUM_REASON} for `{id}` (a checksum written by the AI planner proves nothing)"
+                        ));
+                        eval.raise(40);
                     }
                     (None, _) => {
                         eval.signals.sha256_verified = Some(false);
@@ -585,6 +694,26 @@ impl SafetyEngine {
         }
 
         Ok(eval.into_report(&planned_step.id))
+    }
+}
+
+/// What a step's evaluation needs to know about the plan around it.
+#[derive(Default)]
+struct StepContext {
+    /// Checksums written into the plan are only trusted when the plan is a curated recipe.
+    pins_trusted: bool,
+    /// Plan-level policy findings that belong to this step.
+    plan_violations: Vec<String>,
+}
+
+/// Registry the typosquat radar should compare a download id against.
+fn registry_ecosystem(adapter: AdapterKind) -> Option<Ecosystem> {
+    match adapter {
+        AdapterKind::Modrinth => Some(Ecosystem::Modrinth),
+        AdapterKind::PyPI => Some(Ecosystem::PyPI),
+        AdapterKind::Npm => Some(Ecosystem::Npm),
+        AdapterKind::Cargo => Some(Ecosystem::Cargo),
+        AdapterKind::Winget | AdapterKind::GitHubReleases | AdapterKind::OfficialVendorUrl => None,
     }
 }
 
@@ -867,6 +996,150 @@ mod tests {
         assert_eq!(report.rating, RiskRating::Red);
     }
 
+    fn plan_of(source: PlanSource, steps: Vec<PlannedStep>) -> Plan {
+        Plan {
+            plan_id: "p".to_string(),
+            goal: "fabric".to_string(),
+            summary: "s".to_string(),
+            source,
+            steps,
+        }
+    }
+
+    fn llm() -> PlanSource {
+        PlanSource::Llm { model: "m".to_string() }
+    }
+
+    #[tokio::test]
+    async fn a_checksum_pinned_by_the_ai_does_not_verify_a_download() {
+        let eng = engine(
+            Arc::new(CleanOsv),
+            FixedAdapter { kind: AdapterKind::OfficialVendorUrl, meta: vendor_meta(None) },
+        );
+        let ai = eng.evaluate_plan(&plan_of(llm(), vec![download_step(Some(REAL_DIGEST))])).await.unwrap();
+        assert_eq!(ai.step_reports[0].rating, RiskRating::Yellow);
+        assert_eq!(ai.step_reports[0].signals.sha256_verified, Some(false));
+
+        let recipe = PlanSource::Recipe { recipe_id: "r".to_string() };
+        let curated = eng.evaluate_plan(&plan_of(recipe, vec![download_step(Some(REAL_DIGEST))])).await.unwrap();
+        assert_eq!(curated.step_reports[0].rating, RiskRating::Green);
+    }
+
+    fn fabric_installer_step(path: &str) -> PlannedStep {
+        PlannedStep {
+            id: "step-3".to_string(),
+            description: "Install the Fabric loader".to_string(),
+            step: Step::RunVendorInstaller {
+                installer: crate::types::VendorInstaller::FabricClient,
+                mc_version: "1.21.1".to_string(),
+                installer_path: PathBuf::from(path),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn vendor_installer_must_run_the_jar_this_plan_downloaded() {
+        let eng = engine(
+            Arc::new(CleanOsv),
+            FixedAdapter { kind: AdapterKind::OfficialVendorUrl, meta: vendor_meta(Some(REAL_DIGEST)) },
+        );
+        let good = eng
+            .evaluate_plan(&plan_of(llm(), vec![
+                download_step(None),
+                fabric_installer_step("%LOCALAPPDATA%/SetupPal/downloads/fabric-installer.jar"),
+            ]))
+            .await
+            .unwrap();
+        assert_eq!(good.step_reports[1].rating, RiskRating::Green);
+
+        let other_jar = eng
+            .evaluate_plan(&plan_of(llm(), vec![
+                download_step(None),
+                fabric_installer_step("%LOCALAPPDATA%/SetupPal/downloads/other.jar"),
+            ]))
+            .await
+            .unwrap();
+        assert_eq!(other_jar.step_reports[1].rating, RiskRating::Red);
+        assert!(!other_jar.can_execute);
+    }
+
+    #[tokio::test]
+    async fn lookalike_mod_slugs_are_caught_on_download_steps() {
+        let mut meta = PackageMetadata::bare(AdapterKind::Modrinth, "sodiun", "1");
+        meta.download_url = Some("https://cdn.modrinth.com/data/x/sodiun.jar".to_string());
+        meta.expected_sha512 = Some("a".repeat(128));
+        let eng = engine(Arc::new(CleanOsv), FixedAdapter { kind: AdapterKind::Modrinth, meta });
+        let step = PlannedStep {
+            id: "step-1".to_string(),
+            description: "Download sodiun".to_string(),
+            step: Step::DownloadArtifact {
+                adapter: AdapterKind::Modrinth,
+                id: "sodiun".to_string(),
+                version: "1".to_string(),
+                destination: PathBuf::from("%APPDATA%/.minecraft/mods/sodiun.jar"),
+                expected_sha256: None,
+            },
+        };
+        let report = eng.evaluate_step(&step).await.unwrap();
+        assert_eq!(report.rating, RiskRating::Red);
+        assert_eq!(report.suggested_alternative.as_deref(), Some("sodium"));
+    }
+
+    struct FixedTavily(TavilyVerificationResult);
+
+    #[async_trait]
+    impl TavilyVerifier for FixedTavily {
+        async fn verify_source(&self, _n: &str, _u: &str) -> Result<TavilyVerificationResult, CoreError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn github_step(repo: &str) -> PlannedStep {
+        PlannedStep {
+            id: "step-1".to_string(),
+            description: format!("Install {repo}"),
+            step: Step::InstallPackage {
+                ecosystem: Ecosystem::GitHub,
+                package_id: repo.to_string(),
+                version: None,
+                source_adapter: AdapterKind::GitHubReleases,
+            },
+        }
+    }
+
+    fn github_engine(tavily: Option<TavilyVerificationResult>) -> SafetyEngine {
+        let mut meta = PackageMetadata::bare(AdapterKind::GitHubReleases, "x/y", "v1");
+        meta.download_url = Some("https://github.com/x/y/releases/download/v1/y.zip".to_string());
+        meta.expected_sha256 = Some(REAL_DIGEST.to_string());
+        meta.age_days = Some(400);
+        let mut reg = AdapterRegistry::new();
+        reg.register(Arc::new(FixedAdapter { kind: AdapterKind::GitHubReleases, meta }));
+        let tavily = tavily.map(|r| Arc::new(FixedTavily(r)) as Arc<dyn TavilyVerifier>);
+        SafetyEngine::new(reg, Arc::new(CleanOsv), tavily, EventBus::default())
+    }
+
+    #[tokio::test]
+    async fn github_repos_are_checked_with_tavily_unless_curated() {
+        let fake = tavily::judge_sources(
+            "obs-studio",
+            "github.com/obs-free/obs-studio",
+            &[tavily::TavilySearchResultItem {
+                url: "https://github.com/obsproject/obs-studio".to_string(),
+                score: Some(0.9),
+            }],
+        );
+        let report = github_engine(Some(fake)).evaluate_step(&github_step("obs-free/obs-studio")).await.unwrap();
+        assert_eq!(report.rating, RiskRating::Red);
+        assert_eq!(report.user_facing_translation().0, "Lookalike warning");
+
+        let no_key = github_engine(None).evaluate_step(&github_step("someone/tinytool")).await.unwrap();
+        assert_eq!(no_key.rating, RiskRating::Yellow);
+        assert!(no_key.user_facing_translation().1.contains("Tavily key"));
+
+        let curated = github_engine(None).evaluate_step(&github_step("BurntSushi/ripgrep")).await.unwrap();
+        assert_eq!(curated.rating, RiskRating::Green);
+    }
+
     #[test]
     fn escalate_step_updates_plan_totals() {
         let mut plan_report = PlanSafetyReport {
@@ -875,6 +1148,7 @@ mod tests {
             overall_score: 0,
             step_reports: vec![StepEvaluation::default().into_report("step-1")],
             can_execute: true,
+            notes: Vec::new(),
         };
         plan_report.escalate_step("step-1", RiskRating::Yellow, "Administrator access needed".to_string());
         assert_eq!(plan_report.overall_rating, RiskRating::Yellow);
@@ -884,6 +1158,62 @@ mod tests {
             "Administrator access needed"
         );
         assert!(plan_report.can_execute);
+    }
+
+    #[test]
+    fn young_first_publish_is_yellow_established_is_green() {
+        let mut young = StepEvaluation::default();
+        let mut meta = PackageMetadata::bare(AdapterKind::PyPI, "brandnew", "0.1.0");
+        meta.age_days = Some(7);
+        SafetyEngine::check_registry_heuristics("brandnew", &meta, &mut young, true);
+        assert!(young.score >= 45);
+        assert!(young.reasons.iter().any(|r| r.contains("first published")));
+
+        let mut old = StepEvaluation::default();
+        meta.age_days = Some(400);
+        SafetyEngine::check_registry_heuristics("numpy", &meta, &mut old, true);
+        assert_eq!(old.score, 0);
+
+        let mut winget_established = StepEvaluation::default();
+        let mut wmeta = PackageMetadata::bare(AdapterKind::Winget, "OBSProject.OBSStudio", "31.0.0");
+        wmeta.age_days = None; // multi-version identifier
+        SafetyEngine::check_registry_heuristics("OBSProject.OBSStudio", &wmeta, &mut winget_established, true);
+        assert_eq!(winget_established.score, 0);
+    }
+
+    #[tokio::test]
+    async fn winget_plans_get_one_osv_coverage_note() {
+        let mut meta = PackageMetadata::bare(AdapterKind::Winget, "VideoLAN.VLC", "3.0.21");
+        meta.age_days = None;
+        meta.expected_sha256 = Some(REAL_DIGEST.to_string());
+        let eng = engine(
+            Arc::new(CleanOsv),
+            FixedAdapter {
+                kind: AdapterKind::Winget,
+                meta,
+            },
+        );
+        let plan = plan_of(
+            PlanSource::Resolved {
+                query: "vlc".into(),
+            },
+            vec![PlannedStep {
+                id: "step-1".to_string(),
+                description: "Install VLC".to_string(),
+                step: Step::InstallPackage {
+                    ecosystem: Ecosystem::Winget,
+                    package_id: "VideoLAN.VLC".to_string(),
+                    version: None,
+                    source_adapter: AdapterKind::Winget,
+                },
+            }],
+        );
+        let report = eng.evaluate_plan(&plan).await.unwrap();
+        assert_eq!(report.notes, vec![OSV_WINGET_COVERAGE_NOTE.to_string()]);
+        assert!(!report.step_reports[0]
+            .reasons
+            .iter()
+            .any(|r| r.contains("OSV.dev does not cover")));
     }
 }
 

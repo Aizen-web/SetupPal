@@ -22,18 +22,52 @@ pub struct WingetShowInfo {
     pub installer_url: Option<String>,
     pub installer_sha256: Option<String>,
     pub release_date: Option<NaiveDate>,
+    /// How many versions `winget show` listed (identifier age proxy when > 1).
+    pub version_count: Option<usize>,
 }
 
 /// Parses English `winget show` output. Unknown or missing lines leave fields as `None`.
 pub fn parse_winget_show(stdout: &str) -> WingetShowInfo {
     let mut info = WingetShowInfo::default();
+    let mut in_versions = false;
+    let mut listed_versions = 0usize;
     for line in stdout.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("Found ") {
             if let Some(idx) = rest.rfind(" [") {
                 info.name = Some(rest[..idx].trim().to_string());
             }
+            in_versions = false;
             continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("available versions") || lower == "versions" {
+            in_versions = true;
+            // "Available Versions: 1.0, 1.1" on one line
+            if let Some((_, rest)) = trimmed.split_once(':') {
+                let count = rest
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .filter(|p| !p.is_empty())
+                    .count();
+                if count > 0 {
+                    listed_versions = listed_versions.max(count);
+                }
+            }
+            continue;
+        }
+        if in_versions {
+            if trimmed.is_empty() || trimmed.contains(':') && !trimmed.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c.is_whitespace()) {
+                // Left the versions block when a new Key: value section starts (except pure version lines).
+                if trimmed.contains(':') {
+                    in_versions = false;
+                } else if !trimmed.is_empty() {
+                    listed_versions += 1;
+                    continue;
+                }
+            } else if !trimmed.is_empty() {
+                listed_versions += 1;
+                continue;
+            }
         }
         let Some((key, value)) = trimmed.split_once(':') else {
             continue;
@@ -62,7 +96,22 @@ pub fn parse_winget_show(stdout: &str) -> WingetShowInfo {
             _ => {}
         }
     }
+    if listed_versions > 0 {
+        info.version_count = Some(listed_versions);
+    }
     info
+}
+
+/// Package-identifier age for winget: established when more than one version exists.
+/// Otherwise uses the latest release date as a stand-in for first-publish.
+pub fn winget_identifier_age_days(info: &WingetShowInfo) -> Option<u64> {
+    if info.version_count.unwrap_or(1) > 1 {
+        // Multiple published versions → treat as established (not "newly published").
+        return None;
+    }
+    let published_at = info.release_date.and_then(|d| d.and_hms_opt(0, 0, 0))?;
+    let published_at = Utc.from_utc_datetime(&published_at);
+    Some(Utc::now().signed_duration_since(published_at).num_days().max(0) as u64)
 }
 
 /// Builds the argument list for `winget show`.
@@ -237,7 +286,7 @@ impl SourceAdapter for WingetAdapter {
             .release_date
             .and_then(|d| d.and_hms_opt(0, 0, 0))
             .map(|dt| Utc.from_utc_datetime(&dt));
-        let age_days = published_at.map(|p| Utc::now().signed_duration_since(p).num_days().max(0) as u64);
+        let age_days = winget_identifier_age_days(&info);
 
         let mut meta = PackageMetadata::bare(
             AdapterKind::Winget,
@@ -441,6 +490,21 @@ mod tests {
         let portable = parse_winget_show("Installer:\n  Installer Type: portable (zip)\n  Installer Scope: Machine\n");
         assert_eq!(portable.installer_type.as_deref(), Some("portable"));
         assert_eq!(portable.installer_scope.as_deref(), Some("machine"));
+    }
+
+    #[test]
+    fn established_packages_have_no_identifier_age() {
+        let multi = parse_winget_show(
+            "Found OBS [OBSProject.OBSStudio]\nVersion: 31.0.0\nRelease Date: 2026-10-20\nAvailable Versions:\n  31.0.0\n  30.2.3\n  30.1.0\n",
+        );
+        assert!(multi.version_count.unwrap_or(0) > 1);
+        assert_eq!(winget_identifier_age_days(&multi), None);
+
+        let brand_new = parse_winget_show(
+            "Found NewApp [Publisher.NewApp]\nVersion: 0.1.0\nRelease Date: 2026-10-20\n",
+        );
+        let age = winget_identifier_age_days(&brand_new).expect("single-version uses release date");
+        assert!(age < 30, "expected young identifier, got {age}");
     }
 
     #[tokio::test]

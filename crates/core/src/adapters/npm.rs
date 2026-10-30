@@ -151,10 +151,22 @@ impl SourceAdapter for NpmAdapter {
             package_id: format!("{package_id}@{resolved_version}"),
         })?;
 
-        let published = body.time.get(&resolved_version).map(String::as_str);
+        let version_published = body.time.get(&resolved_version).map(String::as_str);
+        // Prefer package first-publish (`created`) so popular packages with fresh releases stay Green.
+        let first_publish = body
+            .time
+            .get("created")
+            .map(String::as_str)
+            .or_else(|| {
+                body.time
+                    .iter()
+                    .filter(|(k, _)| *k != "modified" && *k != "created")
+                    .map(|(_, v)| v.as_str())
+                    .min()
+            });
         let mut meta = PackageMetadata::bare(AdapterKind::Npm, body.name.clone(), resolved_version.clone());
-        meta.published_at = parse_rfc3339(published);
-        meta.age_days = age_days_since(published);
+        meta.published_at = parse_rfc3339(version_published);
+        meta.age_days = age_days_since(first_publish).or_else(|| age_days_since(version_published));
         meta.download_url = Some(ver_info.dist.tarball.clone());
         meta.expected_sha512 = ver_info
             .dist

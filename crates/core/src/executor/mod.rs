@@ -18,7 +18,9 @@ use crate::paths::{minecraft_dir, resolve_step_path};
 use crate::safety::hash::verify_file_sha256;
 use crate::safety::{PlanSafetyReport, RiskRating};
 use crate::state::{RollbackData, StateLogger, TransactionRecord};
-use crate::types::{AdapterKind, AllowedBinary, IsolationKind, Plan, PlannedStep, Step, VendorInstaller};
+use crate::types::{
+    AdapterKind, AllowedBinary, IsolationKind, Plan, PlanSource, PlannedStep, Step, VendorInstaller,
+};
 use crate::verifier::{verify_fabric_profile, Verifier};
 
 /// Categories of software installs that can be narrowly trusted per SECURITY.md.
@@ -725,8 +727,14 @@ impl Executor {
                     .resolve_metadata(id, Some(version))
                     .await
                     .map_err(CoreError::Adapter)?;
+                let publisher_digest = metadata.has_upstream_digest();
                 if let Some(pinned) = expected_sha256 {
                     metadata.expected_sha256 = Some(pinned.trim().to_ascii_lowercase());
+                }
+                if !publisher_digest && !matches!(plan.source, PlanSource::Recipe { .. }) {
+                    return Err(CoreError::Adapter(AdapterError::Other(format!(
+                        "No upstream checksum available for {id}; a checksum written by the AI planner cannot verify a download"
+                    ))));
                 }
 
                 if options.dry_run {
@@ -813,6 +821,17 @@ impl Executor {
                 mc_version,
                 installer_path,
             } => {
+                let source_ok = plan
+                    .steps
+                    .iter()
+                    .position(|s| s.id == step.id)
+                    .is_some_and(|index| crate::safety::policy::vendor_installer_source_ok(plan, index));
+                if !source_ok {
+                    return Err(CoreError::Validation(
+                        "The installer step must run the file an earlier step downloaded from the vendor's release feed"
+                            .to_string(),
+                    ));
+                }
                 let installer_path = resolve_step_path(installer_path, &options.working_dir)?;
                 match installer {
                     VendorInstaller::FabricClient => {

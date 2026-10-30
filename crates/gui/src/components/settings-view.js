@@ -1,5 +1,5 @@
 /**
- * SetupPal: Settings View (ui.md Section 9.5)
+ * SetupPal: Settings View (docs/UI.md Section 9.5)
  * Every control here is persisted and takes effect immediately.
  */
 
@@ -10,7 +10,7 @@ import {
   getPrefs, setPrefs, resetPrefs, REPLY_LENGTHS, SAFETY_LEVELS, TEXT_SIZES,
 } from '../state/prefs.js';
 import { esc } from './html.js';
-import { rememberOpener } from './modal.js';
+import { rememberOpener, confirmDialog } from './modal.js';
 
 const MODE_LABELS = {
   auto: 'Auto (recommended)',
@@ -260,8 +260,14 @@ export function renderSettingsView(container) {
     sounds.play('ui.click');
     renderSettingsView(container);
   });
-  on('btn-clear-chats', 'onclick', () => {
-    if (!confirm('Delete all saved chats? This cannot be undone.')) return;
+  on('btn-clear-chats', 'onclick', async () => {
+    const ok = await confirmDialog({
+      title: 'Delete all saved chats?',
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     ['setuppal_local_conversations_v2', 'setuppal_active_conv_id_v2'].forEach(k => localStorage.removeItem(k));
     sounds.play('ui.click');
     location.reload();

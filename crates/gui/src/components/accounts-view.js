@@ -34,7 +34,7 @@ const KEYS = [
     keyName: 'tavily_api_key',
     name: 'Tavily API key',
     badge: 'Optional',
-    hint: 'Live web checks for extra safety. Works without it.',
+    hint: 'Confirms unfamiliar GitHub projects are the official ones, not copies. Without it, those steps need your approval.',
     placeholder: 'tvly-...',
     testable: true,
   },

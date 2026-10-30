@@ -221,17 +221,24 @@ pub struct ManualGuide {
     pub reason: ManualReason,
     pub detail: String,
     pub steps: Vec<String>,
-    /// Goals SetupPal can run instead; each matches an embedded recipe.
+    /// Same-category winget apps SetupPal can install instead.
     pub alternatives: Vec<String>,
 }
 
-const MAX_ALTERNATIVES: usize = 5;
+/// Builds a manual setup guide with curated same-category winget alternatives (R18/R22).
+/// `installed` is lowercased tool names already on the PC; those are never offered.
+/// `recipes` is retained for call-site compatibility; alternatives no longer come from recipes.
+pub fn manual_guide(item: &str, reason: ManualReason, detail: &str, _recipes: &RecipeStore) -> ManualGuide {
+    manual_guide_with_installed(item, reason, detail, &[])
+}
 
-/// Recipe IDs suggested in place of a manual-only app.
-const ALTERNATIVE_RECIPE_IDS: &[&str] = &["everyday_apps", "obs_studio", "web_fullstack_ts", "python_ai_venv", "cpp20_dev"];
-
-/// Builds a manual setup guide; alternatives are names of recipes present in `recipes`.
-pub fn manual_guide(item: &str, reason: ManualReason, detail: &str, recipes: &RecipeStore) -> ManualGuide {
+/// Like [`manual_guide`], but drops alternatives that match `installed` tool names.
+pub fn manual_guide_with_installed(
+    item: &str,
+    reason: ManualReason,
+    detail: &str,
+    installed: &[String],
+) -> ManualGuide {
     let steps = match reason {
         ManualReason::StoreOnly => vec![
             "Open the Microsoft Store app.".to_string(),
@@ -245,11 +252,11 @@ pub fn manual_guide(item: &str, reason: ManualReason, detail: &str, recipes: &Re
         ],
     };
 
-    let alternatives = ALTERNATIVE_RECIPE_IDS
-        .iter()
-        .filter_map(|id| recipes.list().iter().find(|r| r.id == *id))
-        .map(|r| r.name.clone())
-        .take(MAX_ALTERNATIVES)
+    let category = crate::alternatives::detect_category(item)
+        .unwrap_or(crate::alternatives::AppCategory::Utilities);
+    let alternatives = crate::alternatives::alternatives_for(category, installed, 4)
+        .into_iter()
+        .map(|a| a.name)
         .collect();
 
     ManualGuide {
@@ -405,18 +412,23 @@ mod tests {
         let guide = manual_guide(&manual.item, *reason, detail, &recipes);
         assert_eq!(guide.kind, "manual");
         assert!(guide.steps[0].contains("Microsoft Store"));
-        assert_eq!(guide.alternatives.len(), ALTERNATIVE_RECIPE_IDS.len());
-        for alt in &guide.alternatives {
-            let matched = recipes.find_matching(alt).map(|r| r.name.clone());
-            assert_eq!(matched.as_ref(), Some(alt), "alternative `{alt}` must route back to its recipe");
-        }
+        assert!((2..=4).contains(&guide.alternatives.len()));
+        // Store-only IDs have no category → utilities alternatives, never empty.
+        assert!(!guide.alternatives.is_empty());
     }
 
     #[test]
-    fn every_alternative_recipe_exists() {
-        let recipes = RecipeStore::embedded_recipes().unwrap();
-        for id in ALTERNATIVE_RECIPE_IDS {
-            assert!(recipes.iter().any(|r| r.id == *id), "missing recipe {id}");
-        }
+    fn gaming_manual_guide_offers_same_category_winget_apps() {
+        let recipes = RecipeStore::load_from_dir_or_embedded(std::path::Path::new("missing-dir")).unwrap();
+        let guide = manual_guide_with_installed(
+            "Minecraft Bedrock",
+            ManualReason::StoreOnly,
+            "Store only",
+            &["steam".into()],
+        );
+        let _ = recipes;
+        assert!(guide.alternatives.iter().any(|a| a.contains("Discord") || a.contains("Epic") || a.contains("OBS") || a.contains("Roblox") || a.contains("Afterburner")));
+        assert!(!guide.alternatives.iter().any(|a| a == "Steam"));
+        assert!(!guide.alternatives.iter().any(|a| a == "Git" || a.contains("Visual Studio")));
     }
 }
