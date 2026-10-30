@@ -22,7 +22,7 @@ These decisions are fixed. If a task seems to conflict with one, the decision wi
 | Shell | A real Tauri v2 app. The current runtime (Axum on port 3001, plus Vite on 5173, plus an Edge `--app` window) goes away. Remove [crates/gui/main-electron.cjs](crates/gui/main-electron.cjs), [crates/gui/preload.cjs](crates/gui/preload.cjs), and the Edge path in [crates/gui/launch-app.ps1](crates/gui/launch-app.ps1). |
 | AI providers | Nebius Token Factory in production, NVIDIA NIM for testing. Each provider is pinned to one fixed model ID in a constant. No live model list and no model picker. Selection is `SETUPPAL_PROVIDER=nebius\|nim`. If unset, use Nebius when a Nebius key exists, otherwise NIM. |
 | Mascot | Pixel only. Remove Mochi, Byte, and the pet selector. Pixel's speech bubbles stay ambiguous and fun and never quote the user's messages. This workspace rule overrides `ui.md` section 11.3. |
-| Scope | SetupPal installs anything that passes two gates: (1) it installs unattended from the command line (winget silent, npm, pip, cargo, Modrinth or Fabric via its CLI installer, and similar) and can be verified with a CLI command, and (2) it passes the Safety Engine. Everything else gets a "Manual setup guide" reply: it says the app does not do non-terminal setup, gives step-by-step manual instructions, and lists similar things SetupPal *can* install. Apps that need a proprietary GUI launcher, store login, or DRM (Steam, Epic, Riot, Minecraft Bedrock, and similar) are always manual-only. |
+| Scope | SetupPal installs anything that passes two gates: (1) it installs unattended from the command line (winget silent, npm, pip, cargo, Modrinth or Fabric via its CLI installer, and similar) and can be verified with a CLI command, and (2) it passes the Safety Engine. Everything else gets a "Manual setup guide" reply: it says the app does not do non-terminal setup, gives step-by-step manual instructions, and lists similar things SetupPal *can* install. **Updated Oct 29, 2026:** anything trusted through winget (community repo, silent installer) is installable, including game launchers and apps that ask for a sign-in after install (Steam, Epic, Roblox, Discord). Only Microsoft Store-only apps (such as Minecraft Bedrock), vendor-page downloads, apps with no unattended installer, and Safety Engine blocks are manual-only. The backend gate decides, never the model. This replaces the earlier launcher/DRM block list described in P3.1 to P3.3. |
 | Docs | [AGENTS.md](AGENTS.md), [README.md](README.md), and [SECURITY.md](SECURITY.md) must state the same scope. SECURITY.md's repeated "Operational Boundary" blocks collapse into one section. (Those doc edits are tracked separately from this file.) |
 | Chat output | Chat shows only real model output and real errors. No canned replies, no placeholder text, no reply cache. |
 | Prompting | Prompts target a modest 30-40B model: plain, best-practice, easy to follow, with light flavor. Broad requests open with a short "what do you want set up?" question plus concrete suggestions. |
@@ -476,16 +476,16 @@ Runtime (after Phase 5): one Tauri process. It starts Axum on `127.0.0.1:<random
 
   #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
   #[serde(rename_all = "snake_case")]
-  pub enum ManualReason { LauncherOrDrm, StoreOnly, NoSilentInstaller, InteractiveLogin, Unknown }
+  pub enum ManualReason { StoreOnly, NoSilentInstaller, Unknown }
 
   pub async fn check(step: &Step, os: &dyn OsProvider) -> Installability;
   ```
 - **Steps:**
-  1. Known launcher or DRM list (winget IDs and name keywords): `Valve.Steam`, `EpicGames.EpicGamesLauncher`, `RiotGames.*`, `ElectronicArts.EADesktop`, `Ubisoft.Connect`, `Mojang.MinecraftLauncher`, Minecraft Bedrock, Roblox, Battle.net. These are always `ManualOnly(LauncherOrDrm)`. Reuse and then delete the keyword list in `format_host_facts` (main.rs 716-722).
-  2. winget signals: run `winget show --id <id> --exact --accept-source-agreements` and read `Installer Type` and `Installer Scope`. `msstore` source means `StoreOnly`. `msi`, `msix`, `wix`, `inno`, `nullsoft`, `burn`, `portable`, `zip` are silent-capable. `exe` without known silent switches means `NoSilentInstaller`. Machine-only scope means `NeedsAdmin`. If the output cannot be parsed, return `CliInstallable` but add a Yellow reason "installer type unknown".
+  1. ~~Known launcher or DRM list~~ Removed Oct 29, 2026: launchers are judged by their winget manifest like any other app. `LauncherOrDrm` and `InteractiveLogin` no longer exist.
+  2. winget signals: run `winget show --id <id> --exact --accept-source-agreements` and read `Installer Type` and `Installer Scope`. `msstore` source or a Store product ID means `StoreOnly`. `exe`, `msi`, `msix`, `wix`, `inno`, `nullsoft`, `burn`, `portable`, `zip` are silent-capable (community-repo `exe` manifests must declare silent switches). Machine-only scope means `NeedsAdmin`. If the output cannot be parsed, return `CliInstallable` but add a Yellow reason "installer type unknown".
   3. npm, PyPI, cargo, and Modrinth packages are `CliInstallable`.
   4. In `plan_handler`, run the check per step. If any step is `ManualOnly`, respond `{ "kind": "manual", "item": ..., "reason": ..., "alternatives": [...] }` instead of a plan. `NeedsAdmin` steps become Yellow with the reason text that already maps to "Administrator access needed" (safety/mod.rs 74-84).
-- **Acceptance:** unit tests with a mock `OsProvider` returning canned `winget show` output for each installer type; `Valve.Steam` is always `ManualOnly`.
+- **Acceptance:** unit tests with a mock `OsProvider` returning canned `winget show` output for each installer type; `Valve.Steam` and `Roblox.Roblox` are `CliInstallable`, and a Store product ID is `ManualOnly(StoreOnly)`.
 
 #### P3.2 Manual setup guide reply and card
 
@@ -494,17 +494,17 @@ Runtime (after Phase 5): one Tauri process. It starts Axum on `127.0.0.1:<random
 - **Steps:**
   1. A manual intent (from chat or from `/api/plan`) renders a card titled "Manual setup guide" with: one line that SetupPal only does terminal-based, unattended setup; the model's numbered steps (already in the visible reply); and up to five "SetupPal can install instead" chips that submit a new goal.
   2. No plan card and no approve button for manual intents.
-- **Acceptance:** "install Steam" shows the manual card with alternatives and never calls `/api/execute`.
+- **Acceptance:** "install Minecraft Bedrock" shows the manual card with alternatives and never calls `/api/execute`. A manual intent for an app winget installs silently (for example LMMS) shows a plan instead, because `handleIntent` sends every manual claim through `/api/plan`.
 
 #### P3.3 Prompt rewrite for the new scope
 
 - **Goal:** the model knows the broadened scope and the intent contract.
 - **Files:** main.rs `STATIC_SYSTEM_PROMPT` (640-653), `format_host_facts` (670-726), `PROMPT_VERSION` (638)
 - **Steps:**
-  1. Scope paragraph: anything installable unattended from the command line and checkable with a CLI command; launcher, store, DRM, and login-only apps get a manual guide plus alternatives.
+  1. Scope paragraph: anything installable unattended from the command line and checkable with a CLI command, including winget game launchers and apps that ask for a sign-in after install; only Store-only, vendor-page, and no-silent-installer apps get a manual guide plus alternatives.
   2. Intent paragraph: when the user has agreed on what to install, end the reply with one `setuppal-intent` block (P1.1 schema). Never output the block while still asking a question.
   3. Update the facts line "Supported scope: Unattended CLI setups only (web, coding languages, compilers, dev tools)" (main.rs 699) to the new wording.
-- **Acceptance:** with the mock-free manual checklist (P7.2), "set up Python for data science" ends in an install intent, and "install Fortnite" ends in a manual intent.
+- **Acceptance:** with the mock-free manual checklist (P7.2), "set up Python for data science" ends in an install intent, and "install Minecraft Bedrock" ends in a manual intent.
 
 #### P3.4 Recipes and suggestion chips
 
@@ -670,7 +670,7 @@ Run against the installed NSIS build, and record pass or fail plus notes in the 
 4. Failure and healer: force a failing verify; one remediation is proposed and the run ends honestly.
 5. Cancel: Esc during a winget install stops it within 2 seconds.
 6. Undo: roll back the last transaction from History; the tool is gone and PATH is restored.
-7. Manual guide: "install Steam" shows the manual card with alternatives.
+7. Manual guide: "install Minecraft Bedrock" shows the manual card with alternatives.
 8. Nebius provider: with `SETUPPAL_PROVIDER=nebius`, chat and plan show the pinned Nebius model.
 9. NIM provider: with `SETUPPAL_PROVIDER=nim`, the same flows work with the pinned NIM model.
 10. Security: `curl` without the token gets 401; no key appears in `localStorage` or logs.
@@ -678,7 +678,7 @@ Run against the installed NSIS build, and record pass or fail plus notes in the 
 #### P7.3 Hackathon demo script
 
 - **Files:** new `docs/DEMO.md`
-- **Content:** a 3-minute script: open the app, Pixel greets; ask for a Python data science setup; show the plan card with verdicts and Why?; approve a Yellow step; Hacker mode terminal during the run; success; ask for Steam to show the manual guide; undo from History. Include a reset checklist for between runs.
+- **Content:** a 3-minute script: open the app, Pixel greets; ask for a Python data science setup; show the plan card with verdicts and Why?; approve a Yellow step; Hacker mode terminal during the run; success; ask for Minecraft Bedrock to show the manual guide; undo from History. Include a reset checklist for between runs.
 
 ---
 

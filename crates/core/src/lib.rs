@@ -3,6 +3,7 @@
 //! Shares 100% of domain logic across the CLI (`installer_cli`) and Tauri v2 GUI (`installer_gui`).
 
 pub mod adapters;
+pub mod cleanup;
 pub mod config;
 pub mod discovery;
 pub mod events;
@@ -12,8 +13,10 @@ pub mod installability;
 pub mod llm;
 pub mod os;
 pub mod paths;
+pub mod plan_scope;
 pub mod planner;
 pub mod recipes;
+pub mod resolver;
 pub mod safety;
 pub mod scan;
 pub mod state;

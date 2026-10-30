@@ -311,6 +311,45 @@ pub async fn add_to_windows_user_path(directory: &Path) -> Result<String, CoreEr
     Ok(current_raw)
 }
 
+/// Raw User PATH from `HKCU\Environment` (empty string when unset).
+pub async fn read_user_path_raw() -> Result<String, CoreError> {
+    Ok(query_reg_path_value(HKCU_ENV_KEY).await.unwrap_or_default())
+}
+
+/// True when another winget/msiexec installer appears to be running (R5 pre-flight).
+pub async fn blocking_installer_message() -> Option<String> {
+    for (image, label) in [("winget.exe", "winget"), ("msiexec.exe", "msiexec")] {
+        if let Some(msg) = tasklist_running(image, label).await {
+            return Some(msg);
+        }
+    }
+    None
+}
+
+async fn tasklist_running(image: &str, label: &str) -> Option<String> {
+    let out = Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {image}"), "/FO", "CSV", "/NH"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // "INFO: No tasks are running..." or empty
+    let line = stdout.lines().find(|l| l.to_ascii_lowercase().contains(&image.to_ascii_lowercase()))?;
+    // CSV: "winget.exe","1234","Session","1","12,345 K"
+    let started = line
+        .split(',')
+        .nth(1)
+        .map(|s| s.trim_matches('"'))
+        .filter(|s| !s.is_empty())
+        .unwrap_or("unknown");
+    Some(format!(
+        "Another installer is running ({label}, PID {started}). Close it or wait, then try again."
+    ))
+}
+
 /// Restores the User PATH in `HKCU\Environment` to a previous value (used by rollback).
 pub async fn restore_windows_user_path(previous_raw: &str) -> Result<(), CoreError> {
     let cleaned = previous_raw

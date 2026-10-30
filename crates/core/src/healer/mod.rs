@@ -10,6 +10,59 @@ use crate::types::{Plan, PlannedStep, SystemProfile};
 
 pub const DEFAULT_MAX_RECOVERY_ATTEMPTS: u8 = 2;
 
+/// Rough failure class so remediations must change the input that caused it.
+pub fn classify_failure(failure: &FailureContext) -> &'static str {
+    let blob = format!("{} {}", failure.stderr, failure.stdout).to_ascii_lowercase();
+    let code = failure.exit_code.map(|c| c as u32);
+    if code == Some(0x8A150010) || blob.contains("no applicable installer") {
+        return "scope";
+    }
+    if blob.contains("not found") || blob.contains("no package") || code == Some(0x8A150011) {
+        return "not_found";
+    }
+    if blob.contains("timed out") || blob.contains("timeout") {
+        return "timeout";
+    }
+    if blob.contains("already installed") {
+        return "already_installed";
+    }
+    if blob.contains("hash") {
+        return "hash";
+    }
+    if blob.contains("admin") {
+        return "admin";
+    }
+    "other"
+}
+
+fn remediation_is_noop(plan: &Plan, failure: &FailureContext) -> bool {
+    if plan.steps.is_empty() {
+        return true;
+    }
+    // Only CreateIsolatedEnv with no install is never a fix for a winget/npm failure.
+    let only_env = plan.steps.iter().all(|s| {
+        matches!(
+            &s.step,
+            crate::types::Step::CreateIsolatedEnv { .. }
+        )
+    });
+    if only_env {
+        return true;
+    }
+    // Identical single-step install of the same package id mentioned in the failure.
+    if plan.steps.len() == 1 {
+        if let crate::types::Step::InstallPackage { package_id, .. } = &plan.steps[0].step {
+            let blob = format!("{} {}", failure.stderr, failure.stdout).to_ascii_lowercase();
+            if blob.contains(&package_id.to_ascii_lowercase())
+                && (blob.contains("not found") || classify_failure(failure) == "not_found")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Diagnostic failure context captured during execution or verification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FailureContext {
@@ -116,17 +169,28 @@ impl Healer {
             attempt: failure.attempt,
         });
 
-        // 2. Request remediation plan from NIM / LLM
+        // 2. Request remediation plan from NIM / LLM (include a classified cause)
+        let cause = classify_failure(failure);
+        let diagnostic_with_cause = format!("Classified cause: {cause}\n{diagnostic}");
         let remediation_plan = self
             .llm
             .propose_remediation_plan(
                 goal,
                 &failure.system_profile,
                 &failure.failed_step_id,
-                &diagnostic,
+                &diagnostic_with_cause,
                 failure.attempt,
             )
             .await?;
+
+        // Drop remediations that only repeat the failed step or add nothing useful (R12).
+        if remediation_is_noop(&remediation_plan, failure) {
+            tracing::warn!(
+                "Healer proposed a no-op remediation for {}; showing the honest failure instead",
+                failure.failed_step_id
+            );
+            return Ok(None);
+        }
 
         // 3. Mandatory Zero-Trust Safety Gate
         let safety_report = self.safety_engine.evaluate_plan(&remediation_plan).await?;

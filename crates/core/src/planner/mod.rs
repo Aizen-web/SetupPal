@@ -3,24 +3,33 @@ use std::sync::Arc;
 use crate::config::CoreError;
 use crate::events::{AgentEvent, EventBus};
 use crate::llm::LlmClient;
+use crate::os::OsProvider;
+use crate::plan_scope::validate_plan_scope;
 use crate::recipes::RecipeStore;
+use crate::resolver::{resolve_winget_id, single_winget_plan};
 use crate::types::{Plan, SystemProfile};
 
 /// Converts `Goal + SystemProfile + Optional<UntrustedContext>` into a validated `Plan`.
-/// Checks deterministic `RecipeStore` first; falls back to `LlmClient` (NVIDIA NIM) if no
-/// recipe matches or if external context requires custom synthesis.
+/// Checks deterministic `RecipeStore` first, then the winget resolver, then `LlmClient`.
 pub struct Planner {
     recipes: RecipeStore,
     llm: Arc<dyn LlmClient>,
     events: EventBus,
+    os: Arc<dyn OsProvider>,
 }
 
 impl Planner {
-    pub fn new(recipes: RecipeStore, llm: Arc<dyn LlmClient>, events: EventBus) -> Self {
+    pub fn new(
+        recipes: RecipeStore,
+        llm: Arc<dyn LlmClient>,
+        events: EventBus,
+        os: Arc<dyn OsProvider>,
+    ) -> Self {
         Self {
             recipes,
             llm,
             events,
+            os,
         }
     }
 
@@ -52,7 +61,7 @@ impl Planner {
             goal: trimmed_goal.to_string(),
         });
 
-        // 1. Check deterministic recipes first (when no untrusted repo context overrides it)
+        // 1. Stack-phrase recipes only (single-app words never match — see Recipe::matches_goal)
         if untrusted_context.is_none() {
             if let Some(recipe) = self.recipes.find_matching(trimmed_goal) {
                 self.events.emit(AgentEvent::RecipeMatched {
@@ -60,6 +69,7 @@ impl Planner {
                 });
                 let plan = recipe.to_plan(trimmed_goal);
                 self.validate_plan_structure(&plan)?;
+                validate_plan_scope(&plan)?;
                 self.events.emit(AgentEvent::PlanGenerated {
                     plan: Box::new(plan.clone()),
                 });
@@ -67,7 +77,20 @@ impl Planner {
             }
         }
 
-        // 2. Fall back to the pinned provider with JSON Schema enforcement
+        // 2. Deterministic winget resolve (exact ID or one clear search hit)
+        if untrusted_context.is_none() {
+            if let Some(id) = resolve_winget_id(self.os.as_ref(), trimmed_goal).await {
+                let plan = single_winget_plan(trimmed_goal, &id);
+                self.validate_plan_structure(&plan)?;
+                validate_plan_scope(&plan)?;
+                self.events.emit(AgentEvent::PlanGenerated {
+                    plan: Box::new(plan.clone()),
+                });
+                return Ok(plan);
+            }
+        }
+
+        // 3. Fall back to the pinned provider with JSON Schema enforcement
         self.events.emit(AgentEvent::LlmPlanningFallback {
             goal: trimmed_goal.to_string(),
             model: self.llm.model_name().to_string(),
@@ -90,6 +113,7 @@ impl Planner {
         plan.goal = trimmed_goal.to_string();
 
         self.validate_plan_structure(&plan)?;
+        validate_plan_scope(&plan)?;
 
         self.events.emit(AgentEvent::PlanGenerated {
             plan: Box::new(plan.clone()),
@@ -129,13 +153,28 @@ mod tests {
 
     use super::*;
     use crate::llm::mock::{llm_plan, sample_profile, verify_step, MockLlmClient, RecordedLlmCall};
-    use crate::types::{AllowedBinary, PlanSource};
+    use crate::os::mock::{ok, MockOsProvider};
+    use crate::types::{AllowedBinary, PlanSource, Step};
 
     fn planner_with(llm: Arc<MockLlmClient>) -> (Planner, EventBus) {
         let events = EventBus::default();
         let recipes = RecipeStore::load_from_dir_or_embedded(Path::new("does-not-exist"))
             .expect("embedded recipes load");
-        (Planner::new(recipes, llm, events.clone()), events)
+        let os = Arc::new(MockOsProvider::new());
+        (
+            Planner::new(recipes, llm, events.clone(), os),
+            events,
+        )
+    }
+
+    fn planner_with_os(llm: Arc<MockLlmClient>, os: Arc<MockOsProvider>) -> (Planner, EventBus) {
+        let events = EventBus::default();
+        let recipes = RecipeStore::load_from_dir_or_embedded(Path::new("does-not-exist"))
+            .expect("embedded recipes load");
+        (
+            Planner::new(recipes, llm, events.clone(), os),
+            events,
+        )
     }
 
     fn one_step_plan(goal: &str) -> Plan {
@@ -160,7 +199,7 @@ mod tests {
         let (planner, events) = planner_with(llm.clone());
         let mut rx = events.subscribe();
         let plan = planner
-            .create_plan("set me up for Rust", &sample_profile(), None)
+            .create_plan("set me up for rust", &sample_profile(), None)
             .await
             .expect("recipe plan");
         assert!(matches!(plan.source, PlanSource::Recipe { .. }));
@@ -171,6 +210,37 @@ mod tests {
             saw_recipe |= matches!(event, AgentEvent::RecipeMatched { .. });
         }
         assert!(saw_recipe);
+    }
+
+    #[tokio::test]
+    async fn single_app_resolves_without_the_model() {
+        let llm = Arc::new(MockLlmClient::new());
+        let os = Arc::new(
+            MockOsProvider::new()
+                .with_binary("winget", r"C:\winget.exe")
+                .on(
+                    "winget",
+                    &["search"],
+                    ok("Name              Id            Version Source\n---------------------------------------------\nVLC media player  VideoLAN.VLC  3.0.21  winget\n"),
+                )
+                .on(
+                    "winget",
+                    &["show"],
+                    ok("Found VLC [VideoLAN.VLC]\nInstaller Type: nullsoft\n"),
+                ),
+        );
+        let (planner, _) = planner_with_os(llm.clone(), os);
+        let plan = planner
+            .create_plan("install vlc please", &sample_profile(), None)
+            .await
+            .expect("resolved");
+        assert!(matches!(plan.source, PlanSource::Resolved { .. }));
+        assert_eq!(plan.steps.len(), 1);
+        assert!(matches!(
+            &plan.steps[0].step,
+            Step::InstallPackage { package_id, .. } if package_id == "VideoLAN.VLC"
+        ));
+        assert!(llm.calls().is_empty());
     }
 
     #[tokio::test]
@@ -196,7 +266,7 @@ mod tests {
         let llm = Arc::new(MockLlmClient::new().with_plan(one_step_plan("x")));
         let (planner, _) = planner_with(llm.clone());
         planner
-            .create_plan("set me up for Rust", &sample_profile(), Some("README text"))
+            .create_plan("set me up for rust", &sample_profile(), Some("README text"))
             .await
             .expect("llm plan");
         match &llm.calls()[0] {
@@ -214,13 +284,13 @@ mod tests {
         let llm = Arc::new(MockLlmClient::new().with_plan(one_step_plan("x")));
         let (planner, _) = planner_with(llm.clone());
         let plan = planner
-            .create_plan_with_context("jq", &sample_profile(), None, Some("User wants CLI tools"))
+            .create_plan_with_context("something obscure xyzzy", &sample_profile(), None, Some("User wants CLI tools"))
             .await
             .expect("plan");
-        assert_eq!(plan.goal, "jq");
+        assert_eq!(plan.goal, "something obscure xyzzy");
         match &llm.calls()[0] {
             RecordedLlmCall::Plan { goal, .. } => {
-                assert!(goal.starts_with("jq"));
+                assert!(goal.starts_with("something obscure xyzzy"));
                 assert!(goal.contains("User wants CLI tools"));
             }
             other => panic!("unexpected call {other:?}"),
@@ -232,7 +302,7 @@ mod tests {
         let llm = Arc::new(MockLlmClient::new().with_plan(llm_plan("g", vec![])));
         let (planner, _) = planner_with(llm);
         let err = planner
-            .create_plan("jq", &sample_profile(), None)
+            .create_plan("something obscure xyzzy", &sample_profile(), None)
             .await
             .expect_err("empty plan");
         assert!(err.to_string().contains("zero steps"));
@@ -250,12 +320,16 @@ mod tests {
         let blank = llm_plan("g", vec![verify_step("  ", AllowedBinary::Git)]);
         let llm = Arc::new(MockLlmClient::new().with_plan(dup).with_plan(blank));
         let (planner, _) = planner_with(llm);
-        let first = planner.create_plan("jq", &sample_profile(), None).await;
+        let first = planner
+            .create_plan("something obscure xyzzy", &sample_profile(), None)
+            .await;
         assert!(first
             .expect_err("duplicate")
             .to_string()
             .contains("duplicate step id"));
-        let second = planner.create_plan("jq", &sample_profile(), None).await;
+        let second = planner
+            .create_plan("something obscure xyzzy", &sample_profile(), None)
+            .await;
         assert!(second.expect_err("blank").to_string().contains("empty id"));
     }
 
@@ -264,9 +338,51 @@ mod tests {
         let llm = Arc::new(MockLlmClient::new().with_plan_error("provider down"));
         let (planner, _) = planner_with(llm);
         let err = planner
-            .create_plan("jq", &sample_profile(), None)
+            .create_plan("something obscure xyzzy", &sample_profile(), None)
             .await
             .expect_err("llm error");
         assert!(err.to_string().contains("provider down"));
+    }
+
+    #[tokio::test]
+    async fn llm_plan_with_unrequested_package_is_rejected() {
+        use crate::types::{AdapterKind, Ecosystem, PlannedStep};
+        let bad = Plan {
+            plan_id: "p".into(),
+            goal: "install vlc".into(),
+            summary: "x".into(),
+            source: PlanSource::Llm {
+                model: "test".into(),
+            },
+            steps: vec![
+                PlannedStep {
+                    id: "step-1".into(),
+                    description: "vlc".into(),
+                    step: Step::InstallPackage {
+                        ecosystem: Ecosystem::Winget,
+                        package_id: "VideoLAN.VLC".into(),
+                        version: None,
+                        source_adapter: AdapterKind::Winget,
+                    },
+                },
+                PlannedStep {
+                    id: "step-2".into(),
+                    description: "git".into(),
+                    step: Step::InstallPackage {
+                        ecosystem: Ecosystem::Winget,
+                        package_id: "Git.Git".into(),
+                        version: None,
+                        source_adapter: AdapterKind::Winget,
+                    },
+                },
+            ],
+        };
+        let llm = Arc::new(MockLlmClient::new().with_plan(bad));
+        let (planner, _) = planner_with(llm);
+        let err = planner
+            .create_plan("install vlc", &sample_profile(), None)
+            .await
+            .expect_err("scope");
+        assert!(err.to_string().contains("unrequested"));
     }
 }

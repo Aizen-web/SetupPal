@@ -184,11 +184,12 @@ class ApiClient {
     });
   }
 
-  async createPlan(goal, { untrustedReadme = null, context = null } = {}) {
+  async createPlan(goal, { untrustedReadme = null, context = null, verifyManual = false } = {}) {
     const res = await authFetch('/api/plan', jsonInit('POST', {
       goal,
       untrusted_readme: untrustedReadme,
       context: context || null,
+      verify_manual: verifyManual,
     }));
     if (!res.ok) {
       const text = await res.text();

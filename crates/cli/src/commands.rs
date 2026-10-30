@@ -41,7 +41,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let profile = scanner.scan().await?;
             let recipes = RecipeStore::load_from_dir_or_embedded(&config.recipes_dir)?;
             let llm = Arc::new(NimClient::new(config.clone())?);
-            let planner = Planner::new(recipes, llm, events);
+            let planner = Planner::new(recipes, llm, events, os_provider.clone());
 
             let plan = planner.create_plan(&goal, &profile, None).await?;
             let safety_report = safety_engine.evaluate_plan(&plan).await?;
@@ -69,7 +69,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let profile = scanner.scan().await?;
             let recipes = RecipeStore::load_from_dir_or_embedded(&config.recipes_dir)?;
             let llm = Arc::new(NimClient::new(config.clone())?);
-            let planner = Planner::new(recipes, llm, events.clone());
+            let planner = Planner::new(recipes, llm, events.clone(), os_provider.clone());
 
             let plan = planner.create_plan(&goal, &profile, None).await?;
             let safety_report = safety_engine.evaluate_plan(&plan).await?;

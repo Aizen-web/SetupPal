@@ -2,10 +2,10 @@ id: python_ai_venv
 name: Isolated Python AI & Data Science Environment
 triggers:
   - "python ai"
-  - "data science"
-  - "pytorch"
-  - "jupyter"
-  - "python"
+  - "python data science"
+  - "data science setup"
+  - "set me up for python data science"
+  - "pytorch jupyter"
 summary: "Installs Python 3.12 via winget, creates an isolated venv in %USERPROFILE%\\.venvs\\python-ai, and installs pinned NumPy, Pandas, and Colorama from PyPI into it."
 steps:
   - id: step-0

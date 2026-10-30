@@ -267,9 +267,10 @@ function renderPlanCard(plan) {
   }).length;
   const heldId = plan.haltedAt;
   const meta = `${plan.tasks.length} step${plan.tasks.length === 1 ? '' : 's'}${review ? ` · ${review} need${review === 1 ? 's' : ''} a look` : ''}`;
+  const totalSteps = plan.tasks.length;
   const approveLabel = heldId
     ? 'Approve and continue'
-    : `Run ${approvedCount} approved step${approvedCount === 1 ? '' : 's'}`;
+    : `Run ${approvedCount} of ${totalSteps} step${totalSteps === 1 ? '' : 's'}`;
 
   return `
     <section class="plan-card" aria-labelledby="plan-card-title">

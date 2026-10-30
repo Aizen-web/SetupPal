@@ -24,10 +24,16 @@ function matches(q, ...fields) {
   return fields.some(f => String(f ?? '').toLowerCase().includes(q));
 }
 
-function txTag(tx) {
-  if (tx.rolledBackTxId) return ['Rewind', 'chip-tag'];
+function txTag(tx, undoneAtById = {}) {
+  // Undo rows themselves: no action (R16).
+  if (tx.rolledBackTxId) return ['Undo record', 'chip-tag chip-muted'];
   if (tx.dryRun) return ['Dry run', 'chip-tag'];
-  return tx.rollbackAvailable ? ['Reversible', 'chip-tag'] : ['Not reversible', 'chip-tag chip-muted'];
+  if (undoneAtById[tx.id]) {
+    return [`Undone at ${undoneAtById[tx.id]}`, 'chip-tag chip-muted'];
+  }
+  return tx.rollbackAvailable
+    ? ['Reversible', 'chip-tag']
+    : ['Not reversible', 'chip-tag chip-muted'];
 }
 
 function buildBodies() {
@@ -35,7 +41,13 @@ function buildBodies() {
   const { transactions, loaded, error } = state.history;
   const q = query.trim().toLowerCase();
   const ordered = [...transactions].reverse();
-  const latestRewindable = ordered.find(tx => !tx.rolledBackTxId && !tx.dryRun && tx.rollbackAvailable);
+  const undoneAtById = {};
+  for (const tx of transactions) {
+    if (tx.rolledBackTxId) {
+      undoneAtById[tx.rolledBackTxId] = formatWhen(tx.timestamp).replace(/^.*,\s*/, '') || formatWhen(tx.timestamp);
+    }
+  }
+  const latestRewindable = ordered.find(tx => !tx.rolledBackTxId && !tx.dryRun && tx.rollbackAvailable && !undoneAtById[tx.id]);
   const shownTx = ordered.filter(tx => matches(q, tx.summary, tx.goal, tx.stepId, ...(tx.changes || [])));
 
   const conversations = [...(state.conversations || [])]
@@ -55,8 +67,8 @@ function buildBodies() {
     changesHtml = `<p class="empty-note">No changes match “${esc(query.trim())}”.</p>`;
   } else {
     changesHtml = `<ul class="list-stack">${shownTx.map(tx => {
-      const canRewind = !tx.rolledBackTxId && !tx.dryRun && tx.rollbackAvailable;
-      const [tag, tagClass] = txTag(tx);
+      const canRewind = !tx.rolledBackTxId && !tx.dryRun && tx.rollbackAvailable && !undoneAtById[tx.id];
+      const [tag, tagClass] = txTag(tx, undoneAtById);
       return `
         <li class="list-row list-row-col">
           <div class="list-row-main">
@@ -65,7 +77,7 @@ function buildBodies() {
               <span class="list-title">${esc(tx.summary)}</span>
             </div>
             <div class="btn-row">
-              <span class="${tagClass}" ${tx.rolledBackTxId ? `title="Rewind of ${esc(tx.rolledBackTxId)}"` : ''}>${tag}</span>
+              <span class="${tagClass}" ${tx.rolledBackTxId ? `title="Undo of ${esc(tx.rolledBackTxId)}"` : ''}>${tag}</span>
               ${canRewind ? `<button type="button" class="btn-review btn-xs btn-rewind-tx" data-tx="${esc(tx.id)}">Rewind</button>` : ''}
             </div>
           </div>

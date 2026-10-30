@@ -13,8 +13,21 @@ import { pixelVoice } from '../mascot/voicelines.js';
 import confetti from 'canvas-confetti';
 import { labelRunText, runSummaryText, scanLogEntry } from './run-log.js';
 
+/** Readable card title: prefer package name over a raw winget id goal. */
+function planTitle(plan) {
+  const goal = String(plan?.goal || '').trim();
+  const firstInstall = (plan?.steps || []).find(s => s.step?.action === 'install_package');
+  const pkg = firstInstall?.step?.params?.package_id || '';
+  if (plan?.source?.resolved || (pkg && /^[A-Za-z0-9_.+-]+\.[A-Za-z0-9_.+-]+$/.test(goal))) {
+    const name = pkg.includes('.') ? pkg.split('.').slice(1).join('.') : (pkg || goal);
+    return name || goal;
+  }
+  if (goal.length <= 48) return goal;
+  return goal.slice(0, 45) + '…';
+}
+
 /** Map `/api/plan` (or remediation) JSON into the UI `activePlan` shape. */
-export function toActivePlan(data) {
+export function toActivePlan(data, { verifiedManual = false } = {}) {
   const plan = data?.plan;
   const safety = data?.safety;
   const metaList = Array.isArray(data?.step_metadata) ? data.step_metadata : [];
@@ -23,11 +36,18 @@ export function toActivePlan(data) {
   const stepReport = (id) =>
     (safety?.step_reports || []).find(r => r.step_id === id) || null;
 
+  const subtitleParts = [];
+  if (verifiedManual) {
+    subtitleParts.push('SetupPal checked: this installs unattended through winget.');
+  }
+  if (plan.summary) subtitleParts.push(plan.summary);
+
   return {
     planId: plan.plan_id,
-    title: plan.goal,
-    subtitle: plan.summary,
+    title: planTitle(plan),
+    subtitle: subtitleParts.join(' '),
     status: 'ready',
+    verifiedManual: Boolean(verifiedManual),
     needsProjectDir: plan.steps.some(s =>
       s.step?.action === 'install_package' && s.step?.params?.ecosystem === 'npm'),
     projectDir: null,
@@ -36,10 +56,16 @@ export function toActivePlan(data) {
       const meta = metaList.find(m => m.step_id === s.id) || {};
       const rating = (report?.rating || 'yellow').toLowerCase();
       const verdict = rating.toUpperCase();
+      const pkg = s.step?.params?.package_id;
+      const eco = s.step?.params?.ecosystem;
+      let title = s.description;
+      if (s.step?.action === 'install_package' && pkg) {
+        title = eco === 'winget' ? `Install ${pkg} (winget)` : `Install ${pkg} (${eco || 'package'})`;
+      }
       return {
         id: s.id,
         num: i + 1,
-        title: s.description,
+        title,
         sourceDomain: meta.source_domain || '',
         sourceUrl: meta.source_url || '',
         verdict,
@@ -51,6 +77,30 @@ export function toActivePlan(data) {
       };
     }),
   };
+}
+
+/** Intent items must appear in the user's messages — drop assistant-only suggestions (R2). */
+export function intentGroundedInUserText(intent, historyMessages = []) {
+  const userBlob = (historyMessages || [])
+    .filter(m => m && m.sender === 'user')
+    .map(m => String(m.text || '').toLowerCase())
+    .join('\n');
+  if (!userBlob.trim()) return false;
+
+  const tokens = [];
+  if (intent?.goal) tokens.push(String(intent.goal));
+  if (intent?.item) tokens.push(String(intent.item));
+  if (Array.isArray(intent?.items)) tokens.push(...intent.items.map(String));
+  if (!tokens.length) return false;
+
+  return tokens.every(tok => {
+    const t = tok.toLowerCase().trim();
+    if (!t) return false;
+    if (userBlob.includes(t)) return true;
+    // Publisher.Package → check last segment
+    const last = t.split('.').pop();
+    return last && last.length >= 2 && userBlob.includes(last);
+  });
 }
 
 function conversationSummary(messages, limit = 1400) {
@@ -72,6 +122,24 @@ function escChat(text) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+/** One assistant chat line built from the run summary (R15) — not from the model. */
+function buildRunChatSummary(summary) {
+  const results = Array.isArray(summary?.step_results) ? summary.step_results : [];
+  const lines = ['**Run finished.**'];
+  for (const r of results) {
+    const name = r.description || r.step_id || 'step';
+    const st = String(r.status || '').toLowerCase();
+    if (st === 'skipped') lines.push(`- Skipped: ${name}`);
+    else if (st === 'failed') lines.push(`- Failed: ${name} — ${r.error || 'see the run log'}`);
+    else if (r.executed && !r.error) {
+      const already = (r.receipt?.logs || []).some(l => /already installed/i.test(String(l)));
+      lines.push(already ? `- Already installed: ${name}` : `- Installed: ${name}`);
+    }
+  }
+  if (lines.length === 1) lines.push('- Nothing new was installed.');
+  return lines.join('\n');
 }
 
 export class BackendBridge {
@@ -645,8 +713,26 @@ export class BackendBridge {
   async handleIntent(conversationId, intent, historyMessages = []) {
     if (!intent?.kind) return;
 
-    if (intent.kind === 'manual') {
-      const alts = Array.isArray(intent.alternatives) ? intent.alternatives : [];
+    // The model's "manual" verdict is only a claim: the backend checks the item against winget, so
+    // an app that installs silently still gets a plan even when the model called it manual-only.
+    const verifyManual = intent.kind === 'manual';
+    const goal = verifyManual
+      ? intent.item
+      : intent.kind === 'install'
+        ? (intent.goal || (Array.isArray(intent.items) ? intent.items.join(', ') : null))
+        : null;
+    if (!goal) return;
+
+    // Drop intents that name something only the assistant suggested (never the user).
+    if (!intentGroundedInUserText(intent, historyMessages)) {
+      console.warn('[SetupPal] Ignoring intent not grounded in user messages', intent);
+      return;
+    }
+
+    // Broad "manual" with no specific item stays a chat question — don't open a guide.
+    if (verifyManual && !String(intent.item || '').trim()) return;
+
+    const showModelGuide = () => {
       store.setState(s => {
         if (s.activeConversationId !== conversationId) return s;
         return {
@@ -655,61 +741,98 @@ export class BackendBridge {
           manualGuide: {
             item: intent.item,
             reason: intent.reason,
-            alternatives: alts,
+            alternatives: Array.isArray(intent.alternatives) ? intent.alternatives : [],
           },
         };
       });
-      // Persist manual guide on the conversation via activePlan-null + message intent already stored.
       store.persistConversations();
-      return;
-    }
+    };
 
-    if (intent.kind !== 'install' || !intent.goal) return;
+    // Immediate status row while resolution / safety run (R14).
+    const statusId = 'plan_status_' + Date.now();
+    store.setState(s => {
+      if (s.activeConversationId !== conversationId) return s;
+      return {
+        ...s,
+        chatMessages: [
+          ...s.chatMessages,
+          {
+            id: statusId,
+            sender: 'assistant',
+            text: 'Checking packages…',
+            options: [],
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            planAttached: false,
+            isStatus: true,
+          },
+        ],
+      };
+    });
+
+    const clearStatus = (extra = {}) => {
+      store.setState(s => ({
+        ...s,
+        ...extra,
+        chatMessages: (s.chatMessages || []).filter(m => m.id !== statusId),
+      }));
+    };
 
     try {
       if (!this.isBackendOnline) await this.waitForConnection(3000);
-      const data = await apiClient.createPlan(intent.goal, {
+      store.setState(s => ({
+        ...s,
+        chatMessages: (s.chatMessages || []).map(m =>
+          m.id === statusId ? { ...m, text: 'Running safety checks…' } : m
+        ),
+      }));
+      const data = await apiClient.createPlan(goal, {
         context: conversationSummary(historyMessages),
+        verifyManual,
       });
 
+      if (data?.kind === 'no_match') {
+        clearStatus();
+        showModelGuide();
+        return;
+      }
+
       if (data?.kind === 'manual' || (data?.item && data?.reason && !data?.plan)) {
-        store.setState(s => {
-          if (s.activeConversationId !== conversationId) return s;
-          return {
-            ...s,
-            activePlan: null,
-            manualGuide: {
-              item: data.item,
-              reason: data.detail || data.reason,
-              alternatives: data.alternatives || [],
-              steps: data.steps || [],
-            },
-          };
+        clearStatus({
+          activePlan: null,
+          manualGuide: {
+            item: data.item,
+            reason: data.detail || data.reason,
+            alternatives: data.alternatives || [],
+            steps: data.steps || [],
+          },
         });
         store.persistConversations();
         return;
       }
 
-      const activePlan = toActivePlan(data);
-      if (!activePlan) return;
+      const activePlan = toActivePlan(data, { verifiedManual: verifyManual && Boolean(data?.plan) });
+      if (!activePlan) {
+        clearStatus();
+        return;
+      }
       this.activeExecutionPlan = data.plan;
-      store.setState(s => {
-        if (s.activeConversationId !== conversationId) {
-          // Still persist onto the originating conversation.
-          return s;
-        }
-        return {
-          ...s,
-          activePlan,
-          manualGuide: null,
-          tasksOpen: true,
-        };
+      clearStatus({
+        activePlan,
+        manualGuide: null,
+        tasksOpen: true,
+        // Prior plan is replaced; chat keeps one live card (R2 / R19).
+        replacedPlanNote: store.getState().activePlan
+          ? `Previous plan (${store.getState().activePlan.title}) was replaced.`
+          : null,
       });
-      // Ensure conversation snapshot gets the plan.
-      store.setState(s => s);
       store.persistConversations();
     } catch (err) {
       console.error('Plan from intent failed:', err);
+      clearStatus();
+      if (verifyManual) {
+        showModelGuide();
+        return;
+      }
       store.setState(s => ({
         ...s,
         chatMessages: [
@@ -899,12 +1022,24 @@ export class BackendBridge {
             });
           } catch (e) { /* ignore */ }
         }
+        const chatSummary = buildRunChatSummary(summary);
         store.setState(s => ({
           ...s,
           activePlan: { ...s.activePlan, status: 'completed' },
           terminalLogs: [
             ...s.terminalLogs,
             { id: Date.now() + 99, text: '✓ ALL APPROVED TASKS EXECUTED AND VERIFIED CLEANLY', type: 'green' },
+          ],
+          chatMessages: [
+            ...s.chatMessages,
+            {
+              id: 'a_' + Date.now(),
+              sender: 'assistant',
+              text: chatSummary,
+              options: [],
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              planAttached: false,
+            },
           ],
         }));
         this.refreshHistory();

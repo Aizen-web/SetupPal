@@ -135,15 +135,20 @@ impl WingetAdapter {
             .contains(&package_id.to_ascii_lowercase())
     }
 
-    /// `--scope user` unless the manifest only offers a machine-wide installer.
+    /// Pass `--scope user` only when the manifest lists a user-scope installer.
+    /// Manifests with no scope (LMMS and many others) must not get a scope flag.
     fn install_args(metadata: &PackageMetadata) -> Vec<String> {
+        Self::install_args_with_scope(metadata, metadata.installer_scope.as_deref() == Some("user"))
+    }
+
+    fn install_args_with_scope(metadata: &PackageMetadata, force_user_scope: bool) -> Vec<String> {
         let mut args = vec![
             "install".to_string(),
             "--id".to_string(),
             metadata.package_id.clone(),
             "--exact".to_string(),
         ];
-        if metadata.installer_scope.as_deref() != Some("machine") {
+        if force_user_scope {
             args.push("--scope".to_string());
             args.push("user".to_string());
         }
@@ -162,6 +167,37 @@ impl WingetAdapter {
         }
         args
     }
+}
+
+/// Maps common winget HRESULTs to a plain sentence. Includes the last non-empty output line.
+pub fn format_winget_failure(exit_code: Option<i32>, stdout: &str, stderr: &str) -> String {
+    let code = exit_code.unwrap_or(0);
+    // winget returns these as signed i32 (e.g. -1978335216 == 0x8A150010).
+    let reason = match code as u32 {
+        0x8A150010 => "No applicable installer found for this PC (wrong architecture or installer scope).",
+        0x8A150011 => "No package found matching that id.",
+        0x8A15002B => "Another install is already in progress. Wait for it to finish, then try again.",
+        0x8A150014 => "The installer hash did not match. SetupPal will not run an unverified installer.",
+        0x8A150063 => "This package requires administrator approval.",
+        _ if code != 0 => "winget reported a failure.",
+        _ => "winget did not complete successfully.",
+    };
+    let detail = [stderr, stdout]
+        .iter()
+        .flat_map(|s| s.lines().rev())
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if detail.is_empty() {
+        format!("{reason} (exit {exit_code:?})")
+    } else {
+        format!("{reason} {detail} (exit {exit_code:?})")
+    }
+}
+
+/// True when winget failed because no installer matched the requested scope.
+pub fn is_no_applicable_installer(exit_code: Option<i32>) -> bool {
+    exit_code.map(|c| c as u32) == Some(0x8A150010)
 }
 
 #[async_trait]
@@ -251,6 +287,11 @@ impl SourceAdapter for WingetAdapter {
             ));
         }
 
+        #[cfg(windows)]
+        if let Some(msg) = crate::os::windows::blocking_installer_message().await {
+            return Err(AdapterError::Other(msg));
+        }
+
         let (winget_bin, paths) = self.locate_winget().await?;
 
         if let Ok(list_out) = self
@@ -270,21 +311,68 @@ impl SourceAdapter for WingetAdapter {
             }
         }
 
+        let user_path_before = self
+            .os_provider
+            .read_user_path_raw()
+            .await
+            .unwrap_or_default();
+
         let out = self
             .os_provider
-            .run_command_cancellable(&winget_bin, &args, &paths, None, Some(&ctx.cancel))
+            .run_command_with_options(
+                &winget_bin,
+                &args,
+                &paths,
+                None,
+                Some(&ctx.cancel),
+                ctx.on_progress.clone(),
+            )
             .await
             .map_err(|e| AdapterError::Other(e.to_string()))?;
+
+        // Scope was forced from the manifest; if winget still says no installer, retry once
+        // without `--scope` (common for packages that list user scope but ship machine-only builds).
+        let out = if out.exit_code != Some(0)
+            && is_no_applicable_installer(out.exit_code)
+            && args.iter().any(|a| a == "--scope")
+        {
+            let retry_args = Self::install_args_with_scope(metadata, false);
+            self.os_provider
+                .run_command_with_options(
+                    &winget_bin,
+                    &retry_args,
+                    &paths,
+                    None,
+                    Some(&ctx.cancel),
+                    ctx.on_progress.clone(),
+                )
+                .await
+                .map_err(|e| AdapterError::Other(e.to_string()))?
+        } else {
+            out
+        };
 
         if out.exit_code != Some(0) {
             return Err(AdapterError::CommandFailed {
                 exit_code: out.exit_code,
-                stdout: out.stdout,
-                stderr: out.stderr,
+                stdout: out.stdout.clone(),
+                stderr: format_winget_failure(out.exit_code, &out.stdout, &out.stderr),
             });
         }
 
-        Ok(ExecutionReceipt::new(
+        // Refresh PATH so the post-install diff sees what the installer registered.
+        let _ = self.os_provider.refresh_and_get_path().await;
+        let user_path_after = self
+            .os_provider
+            .read_user_path_raw()
+            .await
+            .unwrap_or_default();
+        let path_entries_added =
+            crate::cleanup::path_entries_added(&user_path_before, &user_path_after);
+        let install_location =
+            crate::cleanup::infer_install_location(&metadata.package_id, &path_entries_added);
+
+        let mut receipt = ExecutionReceipt::new(
             AdapterKind::Winget,
             metadata.package_id.clone(),
             metadata.resolved_version.clone(),
@@ -295,7 +383,11 @@ impl SourceAdapter for WingetAdapter {
             )],
             rollback_hint,
         )
-        .with_uninstall_argv(Self::uninstall_argv(&metadata.package_id)))
+        .with_uninstall_argv(Self::uninstall_argv(&metadata.package_id));
+        receipt.user_path_before = Some(user_path_before);
+        receipt.path_entries_added = path_entries_added;
+        receipt.install_location = install_location;
+        Ok(receipt)
     }
 
     async fn verify(
@@ -382,10 +474,22 @@ mod tests {
     }
 
     #[test]
-    fn machine_scope_drops_user_scope_flag() {
-        let mut meta = PackageMetadata::bare(AdapterKind::Winget, "LLVM.LLVM", "latest");
+    fn scope_flag_only_when_manifest_lists_user() {
+        let mut meta = PackageMetadata::bare(AdapterKind::Winget, "LMMS.LMMS", "latest");
+        assert!(
+            !WingetAdapter::install_args(&meta).contains(&"--scope".to_string()),
+            "no scope in manifest → no --scope flag"
+        );
+        meta.installer_scope = Some("user".to_string());
         assert!(WingetAdapter::install_args(&meta).contains(&"user".to_string()));
         meta.installer_scope = Some("machine".to_string());
         assert!(!WingetAdapter::install_args(&meta).contains(&"--scope".to_string()));
+    }
+
+    #[test]
+    fn winget_hresult_maps_to_plain_words() {
+        let msg = format_winget_failure(Some(-1978335216), "", "No applicable installer found.");
+        assert!(msg.contains("No applicable installer"));
+        assert!(!msg.trim_end_matches(|c: char| c.is_ascii_digit() || c == '-' || c == ':' || c == ' ' || c == '(' || c == ')').is_empty());
     }
 }

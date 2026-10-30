@@ -2,12 +2,10 @@ id: minecraft_fabric_1_21
 name: Modded Minecraft Java 1.21.1 with Fabric (Sodium, Lithium, FerriteCore)
 triggers:
   - "modded minecraft"
-  - "minecraft java"
   - "minecraft fabric"
-  - "minecraft mods"
-  - "fabric performance"
-  - "sodium"
+  - "fabric for minecraft"
   - "modrinth fabric"
+  - "minecraft java mods"
 summary: "Installs the Eclipse Temurin Java 21 runtime, adds the Fabric loader for Minecraft Java 1.21.1, and downloads checksum-verified Sodium, Lithium, and FerriteCore from Modrinth into your mods folder. Minecraft Java Edition must already be installed and launched once."
 steps:
   - id: step-1

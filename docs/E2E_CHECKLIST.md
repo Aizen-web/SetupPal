@@ -33,7 +33,7 @@ and offline-assets (no remote fonts, local-only CSP) checks.
 | 4 | Failure and healer | Force a failing verify (for example install a tool, then temporarily rename its binary, or pick a package that does not put a command on PATH). | One remediation plan is proposed and safety-checked. The run ends with an honest failure message, not confetti. Red remediations never run. | | |
 | 5 | Cancel | Start a winget install and press Esc (or Stop). | The run stops within 2 seconds, the step is marked cancelled, and later steps do not run. | | |
 | 6 | Undo | Open **History** and press Rewind on the latest change. | The tool is gone (`winget list`, or the folder, is gone) and PATH is restored. The History row shows Rewind. | | |
-| 7 | Manual guide | Ask "install Steam". | A manual setup card appears with step-by-step instructions and clickable alternatives. Nothing is installed. | | |
+| 7 | Manual guide | Ask "install Minecraft Bedrock". Then ask "install LMMS" and "install Steam". | Bedrock: a manual setup card with Microsoft Store steps and clickable alternatives; nothing is installed. LMMS and Steam: a plan card (both install silently through winget), never a manual card. | | |
 | 8 | Greeting and vague request | Say "hi", then "set me up". | A short greeting, then a question asking what to install. No plan card yet. | | |
 | 9 | npm project folder | Ask for an npm package such as "install typescript with npm". | The plan card shows a **Project folder** row. The Approve button stays disabled until a folder is chosen. After choosing a folder inside your profile, the package appears in `<folder>\node_modules`. | | |
 | 10 | Single instance | Launch SetupPal a second time while it is running. | No second window. The existing window is focused. | | |

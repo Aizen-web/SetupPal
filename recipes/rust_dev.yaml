@@ -1,10 +1,11 @@
 id: rust_dev
 name: Rust Systems Programming Toolchain (Rustup, Cargo, Rustc, Git)
 triggers:
-  - "rust"
-  - "rustup"
-  - "cargo"
-  - "systems"
+  - "rust setup"
+  - "rust development"
+  - "rust toolchain"
+  - "set me up for rust"
+  - "rustup and cargo"
 summary: "Installs rustup and Git via winget, then checks that rustc and cargo respond on the command line."
 steps:
   - id: step-1

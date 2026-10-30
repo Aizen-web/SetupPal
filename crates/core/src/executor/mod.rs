@@ -252,7 +252,7 @@ impl Executor {
     ) -> Result<PlanExecutionSummary, CoreError> {
         let mut step_results = Vec::new();
         let mut all_succeeded = true;
-        let mut halted_at_step_id = None;
+        let halted_at_step_id = None;
         let mut cancelled = false;
         let mut run = RunState::default();
         let mut started = options.start_at_step_id.is_none();
@@ -317,10 +317,10 @@ impl Executor {
                 break;
             }
 
-            // 2. Yellow Caution Gate — only when this step id was explicitly approved.
+            // 2. Yellow Caution Gate — unticked Yellow steps are Skipped; the run continues.
             if rating == RiskRating::Yellow && !options.allow_yellow_steps.contains(&step.id) {
                 let reason = format!(
-                    "Confirmation required: Step '{}' scored YELLOW risk. Approve this step to continue. Reasons: {}",
+                    "Skipped: Step '{}' scored YELLOW and was not approved. Reasons: {}",
                     step.id,
                     reasons.join("; ")
                 );
@@ -332,34 +332,25 @@ impl Executor {
                 step_results.push(StepExecutionResult::not_run(
                     step,
                     reason,
-                    StepRunStatus::Held,
+                    StepRunStatus::Skipped,
                 ));
-                halted_at_step_id = Some(step.id.clone());
-                all_succeeded = false;
-                break;
+                continue;
             }
 
-            // 3. Green Approval Gate: live runs halt unless auto-approved, listed, or trusted.
+            // 3. Green Approval Gate: unticked Green steps are Skipped (partial runs).
             let green_ok = options.auto_approve_green
                 || options.approved_step_ids.contains(&step.id)
                 || options.is_step_trusted(&step.step);
             if rating == RiskRating::Green && !options.dry_run && !green_ok {
-                self.events.emit(AgentEvent::StepApprovalRequired {
-                    step_id: step.id.clone(),
-                    rating: RiskRating::Green,
-                    reasons: vec!["Awaiting your approval for this safe step".to_string()],
-                });
                 step_results.push(StepExecutionResult::not_run(
                     step,
                     format!(
-                        "Awaiting approval: Step '{}' is safe but needs your go-ahead.",
+                        "Skipped: Step '{}' was not selected for this run.",
                         step.id
                     ),
-                    StepRunStatus::Held,
+                    StepRunStatus::Skipped,
                 ));
-                halted_at_step_id = Some(step.id.clone());
-                all_succeeded = false;
-                break;
+                continue;
             }
 
             let mut step_result = match self.execute_single_step(plan, step, options, &mut run).await {
@@ -540,12 +531,22 @@ impl Executor {
             dry_run: options.dry_run,
         });
 
+        let step_id_for_progress = step.id.clone();
+        let events_for_progress = self.events.clone();
         let exec_ctx = ExecutionContext::new(
             options.dry_run,
             options.working_dir.clone(),
             run.isolated_env.clone(),
         )
-        .with_cancel(options.cancel.clone());
+        .with_cancel(options.cancel.clone())
+        .with_progress(std::sync::Arc::new(move |message: String| {
+            events_for_progress.emit(AgentEvent::StepExecutionProgress {
+                step_id: step_id_for_progress.clone(),
+                message,
+                bytes_downloaded: None,
+                total_bytes: None,
+            });
+        }));
 
         let result = match &step.step {
             Step::InstallPackage {
@@ -578,6 +579,9 @@ impl Executor {
                         package_id: package_id.clone(),
                         uninstall_command: receipt.rollback_hint.clone(),
                         uninstall_argv: receipt.uninstall_argv.clone(),
+                        user_path_before: receipt.user_path_before.clone(),
+                        path_entries_added: receipt.path_entries_added.clone(),
+                        install_location: receipt.install_location.clone(),
                     })
                 };
                 self.record(

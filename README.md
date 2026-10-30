@@ -13,9 +13,9 @@ SetupPal installs **anything that passes two gates**:
 1. **Unattended CLI install:** it can be installed and verified from the command line without user interaction (for example `winget` silent installs, `npm`, `pip`, `cargo`, or Modrinth/Fabric through its CLI installer).
 2. **Safety Engine:** it passes the deterministic safety checks described in [SECURITY.md](SECURITY.md).
 
-That covers programming languages, runtimes, compilers, SDKs, package managers, and developer tools, but also everyday apps and mod setups, as long as they meet both gates.
+That covers programming languages, runtimes, compilers, SDKs, package managers, and developer tools, but also everyday apps, music and video tools, chat apps, game launchers, and mod setups, as long as they meet both gates. If an app is in winget's community repository with a silent installer, it qualifies, even if it has a window or asks you to sign in after install (for example Steam, Roblox, Discord, or LMMS).
 
-Anything else gets a **Manual setup guide** instead of an install plan. SetupPal explains that the app does not allow non-terminal setup, gives step-by-step instructions to do it yourself, and lists similar things it *can* install. This applies to apps that need proprietary GUI launchers, DRM activation, or interactive account logins (for example Steam, Epic, or Minecraft Bedrock).
+Anything else gets a **Manual setup guide** instead of an install plan, with step-by-step instructions to do it yourself and similar things SetupPal *can* install. This applies to Microsoft Store-only apps (for example Minecraft Bedrock), drivers from vendor download pages, apps with no unattended installer, and anything the Safety Engine blocks. The deterministic gate in `installability.rs` makes that call, not the AI model.
 
 ## Workspace Layout
 

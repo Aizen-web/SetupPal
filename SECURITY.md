@@ -16,12 +16,14 @@ SetupPal installs **anything that passes two gates**. It is not limited to devel
 - gives step-by-step instructions the user can follow themselves, and
 - lists similar things SetupPal *can* install.
 
-Apps that require proprietary GUI launchers, DRM activation, or interactive account logins (for example Steam, Epic, Riot, or Minecraft Bedrock) always remain manual-only, because they:
-1. Cannot be executed or verified headlessly via CLI without interactive user intervention.
-2. Require interactive OAuth/Xbox/Store authentication popups that break automated verification.
-3. Distribute proprietary, encrypted AppX/MSIX or dynamic launcher binaries that cannot be cryptographically verified against public, static SHA-256 release digests.
+**Trusted through winget means installable.** A winget package from the community repository has a reviewed manifest, a pinned installer URL, and a SHA-256 that winget checks before running it. If its installer type runs unattended (`msi`, `msix`, `wix`, `inno`, `nullsoft`, `burn`, `portable`, `zip`, or `exe` with the silent switches the community repo requires), SetupPal treats it as installable. That includes game launchers and apps that ask for a sign-in after install, such as Steam, Epic Games, Roblox, Discord, and LMMS: signing in happens later, in the app, and doesn't affect the install or its verification (`winget list --id <id> --exact`).
 
-This is a per-app decision, not a blanket rule for a whole category. For example, Minecraft Bedrock is manual-only, but a Fabric mod setup for Minecraft Java can be installed when the Fabric CLI installer and its mods pass both gates.
+The gate judges each package by its winget manifest, never by a name list or by the AI model's opinion. These stay manual-only:
+1. **Microsoft Store-only products** (Store IDs such as `9NBLGGH2JHXJ` for Minecraft Bedrock, or installer type `msstore`): they need a Store account and can't be hash-checked against a static digest.
+2. **Vendor download pages** with no package-manager entry, for example most GPU drivers.
+3. **Installers with no unattended mode**, and anything the Safety Engine rates Red.
+
+This is a per-app decision. For example, Minecraft Bedrock is manual-only, but the Minecraft Launcher (`Mojang.MinecraftLauncher`) and a Fabric mod setup for Minecraft Java can be installed.
 
 ---
 
@@ -139,7 +141,7 @@ SetupPal implements five distinct protection layers between the AI's suggestions
 
 ## Handling Admin-Required Installs
 
-Certain software—such as hardware drivers and low-level system runtimes—requires Windows Administrator (UAC elevated) rights to install. SetupPal handles these through a dedicated, isolated flow, provided the install is still unattended and passes the Safety Engine (games with kernel anti-cheat behind a launcher remain manual-only):
+Certain software—such as hardware drivers and low-level system runtimes—requires Windows Administrator (UAC elevated) rights to install. SetupPal handles these through a dedicated, isolated flow, provided the install is still unattended and passes the Safety Engine:
 
 1. **Never bundled in Green plans:** Admin-level tasks are never marked Green and cannot be silently auto-approved.
 2. **Always Yellow:** Steps requiring elevation are classified as Yellow by default, requiring clear, separate user confirmation.

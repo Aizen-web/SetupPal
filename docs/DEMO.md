@@ -16,7 +16,7 @@ Do the reset checklist below, and keep the app in Chill mode on the Chats page.
 | 0:40 | Point at the plan card. Press **Why?** on a Yellow step. | "Every step gets a verdict: green is safe, yellow needs me, red never runs. This one has no upstream checksum, so it asks." | Step rows with verdict badges and plain-language reasons (typosquat, vulnerability, checksum, source domain). |
 | 1:10 | Tick **Approve this step** on the Yellow step. Switch to **Hacker** mode. Press **Run**. | "I approve only the step I understand. Hacker mode shows the real run." | The terminal tab streams live step output. |
 | 1:45 | Wait for the run to finish. | "Each step is verified after it runs. If anything fails it says so; no fake celebration." | Verification lines, then confetti only because everything passed. |
-| 2:05 | Back in Chill mode, type: `install Steam`. | "Some things are not safe to automate, like store launchers with account logins. SetupPal says so instead of pretending." | A manual setup card with instructions and alternatives it can install. |
+| 2:05 | Back in Chill mode, type: `install Minecraft Bedrock`. | "Some things can't be installed unattended, like Microsoft Store-only apps. SetupPal says so instead of pretending." | A manual setup card with Store steps and alternatives it can install. |
 | 2:30 | Open **History**, press **Rewind** on the latest change. | "And everything it did can be undone." | The row flips to Rewind and the tool is removed. |
 | 2:50 | Close. | "Zero trust: typed steps only, no shell, nothing red ever runs, and your keys live in Windows Credential Manager." | |
 

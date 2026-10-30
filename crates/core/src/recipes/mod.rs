@@ -13,42 +13,39 @@ pub struct Recipe {
     pub steps: Vec<PlannedStep>,
 }
 
-impl Recipe {
-    /// Evaluates if the given goal matches this recipe using both exact substring checks
-    /// and fuzzy phrase similarity (Jaro-Winkler).
-    pub fn matches_goal(&self, goal: &str) -> bool {
-        let lower_goal = goal.to_ascii_lowercase();
+fn normalize_phrase(s: &str) -> String {
+    s.to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
-        // 1. Direct substring matching
-        if self
-            .triggers
-            .iter()
-            .any(|trigger| lower_goal.contains(&trigger.to_ascii_lowercase()))
-        {
+impl Recipe {
+    /// A recipe matches only when the goal contains a full trigger phrase (or the recipe id/name),
+    /// not a single fuzzy word. Single-product installs go through the winget resolver instead.
+    pub fn matches_goal(&self, goal: &str) -> bool {
+        let goal_n = normalize_phrase(goal);
+        if goal_n.is_empty() {
+            return false;
+        }
+
+        if goal_n == normalize_phrase(&self.id) || goal_n == normalize_phrase(&self.name) {
             return true;
         }
 
-        // 2. Fuzzy trigger matching
-        let words: Vec<&str> = lower_goal.split_whitespace().collect();
         for trigger in &self.triggers {
-            let trigger_lower = trigger.to_ascii_lowercase();
-
-            // Direct similarity between full goal and trigger
-            if strsim::jaro_winkler(&lower_goal, &trigger_lower) > 0.85 {
+            let t = normalize_phrase(trigger);
+            if t.is_empty() {
+                continue;
+            }
+            // Exact phrase equality, or the trigger as a contiguous phrase inside the goal.
+            if goal_n == t || goal_n.contains(&t) {
                 return true;
             }
-
-            // Word-level fuzzy only for single-token triggers. Matching "Development"
-            // against "c++ development" would otherwise steal other recipes' names.
-            if !trigger_lower.contains(char::is_whitespace) {
-                for word in &words {
-                    if strsim::jaro_winkler(word, &trigger_lower) > 0.88 {
-                        return true;
-                    }
-                }
-            }
         }
-
         false
     }
 
@@ -204,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_requests_do_not_match_a_recipe() {
+    fn game_app_requests_do_not_match_a_recipe() {
         let store = RecipeStore::load_from_dir_or_embedded(Path::new("no-such-dir")).unwrap();
         for goal in ["install Steam", "set up Roblox", "install Fortnite", "get the Epic Games launcher"] {
             assert!(store.find_matching(goal).is_none(), "{goal}");
@@ -212,12 +209,35 @@ mod tests {
     }
 
     #[test]
-    fn non_dev_recipes_match_their_starters() {
+    fn single_app_words_do_not_match_stack_recipes() {
+        let store = RecipeStore::load_from_dir_or_embedded(Path::new("no-such-dir")).unwrap();
+        for goal in [
+            "install vlc",
+            "install vlc please",
+            "python 3.12",
+            "typescript globally with npm",
+            "install node",
+            "install rust",
+            "pip install requests",
+        ] {
+            assert!(
+                store.find_matching(goal).is_none(),
+                "{goal} must not match a multi-app recipe"
+            );
+        }
+    }
+
+    #[test]
+    fn stack_phrases_match_their_recipes() {
         let store = RecipeStore::load_from_dir_or_embedded(Path::new("no-such-dir")).unwrap();
         for (goal, id) in [
-            ("Modded Minecraft Java with Fabric", "minecraft_fabric_1_21"),
-            ("7-Zip, VLC, and Git", "everyday_apps"),
+            ("set me up for python data science", "python_ai_venv"),
+            ("everyday apps", "everyday_apps"),
+            ("7-Zip and VLC", "everyday_apps"),
             ("OBS Studio", "obs_studio"),
+            ("set me up for rust", "rust_dev"),
+            ("web dev setup", "web_fullstack_ts"),
+            ("Modded Minecraft with Fabric", "minecraft_fabric_1_21"),
         ] {
             assert_eq!(store.find_matching(goal).map(|r| r.id.as_str()), Some(id), "{goal}");
         }

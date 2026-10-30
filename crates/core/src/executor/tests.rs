@@ -143,7 +143,7 @@ fn test_executor() -> Executor {
 }
 
 #[tokio::test]
-async fn yellow_not_in_allow_list_halts() {
+async fn yellow_not_in_allow_list_is_skipped() {
     let plan = sample_plan(vec![sample_step("step-1")]);
     let safety = plan_report(&[("step-1", RiskRating::Yellow)]);
     let options = ExecutionOptions {
@@ -154,9 +154,9 @@ async fn yellow_not_in_allow_list_halts() {
         .execute_plan(&plan, &safety, &options)
         .await
         .expect("summary");
-    assert_eq!(summary.halted_at_step_id.as_deref(), Some("step-1"));
-    assert_eq!(summary.step_results[0].status, StepRunStatus::Held);
-    assert!(!summary.overall_passed);
+    assert!(summary.halted_at_step_id.is_none());
+    assert_eq!(summary.step_results[0].status, StepRunStatus::Skipped);
+    assert!(!summary.step_results[0].executed);
 }
 
 #[tokio::test]
@@ -178,7 +178,7 @@ async fn yellow_in_allow_list_runs() {
 }
 
 #[tokio::test]
-async fn green_without_approval_halts() {
+async fn green_without_approval_is_skipped() {
     let plan = sample_plan(vec![sample_step("step-1")]);
     let safety = plan_report(&[("step-1", RiskRating::Green)]);
     let options = ExecutionOptions {
@@ -190,8 +190,8 @@ async fn green_without_approval_halts() {
         .execute_plan(&plan, &safety, &options)
         .await
         .expect("summary");
-    assert_eq!(summary.halted_at_step_id.as_deref(), Some("step-1"));
-    assert_eq!(summary.step_results[0].status, StepRunStatus::Held);
+    assert!(summary.halted_at_step_id.is_none());
+    assert_eq!(summary.step_results[0].status, StepRunStatus::Skipped);
 }
 
 #[tokio::test]
@@ -316,7 +316,7 @@ async fn approved_green_step_runs_without_auto_approve() {
 }
 
 #[tokio::test]
-async fn a_held_step_stops_the_run_before_later_steps() {
+async fn unticked_yellow_is_skipped_and_later_approved_steps_still_run() {
     let (executor, _) = executor_with(Arc::new(MockOsProvider::new()));
     let plan = sample_plan(vec![
         sample_step("step-1"),
@@ -324,27 +324,25 @@ async fn a_held_step_stops_the_run_before_later_steps() {
         sample_step("step-3"),
     ]);
     let safety = plan_report(&[
-        ("step-1", RiskRating::Green),
-        ("step-2", RiskRating::Yellow),
-        ("step-3", RiskRating::Green),
+        ("step-1", RiskRating::Yellow),
+        ("step-2", RiskRating::Green),
+        ("step-3", RiskRating::Yellow),
     ]);
     let options = ExecutionOptions {
         dry_run: true,
         auto_approve_green: true,
+        allow_yellow_steps: HashSet::new(), // none ticked
         ..ExecutionOptions::default()
     };
     let summary = executor
         .execute_plan(&plan, &safety, &options)
         .await
         .expect("summary");
-    assert_eq!(summary.halted_at_step_id.as_deref(), Some("step-2"));
-    assert!(summary.step_results[0].executed);
-    assert_eq!(summary.step_results[1].status, StepRunStatus::Held);
-    assert!(summary
-        .step_results
-        .iter()
-        .all(|r| r.step_id != "step-3" || !r.executed));
-    assert!(!summary.overall_passed);
+    assert!(summary.halted_at_step_id.is_none());
+    assert_eq!(summary.step_results[0].status, StepRunStatus::Skipped);
+    assert!(summary.step_results[1].executed);
+    assert_eq!(summary.step_results[2].status, StepRunStatus::Skipped);
+    assert!(summary.overall_passed);
 }
 
 #[tokio::test]

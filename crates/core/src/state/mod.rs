@@ -43,6 +43,15 @@ pub enum RollbackData {
         /// Exact uninstall argv (binary first); preferred over `uninstall_command`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         uninstall_argv: Option<Vec<String>>,
+        /// Raw user PATH before the install (for auditing; strip uses `path_entries_added`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_path_before: Option<String>,
+        /// PATH entries this install added (only these may be removed on rewind).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        path_entries_added: Vec<String>,
+        /// Install folder recorded after install (uninstall registry / WinGet Packages / PATH parent).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        install_location: Option<PathBuf>,
     },
     FileDownload {
         destination: PathBuf,
@@ -63,6 +72,113 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
         std::fs::remove_file(path)
     } else {
         Ok(())
+    }
+}
+
+/// After a successful winget uninstall: strip PATH leftovers, remove empty install dirs,
+/// then verify package/PATH/folder are clean (R6).
+async fn cleanup_package_leftovers(
+    os: &dyn OsProvider,
+    package_id: &str,
+    ecosystem: &str,
+    path_entries_added: &[String],
+    install_location: Option<&Path>,
+) -> String {
+    use crate::cleanup::{
+        remove_path_entries, should_strip_path_entry, try_remove_install_dir,
+    };
+
+    let mut notes = Vec::new();
+
+    // Strip only PATH entries this install added, and only when they now point at
+    // missing or empty/leftover folders (never touch a live directory with user files).
+    if !path_entries_added.is_empty() {
+        let strip: Vec<String> = path_entries_added
+            .iter()
+            .filter(|e| should_strip_path_entry(e))
+            .cloned()
+            .collect();
+        if !strip.is_empty() {
+            if let Ok(current) = os.read_user_path_raw().await {
+                let next = remove_path_entries(&current, &strip);
+                if next != current {
+                    match os.write_user_path_raw(&next).await {
+                        Ok(()) => notes.push(format!("removed {} PATH entr{}", strip.len(), if strip.len() == 1 { "y" } else { "ies" })),
+                        Err(e) => notes.push(format!("could not update PATH: {e}")),
+                    }
+                }
+            }
+        }
+        let kept: Vec<_> = path_entries_added
+            .iter()
+            .filter(|e| !should_strip_path_entry(e))
+            .cloned()
+            .collect();
+        if !kept.is_empty() {
+            notes.push(format!(
+                "left PATH entries still in use: {}",
+                kept.join("; ")
+            ));
+        }
+    }
+
+    if let Some(loc) = install_location {
+        notes.push(try_remove_install_dir(loc));
+    }
+
+    // Verify: package gone from winget list (best-effort), PATH entries gone, folder gone.
+    let mut failed = Vec::new();
+    let paths = os.refresh_and_get_path().await.unwrap_or_default();
+    if let Some(winget) = os.which_in_paths("winget", &paths) {
+        let args = vec![
+            "list".into(),
+            "--id".into(),
+            package_id.to_string(),
+            "--exact".into(),
+            "--accept-source-agreements".into(),
+            "--disable-interactivity".into(),
+        ];
+        if let Ok(out) = os.run_command(&winget, &args, &paths).await {
+            let still_listed = out.exit_code == Some(0)
+                && out
+                    .stdout
+                    .to_ascii_lowercase()
+                    .contains(&package_id.to_ascii_lowercase());
+            if still_listed {
+                failed.push(format!("{package_id} still listed in winget"));
+            }
+        }
+    }
+    if let Ok(current) = os.read_user_path_raw().await {
+        let current_l = current.to_ascii_lowercase();
+        for e in path_entries_added {
+            if should_strip_path_entry(e) && current_l.contains(&e.to_ascii_lowercase()) {
+                failed.push(format!("PATH still contains {e}"));
+            }
+        }
+    }
+    if let Some(loc) = install_location {
+        if loc.exists() && crate::cleanup::is_safe_to_delete_install_dir(loc) {
+            failed.push(format!("install folder still present: {}", loc.display()));
+        } else if loc.exists() {
+            // User files remain — reported in notes, not a hard verify failure.
+        }
+    }
+
+    let detail = if notes.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", notes.join("; "))
+    };
+    if failed.is_empty() {
+        format!(
+            "Successfully uninstalled package {package_id} ({ecosystem}){detail} [Post-Undo Verified: Passed]"
+        )
+    } else {
+        format!(
+            "Uninstalled package {package_id} ({ecosystem}){detail} [Post-Undo Verified: Failed — {}]",
+            failed.join("; ")
+        )
     }
 }
 
@@ -282,6 +398,9 @@ impl StateLogger {
                 package_id,
                 uninstall_command,
                 uninstall_argv,
+                path_entries_added,
+                install_location,
+                ..
             }) => {
                 let argv: Option<Vec<String>> = uninstall_argv.clone().or_else(|| {
                     uninstall_command
@@ -298,6 +417,10 @@ impl StateLogger {
                     )
                 } else if let (Some(argv), Some(cmd_str)) = (argv, cmd_str) {
                     if let Some((bin_name, args)) = argv.split_first() {
+                        #[cfg(windows)]
+                        if let Some(msg) = crate::os::windows::blocking_installer_message().await {
+                            return Err(CoreError::Os(msg));
+                        }
                         let paths = os_provider.refresh_and_get_path().await.unwrap_or_default();
                         let direct = Path::new(bin_name);
                         let resolved = if direct.is_absolute() && direct.is_file() {
@@ -308,7 +431,14 @@ impl StateLogger {
                         if let Some(bin_path) = resolved {
                             match os_provider.run_command(&bin_path, args, &paths).await {
                                 Ok(out) if out.exit_code == Some(0) => {
-                                    format!("Successfully uninstalled package {} ({}) [Post-Undo Verified: Passed]", package_id, ecosystem)
+                                    cleanup_package_leftovers(
+                                        os_provider.as_ref(),
+                                        package_id,
+                                        ecosystem,
+                                        path_entries_added,
+                                        install_location.as_deref(),
+                                    )
+                                    .await
                                 }
                                 Ok(out) => {
                                     format!(
@@ -698,7 +828,8 @@ mod tests {
         let (log, _dir) = logger();
         let (mock, os) = os(MockOsProvider::new()
             .with_binary("winget", "C:\\Windows\\winget.exe")
-            .on("winget", &["uninstall"], ok("done")));
+            .on("winget", &["uninstall"], ok("done"))
+            .on("winget", &["list"], crate::os::mock::fail(1, "No installed package found")));
         let data = RollbackData::PackageInstall {
             ecosystem: "winget".to_string(),
             package_id: "Git.Git".to_string(),
@@ -710,6 +841,9 @@ mod tests {
                 "Git.Git".into(),
                 "--exact".into(),
             ]),
+            user_path_before: None,
+            path_entries_added: vec![],
+            install_location: None,
         };
         let record = tx("pkg", false, Some(data));
         let message = log
@@ -720,11 +854,61 @@ mod tests {
             message.contains("Successfully uninstalled package Git.Git"),
             "{message}"
         );
+        assert!(message.contains("Post-Undo Verified: Passed"), "{message}");
         let calls = mock.calls();
-        assert_eq!(calls.len(), 1);
+        assert!(calls.iter().any(|c| c.args.first().map(String::as_str) == Some("uninstall")));
         assert_eq!(
-            calls[0].args,
+            calls.iter().find(|c| c.args.first().map(String::as_str) == Some("uninstall")).unwrap().args,
             vec!["uninstall", "--id", "Git.Git", "--exact"]
+        );
+    }
+
+    #[tokio::test]
+    async fn package_rollback_strips_stale_path_and_empty_install_dir() {
+        let (log, _dir) = logger();
+        let leftover = tempfile::tempdir().unwrap();
+        let empty_doc = leftover.path().join("Doc");
+        std::fs::create_dir_all(&empty_doc).unwrap();
+        let stale = leftover.path().join("Scripts");
+        std::fs::create_dir_all(&stale).unwrap();
+
+        let mock = MockOsProvider::new()
+            .with_binary("winget", "C:\\Windows\\winget.exe")
+            .on("winget", &["uninstall"], ok("done"))
+            .on("winget", &["list"], crate::os::mock::fail(1, "No installed package found"));
+        // Seed PATH with a stale entry that points at the empty leftover.
+        let _ = mock
+            .add_to_user_path(&stale)
+            .await
+            .expect("seed path");
+        let (_, os) = os(mock);
+
+        let data = RollbackData::PackageInstall {
+            ecosystem: "winget".to_string(),
+            package_id: "Python.Python.3.12".to_string(),
+            uninstall_command: None,
+            uninstall_argv: Some(vec![
+                "winget".into(),
+                "uninstall".into(),
+                "--id".into(),
+                "Python.Python.3.12".into(),
+                "--exact".into(),
+            ]),
+            user_path_before: Some(String::new()),
+            path_entries_added: vec![stale.to_string_lossy().to_string()],
+            install_location: Some(leftover.path().to_path_buf()),
+        };
+        let message = log
+            .rollback_transaction(&tx("py", false, Some(data)), &os)
+            .await
+            .expect("rollback");
+        assert!(message.contains("Post-Undo Verified: Passed"), "{message}");
+        assert!(message.contains("PATH"), "{message}");
+        assert!(!stale.exists() || crate::cleanup::should_strip_path_entry(&stale.to_string_lossy()));
+        // Empty leftover tree should be removed when safe.
+        assert!(
+            !leftover.path().exists() || !crate::cleanup::is_safe_to_delete_install_dir(leftover.path()),
+            "expected leftover install dir cleaned when only empty folders remain"
         );
     }
 
@@ -736,6 +920,9 @@ mod tests {
             package_id: "Foo.Bar".to_string(),
             uninstall_command: None,
             uninstall_argv: Some(argv.iter().map(|s| s.to_string()).collect()),
+            user_path_before: None,
+            path_entries_added: vec![],
+            install_location: None,
         };
 
         let (_, os_failing) = os(MockOsProvider::new()
@@ -782,6 +969,9 @@ mod tests {
             package_id: "Git.Git".to_string(),
             uninstall_command: Some("winget uninstall --id Git.Git".to_string()),
             uninstall_argv: None,
+            user_path_before: None,
+            path_entries_added: vec![],
+            install_location: None,
         };
         let message = log
             .rollback_transaction(&tx("dry", true, Some(data)), &os)

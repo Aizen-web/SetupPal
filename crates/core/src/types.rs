@@ -19,6 +19,8 @@ pub enum PlanSource {
     Recipe { recipe_id: String },
     Llm { model: String },
     Healer { failed_step_id: String, attempt: u8 },
+    /// One exact winget match for an app name the user asked for (see `resolver`).
+    Resolved { query: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

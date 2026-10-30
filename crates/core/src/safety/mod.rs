@@ -15,7 +15,7 @@ use crate::safety::osv::{HttpOsvClient, OsvClient};
 pub use crate::safety::tavily::{
     HttpTavilyVerifier, TavilyVerificationResult, TavilyVerifier,
 };
-use crate::types::{Plan, PlannedStep, Step};
+use crate::types::{Ecosystem, Plan, PlannedStep, Step};
 
 /// Reason text for steps without an upstream digest (keeps them at least Yellow).
 pub const NO_UPSTREAM_CHECKSUM_REASON: &str = "No upstream checksum available";
@@ -352,16 +352,24 @@ impl SafetyEngine {
         }
     }
 
-    fn check_registry_heuristics(package_id: &str, meta: &PackageMetadata, eval: &mut StepEvaluation) {
+    fn check_registry_heuristics(
+        package_id: &str,
+        meta: &PackageMetadata,
+        eval: &mut StepEvaluation,
+        // Winget release date is the latest version; skip age Yellow for winget.
+        apply_version_age: bool,
+    ) {
         eval.signals.package_age_days = meta.age_days;
         eval.signals.download_count = meta.download_count;
 
-        if let Some(age) = meta.age_days {
-            if age < 30 {
-                eval.reasons.push(format!(
-                    "Young package warning: `{package_id}` was published {age} days ago (< 30 days threshold)"
-                ));
-                eval.raise(45);
+        if apply_version_age {
+            if let Some(age) = meta.age_days {
+                if age < 30 {
+                    eval.reasons.push(format!(
+                        "Young package warning: `{package_id}` was published {age} days ago (< 30 days threshold)"
+                    ));
+                    eval.raise(45);
+                }
             }
         }
         if let Some(downloads) = meta.download_count {
@@ -452,11 +460,8 @@ impl SafetyEngine {
                             eval.raise(50);
                         }
                     }
-                } else {
-                    eval.reasons.push(format!(
-                        "OSV.dev does not cover {ecosystem:?} packages; relying on registry metadata, checksums, and allowlists"
-                    ));
                 }
+                // OSV coverage gaps are noted once on the plan summary, not on every winget step.
 
                 // 2c. Registry Metadata & Install Script Inspection
                 if let Some(adapter) = self.adapters.get(*source_adapter) {
@@ -467,7 +472,8 @@ impl SafetyEngine {
                             if let Some(url) = &meta.download_url {
                                 self.check_download_url(package_id, url, &mut eval).await;
                             }
-                            Self::check_registry_heuristics(package_id, &meta, &mut eval);
+                            let apply_age = !matches!(ecosystem, Ecosystem::Winget);
+                            Self::check_registry_heuristics(package_id, &meta, &mut eval, apply_age);
                             if !has_digest {
                                 eval.reasons.push(format!("{NO_UPSTREAM_CHECKSUM_REASON} for `{package_id}`"));
                                 eval.raise(40);
@@ -520,7 +526,8 @@ impl SafetyEngine {
                 }
 
                 if let Some(m) = &meta {
-                    Self::check_registry_heuristics(id, m, &mut eval);
+                    // Downloads are version-aged like npm/PyPI (not winget package-id age).
+                    Self::check_registry_heuristics(id, m, &mut eval, true);
                 }
 
                 let upstream_256 = meta.as_ref().and_then(|m| m.expected_sha256.clone());

@@ -1,5 +1,6 @@
 #[cfg(test)]
 pub mod mock;
+pub mod job;
 pub mod unix;
 pub mod windows;
 
@@ -42,6 +43,16 @@ pub trait OsProvider: Send + Sync {
     /// Restores User PATH to a previous raw value.
     async fn restore_user_path(&self, previous_raw: &str) -> Result<(), CoreError>;
 
+    /// Raw User PATH string from the registry (or process env on non-Windows).
+    async fn read_user_path_raw(&self) -> Result<String, CoreError> {
+        Ok(String::new())
+    }
+
+    /// Writes the raw User PATH string (used to strip entries this install added).
+    async fn write_user_path_raw(&self, raw: &str) -> Result<(), CoreError> {
+        self.restore_user_path(raw).await
+    }
+
     /// Runs a binary directly (never via a shell interpreter) with explicit arguments
     /// in the process working directory.
     async fn run_command(
@@ -76,6 +87,21 @@ pub trait OsProvider: Send + Sync {
         cwd: Option<&Path>,
         cancel: Option<&CancellationToken>,
     ) -> Result<CommandOutput, CoreError>;
+
+    /// Same as `run_command_cancellable`, with optional stall progress every 90 seconds.
+    async fn run_command_with_options(
+        &self,
+        binary: &Path,
+        args: &[String],
+        extra_path: &[PathBuf],
+        cwd: Option<&Path>,
+        cancel: Option<&CancellationToken>,
+        on_progress: Option<std::sync::Arc<dyn Fn(String) + Send + Sync>>,
+    ) -> Result<CommandOutput, CoreError> {
+        let _ = on_progress;
+        self.run_command_cancellable(binary, args, extra_path, cwd, cancel)
+            .await
+    }
 
     /// Reads a string value from the Windows registry (`value: None` reads the default value).
     /// Returns `None` on other platforms or when the key or value does not exist.
@@ -175,6 +201,18 @@ impl OsProvider for PlatformOsProvider {
         }
     }
 
+    async fn read_user_path_raw(&self) -> Result<String, CoreError> {
+        if cfg!(target_os = "windows") {
+            windows::read_user_path_raw().await
+        } else {
+            Ok(std::env::var("PATH").unwrap_or_default())
+        }
+    }
+
+    async fn write_user_path_raw(&self, raw: &str) -> Result<(), CoreError> {
+        self.restore_user_path(raw).await
+    }
+
     async fn read_registry_string(&self, key: &str, value: Option<&str>) -> Option<String> {
         if cfg!(target_os = "windows") {
             windows::query_registry_string(key, value).await
@@ -190,6 +228,19 @@ impl OsProvider for PlatformOsProvider {
         extra_path: &[PathBuf],
         cwd: Option<&Path>,
         cancel: Option<&CancellationToken>,
+    ) -> Result<CommandOutput, CoreError> {
+        self.run_command_with_options(binary, args, extra_path, cwd, cancel, None)
+            .await
+    }
+
+    async fn run_command_with_options(
+        &self,
+        binary: &Path,
+        args: &[String],
+        extra_path: &[PathBuf],
+        cwd: Option<&Path>,
+        cancel: Option<&CancellationToken>,
+        on_progress: Option<std::sync::Arc<dyn Fn(String) + Send + Sync>>,
     ) -> Result<CommandOutput, CoreError> {
         let mut cmd = tokio::process::Command::new(binary);
         cmd.args(args);
@@ -207,32 +258,67 @@ impl OsProvider for PlatformOsProvider {
             }
         }
 
+        // Job Object kills the whole tree (msiexec, unins000, …) on timeout/cancel/drop.
+        let job = job::KillOnCloseJob::create();
         let child = cmd.spawn()?;
+        if let Some(ref job) = job {
+            #[cfg(windows)]
+            {
+                if let Some(handle) = child.raw_handle() {
+                    let _ = job.assign_process(handle);
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = job;
+            }
+        }
+
         let timeout_duration = std::time::Duration::from_secs(300);
+        let stall = std::time::Duration::from_secs(90);
         let label = binary.display().to_string();
+        let short_name = binary
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("installer");
+        let started = std::time::Instant::now();
+
         let mut join = tokio::spawn(async move {
-            tokio::time::timeout(timeout_duration, child.wait_with_output()).await
+            let result = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
+            drop(job);
+            result
         });
 
-        let timed = if let Some(token) = cancel {
+        let timed = loop {
             tokio::select! {
                 biased;
-                _ = token.cancelled() => {
+                _ = async {
+                    if let Some(token) = cancel {
+                        token.cancelled().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
                     join.abort();
                     let _ = (&mut join).await;
                     return Err(CoreError::Os(format!("Command '{label}' was cancelled")));
                 }
-                result = &mut join => match result {
-                    Ok(inner) => inner,
-                    Err(_) => {
-                        return Err(CoreError::Os(format!("Command '{label}' task failed")));
+                result = &mut join => {
+                    break match result {
+                        Ok(inner) => inner,
+                        Err(_) => {
+                            return Err(CoreError::Os(format!("Command '{label}' task failed")));
+                        }
+                    };
+                }
+                _ = tokio::time::sleep(stall) => {
+                    if let Some(cb) = &on_progress {
+                        let secs = started.elapsed().as_secs();
+                        cb(format!(
+                            "Still working: {short_name} is downloading or waiting on Windows ({secs}s elapsed)"
+                        ));
                     }
-                },
-            }
-        } else {
-            match join.await {
-                Ok(inner) => inner,
-                Err(_) => return Err(CoreError::Os(format!("Command '{label}' task failed"))),
+                }
             }
         };
 

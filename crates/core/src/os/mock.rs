@@ -164,15 +164,11 @@ impl OsProvider for MockOsProvider {
     }
 
     async fn add_to_user_path(&self, directory: &Path) -> Result<String, CoreError> {
+        let previous = self.read_user_path_raw().await?;
         let mut p = self
             .path
             .lock()
             .map_err(|_| CoreError::Os("mock path lock poisoned".to_string()))?;
-        let previous = p
-            .iter()
-            .map(|e| e.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join(";");
         if !p.iter().any(|e| e == directory) {
             p.push(directory.to_path_buf());
         }
@@ -190,6 +186,17 @@ impl OsProvider for MockOsProvider {
             .map(PathBuf::from)
             .collect();
         Ok(())
+    }
+
+    async fn read_user_path_raw(&self) -> Result<String, CoreError> {
+        let p = self
+            .path
+            .lock()
+            .map_err(|_| CoreError::Os("mock path lock poisoned".to_string()))?;
+        Ok(p.iter()
+            .map(|e| e.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(";"))
     }
 
     async fn run_command_cancellable(

@@ -84,6 +84,9 @@ pub fn render_plan_with_safety(
         } => format!("Self-Healer (step `{failed_step_id}`, attempt #{attempt})")
             .bright_magenta()
             .to_string(),
+        PlanSource::Resolved { query } => format!("Exact winget match for `{query}`")
+            .bright_green()
+            .to_string(),
     };
     println!("  {} {}", "Source:        ".bold(), source_label);
     println!(

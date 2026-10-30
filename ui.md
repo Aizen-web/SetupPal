@@ -275,7 +275,7 @@ Hero Pixel (140 px), one flavor bubble, the headline "What should we set up?", 3
 
 ### 6.4 Manual setup guide
 
-When something cannot be installed unattended (proprietary GUI launchers, DRM, interactive account logins such as Steam, Epic or Minecraft Bedrock), the assistant replies with a **Manual setup guide**: one line saying the app does not allow non-terminal setup, numbered steps the user can follow, and a short list of similar things SetupPal *can* install. It is a normal assistant message (no plan card, no Approve button).
+When something cannot be installed unattended (Microsoft Store-only apps such as Minecraft Bedrock, vendor-page drivers, or installers with no silent mode), the assistant replies with a **Manual setup guide**: one line saying why it needs a manual install, numbered steps the user can follow, and a short list of similar things SetupPal *can* install. It is a normal assistant message (no plan card, no Approve button).
 
 ### 6.5 Slash commands
 

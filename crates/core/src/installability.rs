@@ -20,20 +20,16 @@ pub enum Installability {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ManualReason {
-    LauncherOrDrm,
     StoreOnly,
     NoSilentInstaller,
-    InteractiveLogin,
     Unknown,
 }
 
 impl ManualReason {
     pub fn user_text(self) -> &'static str {
         match self {
-            ManualReason::LauncherOrDrm => "This app installs through its own launcher or DRM and needs you to sign in.",
             ManualReason::StoreOnly => "This app is only offered through the Microsoft Store.",
             ManualReason::NoSilentInstaller => "This app has no installer that can run unattended.",
-            ManualReason::InteractiveLogin => "This app needs an interactive account sign-in to install.",
             ManualReason::Unknown => "SetupPal could not confirm an unattended install path for this app.",
         }
     }
@@ -53,140 +49,9 @@ pub struct StepInstallability {
 pub const INSTALLER_TYPE_UNKNOWN_REASON: &str = "Installer type unknown: SetupPal could not read this package's winget manifest";
 pub const ADMIN_REASON: &str = "Administrator access needed: this package only installs machine-wide";
 
-struct Launcher {
-    name: &'static str,
-    winget_ids: &'static [&'static str],
-    winget_prefixes: &'static [&'static str],
-    keywords: &'static [&'static str],
-    official_url: &'static str,
-}
-
-const LAUNCHERS: &[Launcher] = &[
-    Launcher {
-        name: "Steam",
-        winget_ids: &["valve.steam"],
-        winget_prefixes: &[],
-        keywords: &["steam"],
-        official_url: "https://store.steampowered.com/about/",
-    },
-    Launcher {
-        name: "Epic Games Launcher",
-        winget_ids: &["epicgames.epicgameslauncher"],
-        winget_prefixes: &[],
-        keywords: &["epic games", "epic launcher", "fortnite", "unreal engine"],
-        official_url: "https://store.epicgames.com/download",
-    },
-    Launcher {
-        name: "Riot Client",
-        winget_ids: &[],
-        winget_prefixes: &["riotgames."],
-        keywords: &["riot client", "riot games", "valorant", "league of legends"],
-        official_url: "https://www.riotgames.com/",
-    },
-    Launcher {
-        name: "EA app",
-        winget_ids: &["electronicarts.eadesktop", "electronicarts.origin"],
-        winget_prefixes: &[],
-        keywords: &["ea app", "ea desktop", "origin launcher"],
-        official_url: "https://www.ea.com/ea-app",
-    },
-    Launcher {
-        name: "Ubisoft Connect",
-        winget_ids: &["ubisoft.connect"],
-        winget_prefixes: &[],
-        keywords: &["ubisoft connect", "uplay"],
-        official_url: "https://ubisoftconnect.com/",
-    },
-    Launcher {
-        name: "Minecraft Launcher",
-        winget_ids: &["mojang.minecraftlauncher", "9pgw18npbzv5"],
-        winget_prefixes: &[],
-        keywords: &["minecraft launcher"],
-        official_url: "https://www.minecraft.net/download",
-    },
-    Launcher {
-        name: "Minecraft Bedrock Edition",
-        winget_ids: &["9nblggh2jhxj"],
-        winget_prefixes: &[],
-        keywords: &["minecraft bedrock", "bedrock edition", "minecraft for windows"],
-        official_url: "https://www.minecraft.net/download",
-    },
-    Launcher {
-        name: "Roblox",
-        winget_ids: &["roblox.roblox", "roblox.robloxstudio"],
-        winget_prefixes: &[],
-        keywords: &["roblox"],
-        official_url: "https://www.roblox.com/download",
-    },
-    Launcher {
-        name: "Battle.net",
-        winget_ids: &["blizzard.battlenet"],
-        winget_prefixes: &[],
-        keywords: &["battle.net", "battlenet", "blizzard"],
-        official_url: "https://download.battle.net/",
-    },
-    Launcher {
-        name: "GOG Galaxy",
-        winget_ids: &["gog.galaxy"],
-        winget_prefixes: &[],
-        keywords: &["gog galaxy"],
-        official_url: "https://www.gog.com/galaxy",
-    },
-];
-
-/// winget packages of installer type `exe` whose manifests declare silent switches.
-const SILENT_EXE_IDS: &[&str] = &[
-    "rustlang.rustup",
-    "mozilla.firefox",
-    "google.chrome",
-    "docker.dockerdesktop",
-    "microsoft.visualstudio.2022.buildtools",
-    "microsoft.visualstudio.2022.community",
-];
-
-const SILENT_INSTALLER_TYPES: &[&str] = &["msi", "msix", "appx", "wix", "inno", "nullsoft", "burn", "portable", "zip"];
-
-fn contains_word(haystack: &str, needle: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = haystack[start..].find(needle) {
-        let begin = start + pos;
-        let end = begin + needle.len();
-        let before_ok = haystack[..begin]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !c.is_ascii_alphanumeric());
-        let after_ok = haystack[end..].chars().next().is_none_or(|c| !c.is_ascii_alphanumeric());
-        if before_ok && after_ok {
-            return true;
-        }
-        start = begin + needle.len().max(1);
-    }
-    false
-}
-
-fn launcher_for_winget_id(id: &str) -> Option<&'static Launcher> {
-    let id = id.trim().to_ascii_lowercase();
-    LAUNCHERS.iter().find(|l| {
-        l.winget_ids.contains(&id.as_str()) || l.winget_prefixes.iter().any(|p| id.starts_with(p))
-    })
-}
-
-/// Name of the launcher or DRM product mentioned in free text or a package ID, if any.
-pub fn launcher_or_drm_match(text: &str) -> Option<&'static str> {
-    if let Some(l) = launcher_for_winget_id(text) {
-        return Some(l.name);
-    }
-    let lower = text.to_ascii_lowercase();
-    LAUNCHERS
-        .iter()
-        .find(|l| l.keywords.iter().any(|k| contains_word(&lower, k)))
-        .map(|l| l.name)
-}
-
-/// Official download page for a launcher returned by `launcher_or_drm_match`.
-pub fn launcher_official_url(name: &str) -> Option<&'static str> {
-    LAUNCHERS.iter().find(|l| l.name == name).map(|l| l.official_url)
-}
+/// Installer types winget runs unattended. Community-repo manifests of type `exe` must declare
+/// silent switches to be accepted, so `exe` is included.
+const SILENT_INSTALLER_TYPES: &[&str] = &["exe", "msi", "msix", "appx", "wix", "inno", "nullsoft", "burn", "portable", "zip"];
 
 /// Microsoft Store product IDs: 12 characters starting with `9` or `XP`.
 pub fn is_store_product_id(id: &str) -> bool {
@@ -196,27 +61,9 @@ pub fn is_store_product_id(id: &str) -> bool {
         && (id.starts_with('9') || id.to_ascii_uppercase().starts_with("XP"))
 }
 
-/// Classifies a winget package from its ID and parsed `winget show` output.
+/// Classifies a winget package from its ID and parsed `winget show` output. Whether the app
+/// later asks for a sign-in (Steam, Discord, Roblox) does not matter; only the installer does.
 pub fn classify_winget(id: &str, info: Option<&WingetShowInfo>) -> (Installability, Vec<String>) {
-    if let Some(l) = launcher_for_winget_id(id) {
-        return (
-            Installability::ManualOnly {
-                reason: ManualReason::LauncherOrDrm,
-                detail: format!("{} is a game launcher that needs your account to install and run.", l.name),
-            },
-            Vec::new(),
-        );
-    }
-    // Models sometimes invent IDs such as `Steam.Steam`; the brand name in the ID is enough.
-    if let Some(name) = launcher_or_drm_match(&id.replace(['.', '-', '_'], " ")) {
-        return (
-            Installability::ManualOnly {
-                reason: ManualReason::LauncherOrDrm,
-                detail: format!("{name} is a game launcher that needs your account to install and run."),
-            },
-            Vec::new(),
-        );
-    }
     if is_store_product_id(id) {
         return (
             Installability::ManualOnly {
@@ -237,11 +84,7 @@ pub fn classify_winget(id: &str, info: Option<&WingetShowInfo>) -> (Installabili
             reason: ManualReason::StoreOnly,
             detail: format!("{display} is only published through the Microsoft Store."),
         },
-        Some("exe") if !SILENT_EXE_IDS.contains(&id.to_ascii_lowercase().as_str()) => Installability::ManualOnly {
-            reason: ManualReason::NoSilentInstaller,
-            detail: format!("{display} ships a custom .exe installer with no known silent mode."),
-        },
-        Some(t) if t == "exe" || SILENT_INSTALLER_TYPES.contains(&t) => Installability::CliInstallable,
+        Some(t) if SILENT_INSTALLER_TYPES.contains(&t) => Installability::CliInstallable,
         Some(_) | None => {
             return (Installability::CliInstallable, vec![INSTALLER_TYPE_UNKNOWN_REASON.to_string()]);
         }
@@ -260,7 +103,7 @@ pub fn classify_winget(id: &str, info: Option<&WingetShowInfo>) -> (Installabili
     (verdict, Vec::new())
 }
 
-async fn winget_show(os: &dyn OsProvider, id: &str, version: Option<&str>) -> Option<WingetShowInfo> {
+pub(crate) async fn winget_show(os: &dyn OsProvider, id: &str, version: Option<&str>) -> Option<WingetShowInfo> {
     let paths = os.refresh_and_get_path().await.ok()?;
     let winget = os.which_in_paths("winget", &paths)?;
     let out = os
@@ -274,7 +117,7 @@ async fn winget_show(os: &dyn OsProvider, id: &str, version: Option<&str>) -> Op
 }
 
 async fn check_winget(os: &dyn OsProvider, id: &str, version: Option<&str>) -> (Installability, Vec<String>) {
-    if launcher_for_winget_id(id).is_some() || is_store_product_id(id) {
+    if is_store_product_id(id) {
         return classify_winget(id, None);
     }
     let info = winget_show(os, id, version).await;
@@ -377,8 +220,6 @@ pub struct ManualGuide {
     pub item: String,
     pub reason: ManualReason,
     pub detail: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub official_url: Option<String>,
     pub steps: Vec<String>,
     /// Goals SetupPal can run instead; each matches an embedded recipe.
     pub alternatives: Vec<String>,
@@ -386,32 +227,25 @@ pub struct ManualGuide {
 
 const MAX_ALTERNATIVES: usize = 5;
 
-/// Recipe IDs suggested in place of a manual-only app, by reason.
-fn alternative_recipe_ids(reason: ManualReason) -> &'static [&'static str] {
-    match reason {
-        ManualReason::LauncherOrDrm => &["minecraft_fabric_1_21", "obs_studio", "everyday_apps"],
-        ManualReason::StoreOnly
-        | ManualReason::NoSilentInstaller
-        | ManualReason::InteractiveLogin
-        | ManualReason::Unknown => &["everyday_apps", "obs_studio", "web_fullstack_ts", "python_ai_venv", "cpp20_dev"],
-    }
-}
+/// Recipe IDs suggested in place of a manual-only app.
+const ALTERNATIVE_RECIPE_IDS: &[&str] = &["everyday_apps", "obs_studio", "web_fullstack_ts", "python_ai_venv", "cpp20_dev"];
 
 /// Builds a manual setup guide; alternatives are names of recipes present in `recipes`.
 pub fn manual_guide(item: &str, reason: ManualReason, detail: &str, recipes: &RecipeStore) -> ManualGuide {
-    let launcher = launcher_or_drm_match(item);
-    let official_url = launcher.and_then(launcher_official_url).map(str::to_string);
-    let display = launcher.unwrap_or(item);
+    let steps = match reason {
+        ManualReason::StoreOnly => vec![
+            "Open the Microsoft Store app.".to_string(),
+            format!("Search for {item} and press Get or Install."),
+            "Sign in with your Microsoft account if the Store asks.".to_string(),
+        ],
+        ManualReason::NoSilentInstaller | ManualReason::Unknown => vec![
+            format!("Find {item} on its official website."),
+            format!("Download the {item} installer and run it."),
+            "Follow the installer's prompts.".to_string(),
+        ],
+    };
 
-    let mut steps = Vec::new();
-    match &official_url {
-        Some(url) => steps.push(format!("Open {url} in your browser.")),
-        None => steps.push(format!("Find {display} on its official website.")),
-    }
-    steps.push(format!("Download the {display} installer and run it."));
-    steps.push("Follow the installer's prompts and sign in if it asks for an account.".to_string());
-
-    let alternatives = alternative_recipe_ids(reason)
+    let alternatives = ALTERNATIVE_RECIPE_IDS
         .iter()
         .filter_map(|id| recipes.list().iter().find(|r| r.id == *id))
         .map(|r| r.name.clone())
@@ -420,10 +254,9 @@ pub fn manual_guide(item: &str, reason: ManualReason, detail: &str, recipes: &Re
 
     ManualGuide {
         kind: "manual".to_string(),
-        item: display.to_string(),
+        item: item.to_string(),
         reason,
         detail: detail.to_string(),
-        official_url,
         steps,
         alternatives,
     }
@@ -470,18 +303,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_exe_has_no_silent_installer() {
-        let os = os_with_show(show("exe", None));
-        assert!(matches!(
-            check(&winget_step("Example.App"), &os).await,
-            Installability::ManualOnly { reason: ManualReason::NoSilentInstaller, .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn known_silent_exe_is_cli_installable() {
-        let os = os_with_show(show("exe", None));
-        assert_eq!(check(&winget_step("Rustlang.Rustup"), &os).await, Installability::CliInstallable);
+    async fn exe_installers_from_winget_are_cli_installable() {
+        for id in ["Discord.Discord", "Spotify.Spotify", "Rustlang.Rustup"] {
+            let os = os_with_show(show("exe", None));
+            assert_eq!(check(&winget_step(id), &os).await, Installability::CliInstallable, "{id}");
+        }
     }
 
     #[tokio::test]
@@ -517,13 +343,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn steam_is_always_manual_even_if_winget_says_nullsoft() {
-        let os = os_with_show(show("nullsoft", None));
-        assert!(matches!(
-            check(&winget_step("Valve.Steam"), &os).await,
-            Installability::ManualOnly { reason: ManualReason::LauncherOrDrm, .. }
-        ));
-        assert!(os.calls().is_empty());
+    async fn game_launchers_on_winget_are_cli_installable() {
+        for (id, installer_type) in [
+            ("Valve.Steam", "nullsoft"),
+            ("EpicGames.EpicGamesLauncher", "wix"),
+            ("Mojang.MinecraftLauncher", "wix"),
+            ("Roblox.Roblox", "portable"),
+        ] {
+            let os = os_with_show(show(installer_type, None));
+            assert_eq!(check(&winget_step(id), &os).await, Installability::CliInstallable, "{id}");
+            assert!(!os.calls().is_empty(), "{id} must be judged from its winget manifest");
+        }
     }
 
     #[tokio::test]
@@ -545,48 +375,37 @@ mod tests {
         }
     }
 
-    #[test]
-    fn launcher_keywords_match_words_not_substrings() {
-        assert_eq!(launcher_or_drm_match("please install Steam"), Some("Steam"));
-        assert_eq!(launcher_or_drm_match("RiotGames.Valorant.EU"), Some("Riot Client"));
-        assert_eq!(launcher_or_drm_match("Fortnite"), Some("Epic Games Launcher"));
-        assert_eq!(launcher_or_drm_match("set up a steamroller"), None);
-        let (invented, _) = classify_winget("Steam.Steam", None);
-        assert!(matches!(invented, Installability::ManualOnly { .. }));
-        assert_eq!(launcher_or_drm_match("Modded Minecraft Java with Fabric"), None);
-    }
-
     #[tokio::test]
     async fn manual_steps_escalate_to_red_and_guide_lists_recipes() {
         let plan = Plan {
             plan_id: "p".to_string(),
-            goal: "install steam".to_string(),
+            goal: "install minecraft bedrock".to_string(),
             summary: String::new(),
             source: crate::types::PlanSource::Llm {
                 model: "test".to_string(),
             },
             steps: vec![PlannedStep {
                 id: "s1".to_string(),
-                description: "Install Steam".to_string(),
-                step: winget_step("Valve.Steam"),
+                description: "Install Minecraft Bedrock".to_string(),
+                step: winget_step("9NBLGGH2JHXJ"),
             }],
         };
         let checks = check_plan(&plan, &MockOsProvider::new()).await;
         let manual = first_manual(&checks).cloned();
         let Some(manual) = manual else {
-            panic!("Steam should be manual");
+            panic!("a Store-only product should be manual");
         };
-        assert_eq!(manual.item, "Valve.Steam");
+        assert_eq!(manual.item, "9NBLGGH2JHXJ");
 
         let recipes = RecipeStore::load_from_dir_or_embedded(std::path::Path::new("missing-dir")).unwrap();
         let Installability::ManualOnly { reason, detail } = &manual.installability else {
             panic!("expected manual");
         };
+        assert_eq!(*reason, ManualReason::StoreOnly);
         let guide = manual_guide(&manual.item, *reason, detail, &recipes);
         assert_eq!(guide.kind, "manual");
-        assert_eq!(guide.item, "Steam");
-        assert_eq!(guide.official_url.as_deref(), Some("https://store.steampowered.com/about/"));
-        assert_eq!(guide.alternatives.len(), alternative_recipe_ids(*reason).len());
+        assert!(guide.steps[0].contains("Microsoft Store"));
+        assert_eq!(guide.alternatives.len(), ALTERNATIVE_RECIPE_IDS.len());
         for alt in &guide.alternatives {
             let matched = recipes.find_matching(alt).map(|r| r.name.clone());
             assert_eq!(matched.as_ref(), Some(alt), "alternative `{alt}` must route back to its recipe");
@@ -596,16 +415,8 @@ mod tests {
     #[test]
     fn every_alternative_recipe_exists() {
         let recipes = RecipeStore::embedded_recipes().unwrap();
-        for reason in [
-            ManualReason::LauncherOrDrm,
-            ManualReason::StoreOnly,
-            ManualReason::NoSilentInstaller,
-            ManualReason::InteractiveLogin,
-            ManualReason::Unknown,
-        ] {
-            for id in alternative_recipe_ids(reason) {
-                assert!(recipes.iter().any(|r| r.id == *id), "missing recipe {id}");
-            }
+        for id in ALTERNATIVE_RECIPE_IDS {
+            assert!(recipes.iter().any(|r| r.id == *id), "missing recipe {id}");
         }
     }
 }

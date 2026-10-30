@@ -88,7 +88,7 @@ pub struct FetchedArtifact {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
     pub dry_run: bool,
     pub working_dir: PathBuf,
@@ -96,6 +96,20 @@ pub struct ExecutionContext {
     /// Cancels the in-flight OS command when the user hits Stop / Esc.
     #[serde(skip)]
     pub cancel: CancellationToken,
+    /// Called when a long command is still running with no new output (R5 stall watch).
+    #[serde(skip)]
+    pub on_progress: Option<std::sync::Arc<dyn Fn(String) + Send + Sync>>,
+}
+
+impl std::fmt::Debug for ExecutionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecutionContext")
+            .field("dry_run", &self.dry_run)
+            .field("working_dir", &self.working_dir)
+            .field("isolated_env", &self.isolated_env)
+            .field("on_progress", &self.on_progress.as_ref().map(|_| "Some(..)"))
+            .finish_non_exhaustive()
+    }
 }
 
 impl PartialEq for ExecutionContext {
@@ -115,11 +129,20 @@ impl ExecutionContext {
             working_dir,
             isolated_env,
             cancel: CancellationToken::new(),
+            on_progress: None,
         }
     }
 
     pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
         self.cancel = cancel;
+        self
+    }
+
+    pub fn with_progress(
+        mut self,
+        on_progress: std::sync::Arc<dyn Fn(String) + Send + Sync>,
+    ) -> Self {
+        self.on_progress = Some(on_progress);
         self
     }
 }
@@ -141,6 +164,15 @@ pub struct ExecutionReceipt {
     /// Folders the executor must add to the User PATH after the install.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path_entries: Vec<PathBuf>,
+    /// Raw user PATH before a winget install (R6 rewind).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_path_before: Option<String>,
+    /// PATH entries the install added (diff of before/after).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_entries_added: Vec<String>,
+    /// Primary install folder when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_location: Option<PathBuf>,
 }
 
 impl ExecutionReceipt {
@@ -162,6 +194,9 @@ impl ExecutionReceipt {
             uninstall_argv: None,
             created_paths: Vec::new(),
             path_entries: Vec::new(),
+            user_path_before: None,
+            path_entries_added: Vec::new(),
+            install_location: None,
         }
     }
 

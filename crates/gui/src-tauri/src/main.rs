@@ -59,6 +59,8 @@ pub struct AppState {
     pub runs: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Last safety level reported by a client (for `/api/health`).
     pub safety_level: Arc<RwLock<String>>,
+    /// Only one install or uninstall may run at a time across the app.
+    pub install_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Address and token the webview needs. Delivered by the `backend_info` command only.
@@ -114,7 +116,12 @@ fn build_app_state(keys: Arc<Keys>) -> anyhow::Result<AppState> {
         config.clone(),
         keys.clone(),
     )?);
-    let planner = Arc::new(Planner::new(recipes.clone(), llm.clone(), events.clone()));
+    let planner = Arc::new(Planner::new(
+        recipes.clone(),
+        llm.clone(),
+        events.clone(),
+        os_provider.clone(),
+    ));
     let state_logger = StateLogger::new(config.state_log_path.clone(), events.clone());
 
     Ok(AppState {
@@ -131,6 +138,7 @@ fn build_app_state(keys: Arc<Keys>) -> anyhow::Result<AppState> {
         plans: Arc::new(RwLock::new(HashMap::new())),
         runs: Arc::new(Mutex::new(HashMap::new())),
         safety_level: Arc::new(RwLock::new("strict".to_string())),
+        install_lock: Arc::new(tokio::sync::Mutex::new(())),
     })
 }
 
@@ -620,35 +628,35 @@ fn describe_provider_status(status: StatusCode, model: &str) -> String {
 }
 
 /// Reported in the context viewer so a reply can be traced to the prompt that produced it.
-const PROMPT_VERSION: &str = "v23-intent-fence-strict";
+const PROMPT_VERSION: &str = "v26-release-scope";
 
 const STATIC_SYSTEM_PROMPT: &str = "\
 Role\n\
-You are Pixel, SetupPal's assistant: a friendly little ghost who helps people set up software on their Windows PC. Be playful, curious, and warm, with a light spooky joke now and then.\n\
+You are Pixel, SetupPal's assistant: a friendly little ghost who helps people set up software on their Windows PC. Be warm and clear; at most one light joke per chat, never on errors or plans.\n\
 \n\
 Scope\n\
-SetupPal can set up anything that installs unattended from the command line (silent winget, npm, pip, cargo, or CLI installers like Fabric for Minecraft Java), can be verified with a command such as `node -v`, and passes SetupPal's safety checks. That includes everyday apps, not just coding tools (for example Git, VS Code, 7-Zip, VLC, OBS Studio).\n\
-Apps that need a GUI launcher, store login, or DRM (Steam, Epic Games, Riot, Battle.net, Roblox, Minecraft Bedrock, and similar) are out of scope.\n\
+SetupPal installs anything that installs unattended and passes safety checks: winget, npm, pip, cargo, and CLI installers (Fabric for Minecraft Java). Game, music, chat, and dev apps are fine (LMMS, Discord, Steam, Roblox). A window or sign-in after install is fine.\n\
+Out of scope: Microsoft Store-only apps (Minecraft Bedrock), vendor-page drivers, apps with no unattended installer. If unsure, emit an install intent; SetupPal checks.\n\
 \n\
 How to work\n\
 - Answer the latest message using the whole conversation. Short replies like `php` continue the topic.\n\
-- Each message includes PC facts. Use them; never invent facts. If something is installed, say its version.\n\
-- Greeting or broad request: ask what they want set up, offer 2 to 4 options that fit this PC, recommend one.\n\
-- Clear request: give the plan right away. Ask only when the answer changes the plan.\n\
-- A plan is a short numbered list: what gets installed, its source, and the check command. Nothing installs until they approve.\n\
+- PC facts are included. Mention a fact only when it changes the answer. Never invent facts.\n\
+- Broad request (\"I want to game\", \"I make music\"): ask what they play or need, offer 2 to 4 installable options in that category. Do not emit manual.\n\
+- Clear request: one sentence on what you'll set up, then the intent block. Don't list steps; the plan card shows them. Never change a package name the user typed—ask if it looks misspelled.\n\
+- New install requests replace any prior plan; do not insist the old plan finish first.\n\
 \n\
 Manual setup guide\n\
-If out of scope, start with **Manual setup guide**. Say SetupPal only does unattended terminal setup and why this needs a manual install. Give short numbered steps. End with \"SetupPal can install instead:\" and 2 to 4 options.\n\
+Only when the user named a specific out-of-scope item: start with **Manual setup guide**, say why, short steps, then \"SetupPal can install instead:\" with 2 to 4 same-category options that are not already installed.\n\
 \n\
 Ending a reply\n\
-When the user has agreed on what to install, end the reply with one fenced block, written exactly like this, with the three backticks and the word setuppal-intent on their own lines:\n\
+When they asked for or agreed on what to install, end with one fenced block (fence lines alone):\n\
 ```setuppal-intent\n\
-{\"kind\":\"install\",\"goal\":\"typescript\"}\n\
+{\"kind\":\"install\",\"goal\":\"vlc\"}\n\
 ```\n\
-For an out-of-scope item use the same fence with {\"kind\":\"manual\",\"item\":\"Steam\",\"reason\":\"needs a store login\"}. Never write that JSON without the fence, and never output the block while still asking a question.\n\
+Out-of-scope named item: {\"kind\":\"manual\",\"item\":\"Minecraft Bedrock\",\"reason\":\"only sold in the Microsoft Store\"}. Never emit the block while still asking a question.\n\
 \n\
 Style\n\
-Plain words, short replies, markdown allowed, bold the key point. Don't introduce yourself unless asked. Never claim you installed or checked anything. Never send an empty reply.";
+Plain words, short replies, markdown ok. Don't open with a greeting after the first message. Don't mirror slang. Never claim you installed or checked anything. Never send an empty reply.";
 
 /// Plain-text facts about this PC. Minecraft details are only added when the chat is about Minecraft.
 fn format_host_facts(
@@ -703,21 +711,12 @@ fn format_host_facts(
         .collect::<Vec<_>>()
         .join(" ");
     let blob = format!("{} {}", user_prompt.to_ascii_lowercase(), recent);
-    let launcher_requested = [
-        "minecraft",
-        "bedrock",
-        "steam",
-        "riot",
-        "epic",
-        "launcher",
-        "optifine",
-        "roblox",
-    ]
-    .iter()
-    .any(|k| blob.contains(k));
+    let minecraft_requested = ["minecraft", "bedrock", "optifine"]
+        .iter()
+        .any(|k| blob.contains(k));
 
-    if launcher_requested {
-        out.push_str("\n- Note: the user mentioned software that may need a GUI launcher, store login, or DRM. If it does, reply with a Manual setup guide. Parts that install from the command line (for example Java or Fabric for Minecraft Java) can still be set up.");
+    if minecraft_requested {
+        out.push_str("\n- Note: Minecraft Bedrock is Microsoft Store-only, so it needs a Manual setup guide. The Minecraft Launcher (winget), Java, and Fabric for Minecraft Java can be set up.");
     }
 
     out
@@ -1140,6 +1139,10 @@ struct PlanRequest {
     untrusted_readme: Option<String>,
     /// Compact conversation summary for the LLM planner only (max 1,500 chars).
     context: Option<String>,
+    /// The model called `goal` manual-only. Skip recipes and the LLM: plan it only if winget has
+    /// one exact match, otherwise answer `{"kind":"no_match"}`.
+    #[serde(default)]
+    verify_manual: bool,
 }
 
 fn uniquify_plan_id(plan: &mut Plan) {
@@ -1177,16 +1180,24 @@ async fn plan_handler(
         })
         .filter(|c| !c.is_empty());
 
-    let mut plan = state
-        .planner
-        .create_plan_with_context(
-            &req.goal,
-            &profile,
-            req.untrusted_readme.as_deref(),
-            context.as_deref(),
-        )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut plan = if req.verify_manual {
+        let goal = req.goal.trim();
+        match installer_core::resolver::resolve_winget_id(state.os_provider.as_ref(), goal).await {
+            Some(id) => installer_core::resolver::single_winget_plan(goal, &id),
+            None => return Ok(Json(serde_json::json!({ "kind": "no_match" }))),
+        }
+    } else {
+        state
+            .planner
+            .create_plan_with_context(
+                &req.goal,
+                &profile,
+                req.untrusted_readme.as_deref(),
+                context.as_deref(),
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    };
     uniquify_plan_id(&mut plan);
 
     let install_checks = check_plan(&plan, state.os_provider.as_ref()).await;
@@ -1249,9 +1260,9 @@ fn resolve_auto_approve_green(req: &ExecuteRequest) -> bool {
     }
 }
 
-/// Folder every relative step path resolves against. Plans with npm installs need a folder the
-/// user picked: it must exist and sit inside their profile. Other plans run in the backend's own
-/// working directory, so an explicit but invalid folder is still an error, never a silent fallback.
+/// Folder every relative step path resolves against. Never uses the backend's own working
+/// directory (that created junk folders inside the app). Prefer a user-picked project folder,
+/// otherwise `%USERPROFILE%\.setuppal\work`.
 fn resolve_working_dir(plan: &Plan, project_dir: Option<&str>) -> Result<PathBuf, String> {
     let needs_project = plan.steps.iter().any(|s| {
         matches!(
@@ -1273,7 +1284,14 @@ fn resolve_working_dir(plan: &Plan, project_dir: Option<&str>) -> Result<PathBuf
         None if needs_project => {
             Err("This plan installs npm packages. Choose a project folder first.".to_string())
         }
-        None => Ok(std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+        None => {
+            let profile = installer_core::paths::user_profile_dir()
+                .ok_or_else(|| "Could not locate your user profile folder.".to_string())?;
+            let work = profile.join(".setuppal").join("work");
+            std::fs::create_dir_all(&work)
+                .map_err(|e| format!("Could not create work folder: {e}"))?;
+            Ok(work)
+        }
     }
 }
 async fn execute_handler(
@@ -1341,6 +1359,15 @@ async fn execute_handler(
         let mut runs = state.runs.lock().await;
         runs.insert(run_id.clone(), cancel.clone());
     }
+
+    // Serialize installs/uninstalls so retries and Rewind never pile up behind a stuck winget.
+    let _install_guard = state.install_lock.try_lock().map_err(|_| {
+        (
+            StatusCode::CONFLICT,
+            "Another install or rewind is already running. Wait for it to finish, then try again."
+                .to_string(),
+        )
+    })?;
 
     info!("Executing plan '{}': {}", plan.plan_id, plan.goal);
 
@@ -1597,6 +1624,14 @@ async fn undo_handler(
     State(state): State<AppState>,
     Json(req): Json<UndoRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let _install_guard = state.install_lock.try_lock().map_err(|_| {
+        (
+            StatusCode::CONFLICT,
+            "Another install or rewind is already running. Wait for it to finish, then try again."
+                .to_string(),
+        )
+    })?;
+
     let tx = match req.tx_id.as_deref() {
         Some(id) => state
             .state_logger
@@ -1610,6 +1645,18 @@ async fn undo_handler(
 
     match tx {
         Some(t) => {
+            // Idempotent: never start a second uninstall for the same change.
+            if state
+                .state_logger
+                .is_transaction_rolled_back(&t.tx_id)
+                .unwrap_or(false)
+            {
+                return Ok(Json(serde_json::json!({
+                    "status": "rolled_back",
+                    "tx_id": t.tx_id,
+                    "outcome": "already_undone",
+                })));
+            }
             let outcome = state
                 .state_logger
                 .rollback_transaction(&t, &state.os_provider)

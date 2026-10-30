@@ -1,14 +1,12 @@
 id: web_fullstack_ts
 name: Modern Web & TypeScript Development Stack (Node.js LTS, Git, NPM)
 triggers:
-  - "web"
   - "web dev"
-  - "typescript"
-  - "node"
-  - "nodejs"
-  - "fullstack"
-  - "frontend"
-  - "javascript"
+  - "web dev setup"
+  - "web fullstack"
+  - "typescript stack"
+  - "node fullstack"
+  - "frontend stack"
 summary: "Installs Node.js LTS, NPM package manager, and Git via Winget and confirms each tool responds on the command line."
 steps:
   - id: step-1

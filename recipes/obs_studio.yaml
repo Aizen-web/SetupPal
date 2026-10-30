@@ -2,8 +2,9 @@ id: obs_studio
 name: OBS Studio for Recording and Streaming
 triggers:
   - "obs studio"
-  - "screen recording"
-  - "streaming software"
+  - "obs studio setup"
+  - "screen recording setup"
+  - "streaming software setup"
 summary: "Installs OBS Studio via winget and checks that it is registered."
 steps:
   - id: step-1
