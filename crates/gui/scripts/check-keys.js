@@ -15,14 +15,14 @@ function fakeStorage(initial) {
   };
 }
 
-assert.equal(keychainNameFor('setuppal_ai_api_key', 'nvapi-abc'), 'nim_api_key');
+assert.equal(keychainNameFor('setuppal_ai_api_key', 'nvapi-abc'), null);
 assert.equal(keychainNameFor('setuppal_ai_api_key', 'sk-other'), 'nebius_api_key');
 assert.equal(keychainNameFor('setuppal_tavily_key', 'tvly-1'), 'tavily_api_key');
 assert.equal(keychainNameFor('setuppal_github_user', 'ghp_abc'), 'github_token');
 assert.equal(keychainNameFor('setuppal_github_user', 'octocat'), null);
 assert.equal(keychainNameFor('setuppal_ai_api_key', '   '), null);
 
-// Saved values are removed; the backend receives each one once.
+// Saved values are removed; the backend receives each one once. Legacy NIM keys are discarded.
 const saved = [];
 const storage = fakeStorage({
   setuppal_ai_api_key: 'nvapi-test',
@@ -31,8 +31,8 @@ const storage = fakeStorage({
   setuppal_display_name: 'Local User',
 });
 const result = await migrateLegacyKeys(async (name, value) => { saved.push([name, value]); }, storage);
-assert.deepEqual(saved, [['nim_api_key', 'nvapi-test'], ['tavily_api_key', 'tvly-test']]);
-assert.deepEqual(result, { migrated: 2, removed: 1, failed: 0 });
+assert.deepEqual(saved, [['tavily_api_key', 'tvly-test']]);
+assert.deepEqual(result, { migrated: 1, removed: 2, failed: 0 });
 assert.deepEqual(storage.keys(), ['setuppal_display_name']);
 
 // A failed save keeps the value so the next launch can retry.

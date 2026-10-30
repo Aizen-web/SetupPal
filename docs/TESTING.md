@@ -56,7 +56,7 @@ node scripts/persona-tests/drive.mjs say "install steam and discord"
 node scripts/persona-tests/drive.mjs snap
 ```
 
-**Corpus expectations (release bar):** cover gamer / developer / casual requests. For each request, the outcome should be one of: an exact set of install IDs, a Manual setup guide for a named item, a clarifying question, or an “already installed” answer. Deterministic pieces (resolver, scope, installability) should pass consistently. Model-dependent outcomes should never add an unrequested install step. Prefer repeating each request a few times per provider (`nebius` and `nim`).
+**Corpus expectations (release bar):** cover gamer / developer / casual requests. For each request, the outcome should be one of: an exact set of install IDs, a Manual setup guide for a named item, a clarifying question, or an “already installed” answer. Deterministic pieces (resolver, scope, installability) should pass consistently. Model-dependent outcomes should never add an unrequested install step. Prefer repeating each request a few times across the three Nemotron models (Lightning / Super / Ultra) on Nebius.
 
 Deterministic (key-free) corpus validation is part of `scripts/check.ps1`:
 
@@ -101,7 +101,7 @@ Record pass/fail and notes for every row. Repeat items 1–7 once per provider y
 
 ### Setup
 
-- Keys: **Accounts** → paste provider key → Save → field shows “Saved”. Never paste keys into docs, issues, or chat. Use `SETUPPAL_PROVIDER=nebius` (or unset when only Nebius is saved) or `SETUPPAL_PROVIDER=nim`.
+- Keys: **Accounts** → paste Nebius key → Save → field shows “Saved”. Never paste keys into docs, issues, or chat. Pick Lightning / Super / Ultra under **Settings → AI model**.
 - Optional: Tavily for source-consensus lines; GitHub token for higher rate limits.
 - Start from empty History, or note the latest entry so new runs are identifiable.
 
@@ -122,8 +122,8 @@ Record pass/fail and notes for every row. Repeat items 1–7 once per provider y
 | 11 | Keychain | Save, then Remove, a key in Accounts. Run `cmdkey /list`. | A `SetupPal` entry exists after Save and is gone after Remove. `localStorage` holds no key-like values. Restarting the app keeps chat working without `.env`. | | |
 | 12 | Security | From a terminal run `curl http://127.0.0.1:<port>/api/health` (port from the app log or `netstat`). Also run `curl -H "Origin: https://example.com" ...`. | HTTP 401 with an empty body. No `Access-Control-Allow-Origin` header for the foreign origin. No key or token appears in any log. | | |
 | 13 | Offline UI | Disconnect from the network and launch the app. | Fonts and layout look identical. The console shows no CSP violations or failed font requests. | | |
-| 14 | Provider pin | Open Accounts and Settings. | The model shown is the pinned model for the selected provider; there is no model picker. | | |
-| 15 | Intent fence tolerance | Repeat row 7 and row 1 a few times with NIM (the small model sometimes drops the fence). | No raw `{"kind":...}` JSON ever shows in a reply. The manual card or plan still appears. Code blocks and other JSON in a reply stay untouched. | | |
+| 14 | Model selector | Open Settings → AI model. Switch Lightning / Super / Ultra, restart the app. | Selection persists; health/`/api/model` match the choice; arbitrary IDs cannot be entered. | | |
+| 15 | Intent fence tolerance | Repeat row 7 and row 1 a few times on Lightning (faster model sometimes drops the fence). | No raw `{"kind":...}` JSON ever shows in a reply. The manual card or plan still appears. Code blocks and other JSON in a reply stay untouched. | | |
 | 16 | Dry run label | Send a plan with `dry_run: true` to `/api/execute` (or run `scripts/check.ps1`'s executor tests). | The run log and plan card say DRY RUN, every step line starts with `[DRY RUN]`, the summary says nothing was installed, and there is no confetti. History shows a "Dry run" chip with no Rewind. | | |
 | 17 | Scan log once | Send several chat messages in one conversation with the Hacker run log open. | "detected N installed tools" appears once, and again only if the detected tools change or in a new conversation. | | |
 
@@ -137,7 +137,7 @@ Record pass/fail and notes for every row. Repeat items 1–7 once per provider y
 Honest constraints of the current tree:
 
 - The pinned Nebius model ID should be confirmed against a live Nebius account before relying on production chat quality.
-- Smaller NIM models may occasionally emit unfenced intent JSON; the UI should still avoid showing raw fence payloads, but behavior can vary—row 15 covers this.
+- Faster Lightning runs may occasionally emit unfenced intent JSON; the UI should still avoid showing raw fence payloads, but behavior can vary—row 15 covers this.
 - Credential-shaped values may exist in older git history of `.env.example`. Blanking the current file does not remove history; rotate any exposed keys.
 - No full contrast / accessibility audit has been completed across every page and viewport.
 - Not every registered mascot animation has been performance-profiled.

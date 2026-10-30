@@ -37,14 +37,14 @@ pub use installability::{
     apply_to_safety_report, check_plan, first_manual, manual_guide, manual_guide_with_installed,
     Installability, ManualGuide, ManualReason, StepInstallability,
 };
-pub use config::{fixed_secret, CoreConfig, CoreError, SecretProvider};
+pub use config::{fixed_secret, CoreConfig, CoreError, NemotronModel, SecretProvider};
 pub use events::{AgentEvent, EventBus};
 pub use executor::{
     ExecutionOptions, Executor, PlanExecutionSummary, StepExecutionResult, StepRunStatus,
     TrustCategory,
 };
 pub use healer::{FailureContext, Healer};
-pub use llm::{LlmClient, NimClient};
+pub use llm::{LlmClient, ModelSelection, NimClient, ProviderClient};
 pub use os::{CommandOutput, OsProvider, PlatformOsProvider};
 pub use planner::Planner;
 pub use recipes::{Recipe, RecipeStore};

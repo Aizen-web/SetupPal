@@ -15,18 +15,9 @@ const KEYS = [
     id: 'nebius',
     keyName: 'nebius_api_key',
     name: 'Nebius Token Factory',
-    badge: 'Production',
-    hint: 'Used for chat and planning when set. Stored in Windows Credential Manager.',
+    badge: 'Required',
+    hint: 'Used for chat and planning with the Nemotron model you pick in Settings. Stored in Windows Credential Manager.',
     placeholder: 'Paste your Nebius key',
-    testable: true,
-  },
-  {
-    id: 'nim',
-    keyName: 'nim_api_key',
-    name: 'NVIDIA NIM',
-    badge: 'Testing',
-    hint: 'Used when no Nebius key is set, or when SETUPPAL_PROVIDER=nim.',
-    placeholder: 'nvapi-...',
     testable: true,
   },
   {
@@ -64,7 +55,7 @@ export function renderAccountsView(container) {
   const rows = KEYS.map(k => {
     const inKeychain = Boolean(status?.in_keychain?.[k.keyName]);
     const configured = Boolean(status?.configured?.[k.keyName]);
-    const isActive = Boolean(health?.provider) && health.provider === k.id;
+    const isActive = k.id === 'nebius' && Boolean(health?.provider) && health.provider === 'nebius';
     const state = !status
       ? `<span style="color: var(--ink-soft);">… Checking</span>`
       : inKeychain
@@ -73,7 +64,7 @@ export function renderAccountsView(container) {
           ? `<span style="color: #16a34a; font-weight: 600;">● Using environment key</span>`
           : `<span style="color: var(--ink-soft);">○ Not set</span>`;
     const activeLine = isActive
-      ? `<div style="font-size: 12px; color: var(--ink); margin-top: 4px;">Chat and planning use this provider · Model: <code>${esc(health.model)}</code>${health.provider_ready ? '' : ` · <span style="color: var(--v-red);">${esc(health.provider_error)}</span>`}</div>`
+      ? `<div style="font-size: 12px; color: var(--ink); margin-top: 4px;">Chat and planning use Nebius · Model: <code>${esc(health.model_name || health.model)}</code>${health.provider_ready ? '' : ` · <span style="color: var(--v-red);">${esc(health.provider_error)}</span>`}</div>`
       : '';
     return `
       <div class="acc-key-card" data-key="${k.id}" style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 22px; box-shadow: var(--shadow-card);">
@@ -105,7 +96,7 @@ export function renderAccountsView(container) {
       <div style="margin-bottom: 20px;">
         <h1 class="font-pixel" style="font-size: 24px; color: var(--ink);">Accounts</h1>
         <div style="font-size: 13px; color: var(--ink-soft); margin-top: 4px;">
-          Chat needs a Nebius or NVIDIA NIM key. Keys are saved to Windows Credential Manager and are never shown again.
+          Chat needs a Nebius Token Factory key. Keys are saved to Windows Credential Manager and are never shown again. Pick a Nemotron model in Settings.
         </div>
       </div>
       <div style="display: flex; flex-direction: column; gap: 16px; max-width: 680px;">${rows}</div>

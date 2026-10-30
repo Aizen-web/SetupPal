@@ -25,7 +25,7 @@ Supersedes: v0.2 of this file and `SetupPal-UI-Style-Guide.md` (v0.1).
 | History | Two sub-tabs | One page with **search** across changes and conversations |
 | Recent list | Status icons planned | **Status icon per chat** (replying, running, held, blocked, failed, finished, plan ready, chat) |
 | Settings | Large wish list | Only **working** controls (section 9.5). The safety level is stored and sent with execute requests |
-| Models | Model picker | **One fixed model per provider** (Nebius in production, NVIDIA NIM for testing). No picker anywhere |
+| Models | Model picker | **Settings → AI model**: Lightning / Super (default) / Ultra on Nebius only; no arbitrary IDs |
 | Plan approval | `Approve 4 safe steps` | Per-step approval with **"Run N approved steps"** is the target (Phase 1); today's card says "Approve safe steps" |
 | Demo content | Demo mode suggested | **No demo, canned, or placeholder content anywhere.** Empty states say plainly that nothing exists yet |
 | Accessibility | Guidelines | Nav landmark + `aria-current`, focus-trapped dialogs, focus kept across re-renders, text selectable everywhere except chrome |
@@ -465,7 +465,7 @@ Sections, top to bottom:
 1. **Profile:** display name, avatar (ghost colour variants), local-only vs signed-in badge. v1 can be a **local profile**; cloud sign-in is a stretch goal.
 2. **Connected services** (card per service with `Connect / Disconnect` and `Test connection`):
    - **GitHub:** OAuth, read-only scopes by default; shows connected username and granted scopes.
-   - **Nebius Token Factory:** API key field (masked, easy paste). One fixed model, shown read-only; no model picker.
+   - **Nebius Token Factory:** API key field (masked, easy paste). Active Nemotron model is shown read-only here; change it under Settings.
    - **Tavily:** API key field (masked).
 3. **Usage:** local counters (messages, tool calls, tokens used this month). Show only numbers the app really measured.
 4. **Privacy and data:** what stays on this device, `Export my data`, `Delete all data`.
@@ -482,7 +482,8 @@ Only controls that work today. Everything is saved locally and applied immediate
 | Appearance | Theme mode (Auto / Always Chill / Always Hacker), text size (S / M / L), reduce motion (also turns off confetti), ambient background |
 | Pixel | Speech bubbles on/off, Mascot Lab (preview every animation) |
 | Safety level | Strict (default) / Balanced / Relaxed, with a one-line explanation of the selected level |
-| Chat & memory | Recent messages kept in full, reply length, share PC facts, the fixed model in use (read from `/api/health`), Clear all chats, Reset |
+| AI model | Lightning / Super (default) / Ultra — Nebius Nemotron allowlist only; short description per model |
+| Chat & memory | Recent messages kept in full, reply length, share PC facts, Clear all chats, Reset |
 | System scan | Run the doctor scan: OS, GPU, detected dev tools |
 | Sound | Sound effects on/off, volume |
 

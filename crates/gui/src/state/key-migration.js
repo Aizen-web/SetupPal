@@ -14,7 +14,8 @@ export function keychainNameFor(storageKey, value) {
   if (!v) return null;
   if (storageKey === 'setuppal_tavily_key') return 'tavily_api_key';
   if (storageKey === 'setuppal_github_user') return GITHUB_TOKEN.test(v) ? 'github_token' : null;
-  if (storageKey === 'setuppal_ai_api_key') return v.startsWith('nvapi-') ? 'nim_api_key' : 'nebius_api_key';
+  // Legacy NVIDIA NIM keys (nvapi-*) are dropped; only Nebius remains.
+  if (storageKey === 'setuppal_ai_api_key') return v.startsWith('nvapi-') ? null : 'nebius_api_key';
   return null;
 }
 

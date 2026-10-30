@@ -25,15 +25,13 @@ pub const MAX_KEY_LEN: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum KeyName {
     NebiusApiKey,
-    NimApiKey,
     TavilyApiKey,
     GithubToken,
 }
 
 impl KeyName {
-    pub const ALL: [KeyName; 4] = [
+    pub const ALL: [KeyName; 3] = [
         KeyName::NebiusApiKey,
-        KeyName::NimApiKey,
         KeyName::TavilyApiKey,
         KeyName::GithubToken,
     ];
@@ -42,7 +40,6 @@ impl KeyName {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::NebiusApiKey => "nebius_api_key",
-            Self::NimApiKey => "nim_api_key",
             Self::TavilyApiKey => "tavily_api_key",
             Self::GithubToken => "github_token",
         }
@@ -58,7 +55,6 @@ impl KeyName {
     pub fn env_names(self) -> &'static [&'static str] {
         match self {
             Self::NebiusApiKey => &["NEBIUS_API_KEY"],
-            Self::NimApiKey => &["NIM_API_KEY", "NVIDIA_API_KEY"],
             Self::TavilyApiKey => &["TAVILY_API_KEY"],
             Self::GithubToken => &["GITHUB_TOKEN", "GH_TOKEN"],
         }
@@ -67,7 +63,6 @@ impl KeyName {
     pub fn for_provider(kind: ProviderKind) -> Self {
         match kind {
             ProviderKind::Nebius => Self::NebiusApiKey,
-            ProviderKind::Nim => Self::NimApiKey,
         }
     }
 }
@@ -397,9 +392,9 @@ mod tests {
 
     #[test]
     fn dotenv_parser_handles_quotes_export_bom_and_placeholders() {
-        let content = "\u{feff}# comment\nexport NIM_API_KEY=\"quoted\"\nNEBIUS_API_KEY=nvapi-REPLACE_WITH_YOUR_KEY\nOTHER=1\n";
+        let content = "\u{feff}# comment\nexport TAVILY_API_KEY=\"quoted\"\nNEBIUS_API_KEY=nvapi-REPLACE_WITH_YOUR_KEY\nOTHER=1\n";
         assert_eq!(
-            dotenv_value(content, "NIM_API_KEY").as_deref(),
+            dotenv_value(content, "TAVILY_API_KEY").as_deref(),
             Some("quoted")
         );
         assert_eq!(dotenv_value(content, "NEBIUS_API_KEY"), None);
@@ -409,10 +404,10 @@ mod tests {
     #[test]
     fn status_reports_booleans_only() {
         let keys = Keys::without_dotenv(memory());
-        keys.save(KeyName::NimApiKey, "nvapi-super-secret").unwrap();
+        keys.save(KeyName::NebiusApiKey, "neb-super-secret").unwrap();
         let status = keys.status();
-        assert_eq!(status["configured"]["nim_api_key"], true);
-        assert_eq!(status["in_keychain"]["nim_api_key"], true);
+        assert_eq!(status["configured"]["nebius_api_key"], true);
+        assert_eq!(status["in_keychain"]["nebius_api_key"], true);
         assert_eq!(status["configured"]["github_token"], false);
         assert!(!status.to_string().contains("super-secret"));
         assert!(status["configured"]
@@ -430,7 +425,6 @@ mod tests {
             keys.api_key(ProviderKind::Nebius).as_deref(),
             Some("neb-key")
         );
-        assert_eq!(keys.api_key(ProviderKind::Nim), None);
     }
 
     #[test]

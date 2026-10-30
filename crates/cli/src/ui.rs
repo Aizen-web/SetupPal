@@ -74,7 +74,7 @@ pub fn render_plan_with_safety(
             .bright_green()
             .to_string(),
         PlanSource::Llm { model } => {
-            format!("NVIDIA NIM (`{model}`)")
+            format!("Nebius Nemotron (`{model}`)")
                 .bright_yellow()
                 .to_string()
         }

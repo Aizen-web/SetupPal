@@ -7,7 +7,7 @@ Thanks for helping improve SetupPal. This guide covers local setup, checks, and 
 - **Windows 10/11** with WebView2 (preinstalled on current Windows)
 - **Rust** MSVC toolchain (`stable-x86_64-pc-windows-msvc`) and a linker (`link.exe` from Visual Studio Build Tools)
 - **Node.js** (LTS) and npm
-- Optional: a Nebius or NVIDIA NIM API key for live chat/planning (see [README](README.md#provider-and-key-configuration))
+- Optional: a Nebius Token Factory API key for live chat/planning (see [README](README.md#provider-and-key-configuration))
 
 ## Run the CLI
 

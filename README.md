@@ -25,14 +25,13 @@ That is a complete product experience—not a prompt demo: chat → plan card �
 
 | Piece | Detail |
 | --- | --- |
-| **Production provider** | [Nebius Token Factory](https://tokenfactory.nebius.com/) OpenAI-compatible API (`https://api.tokenfactory.nebius.com/v1`) |
-| **Pinned model** | `nvidia/Nemotron-3_5-Lightning` (NVIDIA open-source Nemotron family) |
+| **Provider** | [Nebius Token Factory](https://tokenfactory.nebius.com/) OpenAI-compatible API (`https://api.tokenfactory.nebius.com/v1`) only |
+| **Selectable models** | Nemotron 3.5 Lightning (`nvidia/Nemotron-3_5-Lightning`), **Nemotron 3 Super** default (`nvidia/nemotron-3-super-120b-a12b`), Nemotron 3 Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`) — catalog IDs only |
 | **What the model does** | Streams chat replies and emits structured install intents / plans |
 | **What the model never does** | Execute shell commands, bypass the Safety Engine, or override Red ratings |
-| **Testing provider** | NVIDIA NIM (`nvidia/nemotron-3.5-bolt-e4b`) for local/dev comparison |
 | **Optional** | Tavily — Safety Engine source-domain consensus only (not general chat search) |
 
-Selection: `SETUPPAL_PROVIDER=nebius|nim`. Default is Nebius when `NEBIUS_API_KEY` is set. Keys live in Windows Credential Manager (desktop) or `.env` (CLI / debug).
+Pick a model in **Settings**. Default is Nemotron 3 Super. Choice is persisted across restarts; unknown IDs are rejected with a clear error (no silent fallback). Keys live in Windows Credential Manager (desktop) or `.env` (CLI / debug).
 
 ## Architecture (proposal ≠ authority)
 
@@ -40,7 +39,7 @@ Selection: `SETUPPAL_PROVIDER=nebius|nim`. Default is Nebius when `NEBIUS_API_KE
 User goal (chat)
     │
     ▼
-Nebius Token Factory ──► nvidia/Nemotron-3_5-Lightning
+Nebius Token Factory ──► selected Nemotron model (default: Super)
     │                      (chat stream + setuppal-intent)
     ▼
 Typed Plan card (source of truth)
@@ -121,40 +120,39 @@ cargo run -p installer_cli -- plan "setup Rust + Node.js microservice environmen
 cargo run -p installer_cli -- plan "set me up for C++20 dev" --json
 ```
 
-AI planning needs `NEBIUS_API_KEY` or `NIM_API_KEY` (see below).
+AI planning needs `NEBIUS_API_KEY` (see below).
 
 ## Provider and key configuration
 
-In the desktop app, open **Accounts** and paste keys. They are stored in Windows Credential Manager (service `SetupPal`) and are never shown again.
+In the desktop app, open **Accounts** and paste your Nebius key. It is stored in Windows Credential Manager (service `SetupPal`) and is never shown again. Choose Lightning / Super / Ultra under **Settings → AI model**.
 
 For CLI and local development, copy `.env.example` to `.env` and fill blanks locally. The app reads `.env` only in debug builds or with `SETUPPAL_DEV=1`. **Never** put real keys in `.env.example`, commit `.env`, or paste keys into docs.
 
 ```dotenv
-# Which AI provider to use: nebius (production) or nim (testing).
-# Defaults to nebius when NEBIUS_API_KEY is set.
+# Optional; must be `nebius` or blank.
 SETUPPAL_PROVIDER=
+
+# lightning | super (default) | ultra — or an exact catalog API ID
+SETUPPAL_MODEL=super
 
 NEBIUS_BASE_URL=https://api.tokenfactory.nebius.com/v1
 NEBIUS_API_KEY=
 
-NIM_BASE_URL=https://integrate.api.nvidia.com/v1
-NIM_API_KEY=
-# NVIDIA_API_KEY=
-
 TAVILY_API_KEY=
 ```
 
-- **Nebius** is production; **NVIDIA NIM** is for testing. Each provider is pinned to one fixed model ID in code—no model picker and no live model list.
-- `SETUPPAL_PROVIDER=nebius|nim` selects explicitly. If unset, SetupPal uses Nebius when its key exists, otherwise NIM. `NVIDIA_API_KEY` is accepted in place of `NIM_API_KEY`.
-- Chat and planning use the same provider and model. Tavily is an optional Safety Engine source verifier.
-- Lookup order: OS keychain, then process environment, then `.env` (developer fallback).
+- Inference is **Nebius Token Factory only**. NVIDIA NIM is not used.
+- Users pick among three allowlisted Nemotron models in Settings; arbitrary model IDs are rejected.
+- Chat and planning use the same selected model. The Safety Engine never reads the model choice.
+- If a model is unavailable or fails, SetupPal shows a clear error and does not fall back to another model.
+- Lookup order for keys: OS keychain, then process environment, then `.env` (developer fallback).
 
 ## What judges can verify
 
 | Claim | How to check |
 | --- | --- |
 | MIT license | [LICENSE](LICENSE) at repository root |
-| Nebius + Nemotron | Accounts → Nebius key Saved; chat streams; model ID in `crates/core/src/config.rs` |
+| Nebius + Nemotron | Accounts → Nebius key Saved; Settings → Nemotron model; catalog IDs in `crates/core/src/config.rs` |
 | Model never gets a shell | Closed `Step` enum in `crates/core/src/types.rs`; Red blocked in Safety Engine |
 | Plan card is the plan | Chat must match the card; Approve runs only listed steps |
 | Rewind works | History → Rewind after a successful install |
@@ -165,7 +163,7 @@ TAVILY_API_KEY=
 ## Known limitations (honest)
 
 - **Windows only** (Tauri / WebView2 / NSIS / winget-focused adapters).
-- Live AI needs a **BYOK** Nebius (or NIM) key—no shared judge key.
+- Live AI needs a **BYOK** Nebius key—no shared judge key.
 - Default CI is **key-free**; live persona corpus and clean-VM Rewind gates are documented in [docs/TESTING.md](docs/TESTING.md) and are not claimed as fully verified for every release cut.
 - Long installs may time out; OSV coverage focuses on ecosystems the adapters use; no full accessibility audit yet.
 

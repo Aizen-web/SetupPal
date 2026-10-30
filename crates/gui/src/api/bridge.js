@@ -7,6 +7,7 @@ import { apiClient } from './client.js';
 import { store } from '../state/store.js';
 import { setLastContext, motionReduced, getSafetyLevel } from '../state/prefs.js';
 import { migrateLegacyKeys } from '../state/key-migration.js';
+import { getPrefs, setPrefs } from '../state/prefs.js';
 import { refreshKeyStatus } from '../state/key-status.js';
 import { sounds } from '../audio/sound-engine.js';
 import { pixelVoice } from '../mascot/voicelines.js';
@@ -234,10 +235,32 @@ export class BackendBridge {
     try {
       await migrateLegacyKeys((name, value) => apiClient.saveKey(name, value));
       await refreshKeyStatus();
+      await this.syncModelPreference();
       await apiClient.checkHealth();
     } catch (err) {
       console.warn('Key sync failed:', err?.message || err);
     }
+  }
+
+  /**
+   * Keeps the Settings model selector aligned with the backend selection.
+   * Backend file / SETUPPAL_MODEL is the inference source of truth; prefs mirror it.
+   * If prefs differ and the backend is still on the default, push the saved UI choice once.
+   */
+  async syncModelPreference() {
+    const prefs = getPrefs();
+    const health = apiClient.lastHealth;
+    const backendId = health?.model_id;
+    if (backendId && prefs.model === backendId) return;
+    if (prefs.model && prefs.model !== 'super' && (!backendId || backendId === 'super')) {
+      try {
+        await apiClient.setModel(prefs.model);
+        return;
+      } catch (err) {
+        console.warn('Could not apply saved model preference:', err?.message || err);
+      }
+    }
+    if (backendId) setPrefs({ model: backendId });
   }
 
   setupEventStream() {

@@ -48,11 +48,11 @@ If something cannot be installed unattended (for example Microsoft Store-only ap
 | Item | Value |
 | --- | --- |
 | Service | Nebius Token Factory (`https://api.tokenfactory.nebius.com/v1`) |
-| Model | `nvidia/Nemotron-3_5-Lightning` (pinned in `crates/core/src/config.rs`) |
+| Models | Lightning `nvidia/Nemotron-3_5-Lightning`, Super (default) `nvidia/nemotron-3-super-120b-a12b`, Ultra `nvidia/Nemotron-3-Ultra-550b-a55b` (Nebius catalog IDs in `crates/core/src/config.rs`) |
 | Role | Chat streaming and structured install planning / intents |
 | Not used for | Execution, privilege decisions, or Safety Engine verdicts |
 
-Token Factory accelerated the workflow with an OpenAI-compatible chat-completions API, so the app could pin one production model, stream replies for a responsive UI, and keep BYOK keys in Windows Credential Manager. NVIDIA NIM (`nvidia/nemotron-3.5-bolt-e4b`) remains available as a testing provider.
+Token Factory accelerated the workflow with an OpenAI-compatible chat-completions API, so the app can offer three Nemotron tiers, stream replies for a responsive UI, and keep BYOK keys in Windows Credential Manager. NVIDIA NIM is not used.
 
 Optional **Tavily** is used only for Safety Engine source-domain consensus—not as general web search for chat.
 
@@ -70,7 +70,7 @@ Optional **Tavily** is used only for Safety Engine source-domain consensus—not
 ## Accomplishments that we're proud of
 
 - A coherent product loop: chat → plan → safety → approve → verify → Rewind.
-- Nebius-first production path with a pinned NVIDIA Nemotron model and no model-picker complexity.
+- Nebius-only production path with three catalog Nemotron models (Super default) and a clear Settings selector.
 - Deterministic Safety Engine and installability gate that do not defer authority to the LLM.
 - Contributor docs, MIT license, Windows CI (`scripts/check.ps1`), and NSIS packaging with tagged GitHub Releases.
 
@@ -95,8 +95,7 @@ Optional **Tavily** is used only for Safety Engine source-domain consensus—not
 ## Built with
 
 - Nebius Token Factory
-- NVIDIA Nemotron (`nvidia/Nemotron-3_5-Lightning`)
-- NVIDIA NIM (testing provider)
+- NVIDIA Nemotron (Lightning / Super / Ultra via Nebius Token Factory)
 - Rust, Tokio, Axum
 - Tauri v2, WebView2, Vite
 - winget / npm / pip / cargo adapters

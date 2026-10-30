@@ -115,7 +115,7 @@ impl FailureContext {
 }
 
 /// Zero-Trust Self-Healing Loop.
-/// Diagnoses execution and verification failures, generates targeted remediation plans via NVIDIA NIM,
+/// Diagnoses execution and verification failures, generates targeted remediation plans via Nebius Nemotron,
 /// enforces mandatory safety gates, and limits attempts to prevent infinite retry loops.
 pub struct Healer {
     llm: Arc<dyn LlmClient>,
@@ -169,7 +169,7 @@ impl Healer {
             attempt: failure.attempt,
         });
 
-        // 2. Request remediation plan from NIM / LLM (include a classified cause)
+        // 2. Request remediation plan from the selected Nemotron model (include a classified cause)
         let cause = classify_failure(failure);
         let diagnostic_with_cause = format!("Classified cause: {cause}\n{diagnostic}");
         let remediation_plan = self

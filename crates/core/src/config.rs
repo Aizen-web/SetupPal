@@ -2,9 +2,120 @@ use std::env;
 use std::path::PathBuf;
 use thiserror::Error;
 
+use serde::{Deserialize, Serialize};
+
 /// Looks up a secret (for example a Tavily or GitHub key) at the moment it is needed, so a key
 /// saved while the app is running takes effect without a restart. Never log what it returns.
 pub type SecretProvider = std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
+/// The only AI models SetupPal may call. IDs match the Nebius Token Factory catalog.
+/// Model choice never touches the Safety Engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NemotronModel {
+    /// Fast everyday planning (`nvidia/Nemotron-3_5-Lightning`).
+    Lightning,
+    /// Default: balanced reasoning (`nvidia/nemotron-3-super-120b-a12b`).
+    Super,
+    /// Advanced multi-stage setups (`nvidia/Nemotron-3-Ultra-550b-a55b`).
+    Ultra,
+}
+
+impl Default for NemotronModel {
+    fn default() -> Self {
+        Self::Super
+    }
+}
+
+impl NemotronModel {
+    pub const ALL: [Self; 3] = [Self::Lightning, Self::Super, Self::Ultra];
+
+    /// Stable Settings / API slug (`lightning` | `super` | `ultra`).
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Lightning => "lightning",
+            Self::Super => "super",
+            Self::Ultra => "ultra",
+        }
+    }
+
+    /// Exact Nebius Token Factory model ID. Never invent IDs — only catalog values.
+    pub fn api_id(self) -> &'static str {
+        match self {
+            Self::Lightning => "nvidia/Nemotron-3_5-Lightning",
+            Self::Super => "nvidia/nemotron-3-super-120b-a12b",
+            Self::Ultra => "nvidia/Nemotron-3-Ultra-550b-a55b",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Lightning => "Nemotron 3.5 Lightning",
+            Self::Super => "Nemotron 3 Super",
+            Self::Ultra => "Nemotron 3 Ultra",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Lightning => "Fast, everyday installation planning",
+            Self::Super => "Recommended default. Balanced reasoning and planning",
+            Self::Ultra => "Advanced reasoning for complicated, multi-stage setups",
+        }
+    }
+
+    /// Accepts a Settings slug or a full Nebius API ID. Rejects anything else.
+    pub fn parse(value: &str) -> Option<Self> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        Self::ALL.into_iter().find(|model| {
+            model.slug() == lower
+                || model.api_id().eq_ignore_ascii_case(trimmed)
+                || match model {
+                    Self::Lightning => {
+                        lower == "nemotron-3.5-lightning" || lower == "nemotron_3_5-lightning"
+                    }
+                    Self::Super => {
+                        lower == "nemotron-3-super" || lower == "nemotron-3-super-120b-a12b"
+                    }
+                    Self::Ultra => {
+                        lower == "nemotron-3-ultra" || lower == "nemotron-3-ultra-550b-a55b"
+                    }
+                }
+        })
+    }
+
+    pub fn parse_or_err(value: &str) -> Result<Self, CoreError> {
+        Self::parse(value).ok_or_else(|| {
+            CoreError::Config(format!(
+                "Unknown model `{value}`. Choose one of: {}.",
+                Self::ALL
+                    .iter()
+                    .map(|m| format!("{} (`{}`)", m.slug(), m.display_name()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })
+    }
+
+    /// Public catalog entry for `/api/health` and Settings.
+    pub fn catalog_entry(self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.slug(),
+            "api_id": self.api_id(),
+            "name": self.display_name(),
+            "description": self.description(),
+            "default": self == Self::default(),
+        })
+    }
+
+    pub fn catalog() -> Vec<serde_json::Value> {
+        Self::ALL.iter().map(|m| m.catalog_entry()).collect()
+    }
+}
 
 /// A provider that always returns the same value (or nothing).
 pub fn fixed_secret(value: Option<String>) -> SecretProvider {
@@ -46,15 +157,15 @@ pub enum CoreError {
 /// Runtime configuration loaded from environment variables (with safe defaults).
 #[derive(Clone)]
 pub struct CoreConfig {
-    /// Raw `SETUPPAL_PROVIDER` value (`nebius` or `nim`); validated by `llm::provider::select_provider`.
+    /// Raw `SETUPPAL_PROVIDER` value; must be `nebius` or unset. Validated by `llm::provider::select_provider`.
     pub provider: Option<String>,
-    pub nim_base_url: String,
-    pub nim_api_key: Option<String>,
     pub nebius_base_url: String,
     pub nebius_api_key: Option<String>,
     pub tavily_api_key: Option<String>,
     pub recipes_dir: PathBuf,
     pub state_log_path: PathBuf,
+    /// Initial Nemotron model from `SETUPPAL_MODEL` (default: Super). Runtime selection may override.
+    pub model: NemotronModel,
 }
 
 impl std::fmt::Debug for CoreConfig {
@@ -62,24 +173,18 @@ impl std::fmt::Debug for CoreConfig {
         formatter
             .debug_struct("CoreConfig")
             .field("provider", &self.provider)
-            .field("nim_base_url", &self.nim_base_url)
-            .field("has_nim_api_key", &self.nim_api_key.is_some())
             .field("nebius_base_url", &self.nebius_base_url)
             .field("has_nebius_api_key", &self.nebius_api_key.is_some())
             .field("has_tavily_api_key", &self.tavily_api_key.is_some())
             .field("recipes_dir", &self.recipes_dir)
             .field("state_log_path", &self.state_log_path)
+            .field("model", &self.model.slug())
             .finish()
     }
 }
 
 impl CoreConfig {
-    pub const DEFAULT_NIM_BASE_URL: &'static str = "https://integrate.api.nvidia.com/v1";
-    /// Pinned NVIDIA NIM model (testing provider). Not configurable.
-    pub const NIM_MODEL: &'static str = "nvidia/nemotron-3.5-bolt-e4b";
     pub const DEFAULT_NEBIUS_BASE_URL: &'static str = "https://api.tokenfactory.nebius.com/v1";
-    /// Pinned Nebius Token Factory model (production provider). Not configurable.
-    pub const NEBIUS_MODEL: &'static str = "nvidia/Nemotron-3_5-Lightning";
 
     /// Loads configuration from process environment variables.
     /// Automatically loads a `.env` file if present in the current directory.
@@ -95,15 +200,6 @@ impl CoreConfig {
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
-
-        let nim_base_url = env::var("NIM_BASE_URL")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| Self::DEFAULT_NIM_BASE_URL.to_string());
-
-        let nim_api_key = ["NIM_API_KEY", "NVIDIA_API_KEY"]
-            .iter()
-            .find_map(|name| env::var(name).ok().filter(|value| !value.trim().is_empty()));
 
         let nebius_base_url = env::var("NEBIUS_BASE_URL")
             .ok()
@@ -126,15 +222,19 @@ impl CoreConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(".orchestrator_state.jsonl"));
 
+        let model = env::var("SETUPPAL_MODEL")
+            .ok()
+            .and_then(|v| NemotronModel::parse(&v))
+            .unwrap_or_default();
+
         Self {
             provider,
-            nim_base_url,
-            nim_api_key,
             nebius_base_url,
             nebius_api_key,
             tavily_api_key,
             recipes_dir,
             state_log_path,
+            model,
         }
     }
 
@@ -167,19 +267,18 @@ mod tests {
     fn debug_output_redacts_provider_keys() {
         let config = CoreConfig {
             provider: None,
-            nim_base_url: CoreConfig::DEFAULT_NIM_BASE_URL.to_string(),
-            nim_api_key: Some("test-nim-secret".to_string()),
             nebius_base_url: CoreConfig::DEFAULT_NEBIUS_BASE_URL.to_string(),
             nebius_api_key: Some("test-nebius-secret".to_string()),
             tavily_api_key: Some("test-tavily-secret".to_string()),
             recipes_dir: PathBuf::from("recipes"),
             state_log_path: PathBuf::from(".orchestrator_state.jsonl"),
+            model: NemotronModel::Super,
         };
 
         let debug = format!("{config:?}");
-        assert!(!debug.contains("test-nim-secret"));
         assert!(!debug.contains("test-nebius-secret"));
         assert!(!debug.contains("test-tavily-secret"));
         assert!(debug.contains("has_nebius_api_key"));
+        assert!(debug.contains("super"));
     }
 }

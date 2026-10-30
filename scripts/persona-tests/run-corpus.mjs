@@ -3,7 +3,7 @@
  * SetupPal persona corpus runner.
  *
  *   node scripts/persona-tests/run-corpus.mjs --deterministic
- *   node scripts/persona-tests/run-corpus.mjs --live [--provider nebius|nim] [--runs 1]
+ *   node scripts/persona-tests/run-corpus.mjs --live [--provider nebius] [--runs 1]
  *
  * Deterministic mode is key-free: schema + fixture ID checks only.
  * Live mode drives a running SetupPal window via CDP (port 9333) and never clicks Approve.
@@ -328,7 +328,7 @@ const args = parseArgs(process.argv.slice(2));
 if (args.help || !args.mode) {
   console.log(`Usage:
   node ${resolve('scripts/persona-tests/run-corpus.mjs')} --deterministic
-  node ${resolve('scripts/persona-tests/run-corpus.mjs')} --live [--provider nebius|nim] [--runs N] [--filter idOrPersona]
+  node ${resolve('scripts/persona-tests/run-corpus.mjs')} --live [--provider nebius] [--runs N] [--filter idOrPersona]
 `);
   process.exit(args.help ? 0 : 1);
 }

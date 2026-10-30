@@ -1,5 +1,6 @@
 #[cfg(test)]
 pub mod mock;
+pub mod models;
 pub mod provider;
 pub mod sanitizer;
 
@@ -13,9 +14,11 @@ use serde_json::Value;
 use crate::config::{CoreConfig, CoreError};
 use crate::types::{Plan, SystemProfile};
 
+pub use crate::config::NemotronModel;
+pub use models::{ModelSelection, DEFAULT_MODEL_SLUG};
 pub use provider::{
-    resolve_provider, select_provider, selected_provider, ConfigKeyStore, KeyStore, ProviderKind,
-    ResolvedProvider,
+    resolve_provider, resolve_with_selection, select_provider, selected_provider, ConfigKeyStore,
+    KeyStore, ProviderKind, ResolvedProvider,
 };
 
 #[async_trait]
@@ -39,12 +42,13 @@ pub trait LlmClient: Send + Sync {
     ) -> Result<Plan, CoreError>;
 }
 
-/// OpenAI-compatible `/v1/chat/completions` client for the provider chosen by
-/// [`resolve_provider`], with `schemars` JSON Schema enforcement for plans.
+/// OpenAI-compatible `/v1/chat/completions` client for Nebius Token Factory, with `schemars`
+/// JSON Schema enforcement for plans. Model selection is independent of the Safety Engine.
 #[derive(Clone)]
 pub struct ProviderClient {
     config: CoreConfig,
     keys: Arc<dyn KeyStore>,
+    models: ModelSelection,
     http: reqwest::Client,
 }
 
@@ -56,6 +60,7 @@ impl std::fmt::Debug for ProviderClient {
         formatter
             .debug_struct("ProviderClient")
             .field("config", &self.config)
+            .field("model", &self.models.get().slug())
             .finish_non_exhaustive()
     }
 }
@@ -101,17 +106,32 @@ struct ChatChoice {
 }
 
 impl ProviderClient {
-    /// Uses the keys captured in `config` at startup.
+    /// Uses the keys captured in `config` at startup and an ephemeral model selection.
     pub fn new(config: CoreConfig) -> Result<Self, CoreError> {
+        let model = config.model;
         let keys = Arc::new(ConfigKeyStore::from_config(&config));
-        Self::with_key_store(config, keys)
+        Self::with_key_store_and_models(config, keys, ModelSelection::ephemeral(model))
     }
 
     pub fn with_key_store(config: CoreConfig, keys: Arc<dyn KeyStore>) -> Result<Self, CoreError> {
+        let models = ModelSelection::ephemeral(config.model);
+        Self::with_key_store_and_models(config, keys, models)
+    }
+
+    pub fn with_key_store_and_models(
+        config: CoreConfig,
+        keys: Arc<dyn KeyStore>,
+        models: ModelSelection,
+    ) -> Result<Self, CoreError> {
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(45))
+            .timeout(std::time::Duration::from_secs(120))
             .build()?;
-        Ok(Self { config, keys, http })
+        Ok(Self {
+            config,
+            keys,
+            models,
+            http,
+        })
     }
 
     /// Generates the canonical JSON Schema for `Plan` using `schemars`.
@@ -128,23 +148,32 @@ impl ProviderClient {
         self.keys.as_ref()
     }
 
+    pub fn model_selection(&self) -> &ModelSelection {
+        &self.models
+    }
+
+    pub fn selected_model(&self) -> NemotronModel {
+        self.models.get()
+    }
+
     /// The provider, model, and key every AI call uses right now.
     pub fn resolve(&self) -> Result<ResolvedProvider, CoreError> {
-        resolve_provider(&self.config, self.keys.as_ref())
+        resolve_with_selection(&self.config, self.keys.as_ref(), &self.models)
     }
 
     /// The selected provider even when its key is missing (for status display).
     pub fn selected(&self) -> Result<ProviderKind, CoreError> {
-        selected_provider(&self.config, self.keys.as_ref())
+        selected_provider(&self.config)
     }
 
     async fn request_plan(&self, user_prompt: String) -> Result<Plan, CoreError> {
         let provider = self.resolve()?;
         let schema_value = Self::plan_json_schema()?;
         let system_prompt = sanitizer::build_hardened_system_prompt(&schema_value)?;
+        let model_id = provider.model_id();
 
         let request_body = ChatCompletionRequest {
-            model: provider.model.to_string(),
+            model: model_id.to_string(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -184,10 +213,11 @@ impl ProviderClient {
 
         if !response.status().is_success() {
             return Err(CoreError::Llm(format!(
-                "{} returned HTTP {} for model `{}`.",
+                "{} returned HTTP {} for model `{}` ({}). No other model was tried.",
                 provider.kind.display_name(),
                 response.status(),
-                provider.model
+                provider.model.display_name(),
+                model_id
             )));
         }
 
@@ -204,8 +234,9 @@ impl ProviderClient {
             .map(|c| c.message.content.trim())
             .ok_or_else(|| {
                 CoreError::Llm(format!(
-                    "{} returned no choices.",
-                    provider.kind.display_name()
+                    "{} returned no choices for model `{}`.",
+                    provider.kind.display_name(),
+                    model_id
                 ))
             })?;
 
@@ -221,9 +252,7 @@ impl ProviderClient {
 #[async_trait]
 impl LlmClient for ProviderClient {
     fn model_name(&self) -> &str {
-        self.selected()
-            .map(ProviderKind::model)
-            .unwrap_or("no provider selected")
+        self.selected_model().api_id()
     }
 
     async fn propose_plan(

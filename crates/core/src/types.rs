@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A structured, zero-trust execution plan generated from a deterministic recipe
-/// or proposed by NVIDIA NIM. Never contains raw shell commands.
+/// or proposed by a Nebius Nemotron model. Never contains raw shell commands.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct Plan {
     pub plan_id: String,

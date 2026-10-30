@@ -15,6 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Safety Engine** in Rust: closed action schema, traffic-light risk ratings (Green / Yellow / Red), source transparency, hash checks, OSV and optional Tavily consensus, and user-scope execution.
 - **Two install gates:** unattended CLI install/verify, plus Safety Engine pass. Apps that fail either gate get a **Manual setup guide** instead of an install plan.
 - **Desktop shell:** Tauri v2 app with local Axum API, per-launch bearer token, and **NSIS** installer packaging.
-- **Providers:** Nebius (production) and NVIDIA NIM (testing), each pinned to one fixed model ID; keys via Accounts / OS keychain or local `.env` in development.
+- **Providers:** Nebius Token Factory only, with a Settings picker for three catalog Nemotron models (Lightning, Super default, Ultra); keys via Accounts / OS keychain or local `.env` in development.
 - **Rewind:** append-only transaction ledger with one-click undo of SetupPal-managed changes.
 - **Pixel** mascot: flavor-only speech bubbles that never quote the user; Chill / Hacker modes and Settings appearance controls.

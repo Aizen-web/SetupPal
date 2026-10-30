@@ -7,7 +7,7 @@ import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { apiClient } from '../api/client.js';
 import {
-  getPrefs, setPrefs, resetPrefs, REPLY_LENGTHS, SAFETY_LEVELS, TEXT_SIZES,
+  getPrefs, setPrefs, resetPrefs, REPLY_LENGTHS, SAFETY_LEVELS, TEXT_SIZES, NEMOTRON_MODELS,
 } from '../state/prefs.js';
 import { esc } from './html.js';
 import { rememberOpener, confirmDialog } from './modal.js';
@@ -70,11 +70,27 @@ function doctorHtml() {
   `;
 }
 
-function modelLine() {
+function selectedModelMeta(prefs) {
   const health = apiClient.lastHealth;
-  if (!health) return 'Backend offline. Model info shows up once it connects.';
-  const provider = health.provider ? esc(health.provider) : 'Unknown provider';
-  return `Model: <code class="font-mono">${health.model ? esc(health.model) : 'not reported'}</code> via ${provider} · API keys live on the Accounts page`;
+  const id = health?.model_id || prefs.model || 'super';
+  const catalog = Array.isArray(health?.models) ? health.models : [];
+  const fromHealth = catalog.find((m) => m.id === id);
+  const local = NEMOTRON_MODELS[id] || NEMOTRON_MODELS.super;
+  const name = fromHealth?.name || local.label;
+  const description = fromHealth?.description || local.description;
+  const apiId = fromHealth?.api_id || health?.model || '';
+  return { id, name, description, apiId };
+}
+
+function modelHint(prefs) {
+  const meta = selectedModelMeta(prefs);
+  const health = apiClient.lastHealth;
+  if (!health) {
+    return `${esc(meta.description)} · Saved locally; syncs to Nebius once the backend connects.`;
+  }
+  const api = meta.apiId ? ` · <code class="font-mono">${esc(meta.apiId)}</code>` : '';
+  const err = health.provider_ready ? '' : ` · <span class="text-danger">${esc(health.provider_error || 'Provider not ready')}</span>`;
+  return `${esc(meta.description)}${api} via Nebius Token Factory · API keys live on the Accounts page${err}`;
 }
 
 export function renderSettingsView(container) {
@@ -89,7 +105,7 @@ export function renderSettingsView(container) {
       <div class="page-inner">
         <header class="page-header">
           <h1 class="page-title">Settings</h1>
-          <p class="page-sub">Appearance, safety, chat memory, and sound.</p>
+          <p class="page-sub">Appearance, safety, AI model, chat memory, and sound.</p>
         </header>
 
         <div class="page-stack">
@@ -156,6 +172,21 @@ export function renderSettingsView(container) {
             })}
           </section>
 
+          <section class="card" aria-labelledby="settings-model-title">
+            <h2 class="card-title" id="settings-model-title">AI model</h2>
+            <p class="card-sub">NVIDIA Nemotron models through Nebius Token Factory only. The Rust Safety Engine still decides Green, Yellow, and Red — the model can only propose plans.</p>
+            ${row({
+              id: 'setting-model',
+              label: 'Nemotron model',
+              hint: modelHint(prefs),
+              control: select(
+                'setting-model',
+                Object.values(NEMOTRON_MODELS).map((m) => [m.id, m.id === 'super' ? `${m.label} (Default)` : m.label]),
+                selectedModelMeta(prefs).id,
+              ),
+            })}
+          </section>
+
           <section class="card" aria-labelledby="settings-chat-title">
             <h2 class="card-title" id="settings-chat-title">Chat &amp; memory</h2>
             <p class="card-sub">Older messages fold into short notes, so Pixel remembers what you said without resending the whole chat.</p>
@@ -178,7 +209,6 @@ export function renderSettingsView(container) {
               control: toggle('setting-pc-facts', prefs.includePcFacts),
             })}
             <div class="setting-footer">
-              <div class="setting-hint">${modelLine()}</div>
               <div class="btn-row">
                 <button id="btn-clear-chats" class="btn-review btn-sm btn-danger" type="button">Clear all chats</button>
                 <button id="btn-reset-prefs" class="btn-review btn-sm" type="button">Reset</button>
@@ -243,6 +273,27 @@ export function renderSettingsView(container) {
     sounds.play('ui.click');
   });
 
+  on('setting-model', 'onchange', async (e) => {
+    const model = e.target.value;
+    if (!NEMOTRON_MODELS[model]) {
+      sounds.play('error');
+      return;
+    }
+    setPrefs({ model });
+    sounds.play('ui.click');
+    try {
+      await apiClient.setModel(model);
+      await apiClient.checkHealth();
+    } catch (err) {
+      sounds.play('error');
+      const hint = container.querySelector('#setting-model-hint');
+      if (hint) {
+        hint.innerHTML = `<span class="text-danger">${esc(err?.message || 'Could not save model.')}</span>`;
+      }
+      return;
+    }
+    renderSettingsView(container);
+  });
   on('setting-memory', 'onchange', (e) => {
     setPrefs({ memoryTurns: Number(e.target.value) });
     sounds.play('ui.click');
@@ -255,9 +306,15 @@ export function renderSettingsView(container) {
     setPrefs({ includePcFacts: e.target.checked });
     sounds.play('ui.click');
   });
-  on('btn-reset-prefs', 'onclick', () => {
+  on('btn-reset-prefs', 'onclick', async () => {
     resetPrefs();
     sounds.play('ui.click');
+    try {
+      await apiClient.setModel(getPrefs().model);
+      await apiClient.checkHealth();
+    } catch {
+      // Prefs reset locally even if the backend is offline.
+    }
     renderSettingsView(container);
   });
   on('btn-clear-chats', 'onclick', async () => {

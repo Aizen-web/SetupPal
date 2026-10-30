@@ -29,10 +29,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use installer_core::llm::{ProviderClient, ProviderKind, ResolvedProvider};
+use installer_core::llm::{ModelSelection, ProviderClient, ProviderKind, ResolvedProvider};
 use installer_core::{
     apply_to_safety_report, check_plan, first_manual, is_broad_request,
-    manual_guide_with_installed, AllowedBinary, CoreConfig,
+    manual_guide_with_installed, AllowedBinary, CoreConfig, NemotronModel,
     EventBus, ExecutionOptions, FailureContext, Healer, LlmClient, OsProvider, Plan,
     PlanSafetyReport, Planner, PlatformOsProvider, RecipeStore, RiskRating, SafetyEngine,
     StateLogger, SystemProfile, SystemScanner, TrustCategory,
@@ -48,7 +48,7 @@ pub struct AppState {
     pub scanner: Arc<SystemScanner>,
     pub safety_engine: Arc<SafetyEngine>,
     pub recipes: RecipeStore,
-    /// Shared by chat and the planner so both always use the same provider and pinned model.
+    /// Shared by chat and the planner so both always use the same Nebius provider and selected model.
     pub llm: Arc<ProviderClient>,
     pub planner: Arc<Planner>,
     pub state_logger: StateLogger,
@@ -113,9 +113,11 @@ fn build_app_state(keys: Arc<Keys>) -> anyhow::Result<AppState> {
         events.clone(),
     ));
     let recipes = RecipeStore::load_from_dir_or_embedded(&config.recipes_dir)?;
-    let llm = Arc::new(ProviderClient::with_key_store(
+    let models = ModelSelection::load_with_preferred(config.model);
+    let llm = Arc::new(ProviderClient::with_key_store_and_models(
         config.clone(),
         keys.clone(),
+        models,
     )?);
     let planner = Arc::new(Planner::new(
         recipes.clone(),
@@ -149,6 +151,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/health", get(health_handler))
         .route("/api/doctor", get(doctor_handler))
         .route("/api/recipes", get(recipes_handler))
+        .route("/api/model", get(get_model_handler).put(set_model_handler))
         .route("/api/chat/stream", post(chat_stream_handler))
         .route("/api/plan", post(plan_handler))
         .route("/api/execute", post(execute_handler))
@@ -227,21 +230,59 @@ fn main() {
 /// Provider fields for `/api/health`, from the same resolver chat and planning use.
 fn provider_status(llm: &ProviderClient) -> serde_json::Value {
     let keys = llm.key_store();
-    let (provider, model, error) = match llm.selected() {
+    let selected = llm.selected_model();
+    let (provider, error) = match llm.selected() {
         Ok(kind) => {
             let error = llm.resolve().err().map(|e| e.to_string());
-            (Some(kind.id()), Some(kind.model()), error)
+            (Some(kind.id()), error)
         }
-        Err(e) => (None, None, Some(e.to_string())),
+        Err(e) => (None, Some(e.to_string())),
     };
     serde_json::json!({
         "provider": provider,
-        "model": model,
+        "model": selected.api_id(),
+        "model_id": selected.slug(),
+        "model_name": selected.display_name(),
+        "models": NemotronModel::catalog(),
         "provider_ready": error.is_none(),
         "provider_error": error,
         "has_nebius_key": keys.api_key(ProviderKind::Nebius).is_some(),
-        "has_nim_key": keys.api_key(ProviderKind::Nim).is_some(),
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct SetModelRequest {
+    /// Allowlisted slug (`lightning` | `super` | `ultra`) or exact Nebius API ID.
+    model: String,
+}
+
+async fn get_model_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let selected = state.llm.selected_model();
+    Json(serde_json::json!({
+        "model": selected.api_id(),
+        "model_id": selected.slug(),
+        "model_name": selected.display_name(),
+        "models": NemotronModel::catalog(),
+    }))
+}
+
+/// Persists a Nemotron model choice. Rejects unknown IDs; never falls back to another model.
+async fn set_model_handler(
+    State(state): State<AppState>,
+    Json(req): Json<SetModelRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let selected = state
+        .llm
+        .model_selection()
+        .set_from_str(&req.model)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "model": selected.api_id(),
+        "model_id": selected.slug(),
+        "model_name": selected.display_name(),
+        "models": NemotronModel::catalog(),
+    })))
 }
 
 async fn health_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -519,7 +560,7 @@ pub struct TestKeyRequest {
     /// A pasted key to test once; empty means "test the configured key".
     #[serde(default)]
     pub api_key: String,
-    /// `nebius` or `nim`; defaults to the provider chat currently uses.
+    /// `nebius`, `tavily`, or `github`; defaults to Nebius.
     pub provider: Option<String>,
 }
 
@@ -531,8 +572,9 @@ pub struct TestKeyResponse {
     pub provider: String,
 }
 
-/// Tests a key with a one-token request to the provider's pinned model, so a pass means
-/// chat will work with that key. Provider response bodies are never echoed.
+/// Tests a key with a one-token request to the currently selected Nemotron model, so a pass means
+/// chat will work with that key. Provider response bodies are never echoed. Never falls back to
+/// another model when the selected one fails.
 async fn test_provider_key_handler(
     State(state): State<AppState>,
     Json(req): Json<TestKeyRequest>,
@@ -541,19 +583,20 @@ async fn test_provider_key_handler(
         return test_service_key(&state, service, &req.api_key).await;
     }
     let kind = match req.provider.as_deref() {
+        None | Some("") => Some(ProviderKind::Nebius),
         Some(value) => ProviderKind::parse(value),
-        None => state.llm.selected().ok(),
     };
     let Some(kind) = kind else {
         return Json(TestKeyResponse {
             valid: false,
-            message: "Unknown provider. Use `nebius`, `nim`, `tavily`, or `github`.".to_string(),
+            message: "Unknown provider. Use `nebius`, `tavily`, or `github`.".to_string(),
             model_tested: String::new(),
             provider: String::new(),
         });
     };
     let provider = kind.display_name().to_string();
-    let model = kind.model();
+    let selected = state.llm.selected_model();
+    let model = selected.api_id();
     let respond = |valid: bool, message: String| {
         Json(TestKeyResponse {
             valid,
@@ -599,9 +642,14 @@ async fn test_provider_key_handler(
         .await;
 
     match result {
-        Ok(response) if response.status().is_success() => {
-            respond(true, format!("Key works. Model `{model}` responded."))
-        }
+        Ok(response) if response.status().is_success() => respond(
+            true,
+            format!(
+                "Key works. Model `{}` (`{}`) responded.",
+                selected.display_name(),
+                model
+            ),
+        ),
         Ok(response) => respond(false, describe_provider_status(response.status(), model)),
         Err(error) => respond(
             false,
@@ -721,13 +769,17 @@ fn describe_provider_status(status: StatusCode, model: &str) -> String {
             format!("HTTP {status}: the provider rejected this key.")
         }
         StatusCode::NOT_FOUND => {
-            format!("HTTP {status}: model `{model}` is not available for this key.")
+            format!(
+                "HTTP {status}: model `{model}` is not available for this key. No other model was tried."
+            )
         }
-        StatusCode::GONE => format!("HTTP {status}: model `{model}` has been retired."),
+        StatusCode::GONE => format!(
+            "HTTP {status}: model `{model}` has been retired. No other model was tried."
+        ),
         StatusCode::TOO_MANY_REQUESTS => {
             format!("HTTP {status}: rate limited. Wait a moment and try again.")
         }
-        _ => format!("HTTP {status} from the provider."),
+        _ => format!("HTTP {status} from the provider for model `{model}`."),
     }
 }
 
@@ -996,7 +1048,8 @@ async fn chat_stream_handler(
     let user_tokens = est_tokens(&raw_msg);
     let context_payload = serde_json::json!({
         "provider": provider.kind.id(),
-        "model": provider.model,
+        "model": provider.model_id(),
+        "model_id": provider.model.slug(),
         "prompt_version": PROMPT_VERSION,
         "system_tokens": system_tokens,
         "memory_tokens": memory_tokens,
@@ -1025,7 +1078,7 @@ async fn chat_stream_handler(
         if send_chat_event(
             &sender,
             "message.start",
-            serde_json::json!({ "model": provider.model, "provider": provider.kind.id() }),
+            serde_json::json!({ "model": provider.model_id(), "model_id": provider.model.slug(), "provider": provider.kind.id() }),
         )
         .await
         .is_err()
@@ -1131,7 +1184,7 @@ async fn call_ai_chat_stream(
 
     let messages = build_chat_messages(user_prompt, context, host_facts);
     let request_body = serde_json::json!({
-        "model": provider.model,
+        "model": provider.model_id(),
         "messages": messages,
         "temperature": 0.5,
         "max_tokens": max_tokens,
@@ -1160,7 +1213,7 @@ async fn call_ai_chat_stream(
                         return Err(format!(
                             "{}: {}",
                             provider.kind.display_name(),
-                            describe_provider_status(status, provider.model)
+                            describe_provider_status(status, provider.model_id())
                         ));
                     }
                 }
@@ -1448,7 +1501,7 @@ async fn extract_install_intent(
     transcript.push_str(&format!("User: {}\nAssistant: {}", clip(user_prompt, 300), clip(reply, 300)));
 
     let body = serde_json::json!({
-        "model": provider.model,
+        "model": provider.model_id(),
         "messages": [
             { "role": "system", "content": INTENT_EXTRACT_PROMPT },
             { "role": "user", "content": transcript },
@@ -2141,67 +2194,63 @@ mod provider_selection_tests {
 
     struct FixedKeys {
         nebius: bool,
-        nim: bool,
     }
 
     impl KeyStore for FixedKeys {
         fn api_key(&self, kind: ProviderKind) -> Option<String> {
             let present = match kind {
                 ProviderKind::Nebius => self.nebius,
-                ProviderKind::Nim => self.nim,
             };
             present.then(|| format!("test-{}-secret", kind.id()))
         }
     }
 
-    fn client(provider: Option<&str>, nebius: bool, nim: bool) -> ProviderClient {
+    fn client(provider: Option<&str>, nebius: bool, model: NemotronModel) -> ProviderClient {
         let config = CoreConfig {
             provider: provider.map(str::to_string),
-            nim_base_url: CoreConfig::DEFAULT_NIM_BASE_URL.to_string(),
-            nim_api_key: None,
             nebius_base_url: CoreConfig::DEFAULT_NEBIUS_BASE_URL.to_string(),
             nebius_api_key: None,
             tavily_api_key: None,
             recipes_dir: PathBuf::from("recipes"),
             state_log_path: PathBuf::from(".orchestrator_state.jsonl"),
+            model,
         };
-        ProviderClient::with_key_store(config, Arc::new(FixedKeys { nebius, nim }))
-            .expect("client builds")
+        ProviderClient::with_key_store_and_models(
+            config,
+            Arc::new(FixedKeys { nebius }),
+            ModelSelection::ephemeral(model),
+        )
+        .expect("client builds")
     }
 
     #[test]
-    fn explicit_nim_is_used_by_health_chat_and_planner_with_both_keys() {
+    fn nebius_super_is_the_default_health_model() {
         use installer_core::LlmClient;
-        let llm = client(Some("nim"), true, true);
+        let llm = client(None, true, NemotronModel::Super);
         let status = provider_status(&llm);
-        assert_eq!(status["provider"], "nim");
-        assert_eq!(status["model"], CoreConfig::NIM_MODEL);
-        assert_eq!(status["provider_ready"], true);
-        assert_eq!(
-            llm.resolve().expect("resolves").model,
-            CoreConfig::NIM_MODEL
-        );
-        assert_eq!(llm.model_name(), CoreConfig::NIM_MODEL);
-    }
-
-    #[test]
-    fn unset_provider_defaults_to_nebius_when_its_key_exists() {
-        let status = provider_status(&client(None, true, true));
         assert_eq!(status["provider"], "nebius");
-        assert_eq!(status["model"], CoreConfig::NEBIUS_MODEL);
+        assert_eq!(status["model"], NemotronModel::Super.api_id());
+        assert_eq!(status["model_id"], "super");
+        assert_eq!(status["provider_ready"], true);
+        assert_eq!(status["models"].as_array().map(|a| a.len()), Some(3));
+        assert_eq!(
+            llm.resolve().expect("resolves").model_id(),
+            NemotronModel::Super.api_id()
+        );
+        assert_eq!(llm.model_name(), NemotronModel::Super.api_id());
     }
 
     #[test]
-    fn unset_provider_falls_back_to_nim_without_a_nebius_key() {
-        let status = provider_status(&client(None, false, true));
-        assert_eq!(status["provider"], "nim");
-        assert_eq!(status["has_nebius_key"], false);
-        assert_eq!(status["has_nim_key"], true);
+    fn selected_ultra_is_reported_without_fallback() {
+        let status = provider_status(&client(None, true, NemotronModel::Ultra));
+        assert_eq!(status["model"], NemotronModel::Ultra.api_id());
+        assert_eq!(status["model_id"], "ultra");
+        assert_eq!(status["model_name"], "Nemotron 3 Ultra");
     }
 
     #[test]
     fn missing_key_is_reported_without_leaking_values() {
-        let status = provider_status(&client(Some("nebius"), false, true));
+        let status = provider_status(&client(Some("nebius"), false, NemotronModel::Super));
         assert_eq!(status["provider"], "nebius");
         assert_eq!(status["provider_ready"], false);
         let text = status.to_string();
@@ -2210,10 +2259,12 @@ mod provider_selection_tests {
     }
 
     #[test]
-    fn invalid_provider_value_is_reported() {
-        let status = provider_status(&client(Some("openai"), true, true));
+    fn nim_and_other_providers_are_rejected() {
+        let status = provider_status(&client(Some("nim"), true, NemotronModel::Super));
         assert!(status["provider"].is_null());
         assert_eq!(status["provider_ready"], false);
+        let openai = provider_status(&client(Some("openai"), true, NemotronModel::Super));
+        assert!(openai["provider"].is_null());
     }
 }
 
@@ -2460,7 +2511,7 @@ mod live_corpus {
         ));
         let state = build_app_state(keys).expect("state");
         let provider = state.llm.resolve().expect("a provider key");
-        println!("provider={} model={}", provider.kind.id(), provider.model);
+        println!("provider={} model={}", provider.kind.id(), provider.model_id());
 
         let fabric_hist = vec![
             turn("user", "Modded Minecraft Java with Fabric"),
@@ -2518,7 +2569,7 @@ mod live_corpus {
         let provider = state.llm.resolve().expect("provider");
         let context = build_context(&[], "hi", 6);
         let body = serde_json::json!({
-            "model": provider.model,
+            "model": provider.model_id(),
             "messages": build_chat_messages("hi", &context, "- OS: Windows 11"),
             "temperature": 0.5, "max_tokens": 800, "stream": false
         });

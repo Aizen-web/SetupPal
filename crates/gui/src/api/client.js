@@ -114,8 +114,8 @@ class ApiClient {
     return await res.json();
   }
 
-  /** `provider` is `nebius`, `nim`, `tavily`, or `github`. An empty `apiKey` tests the saved key. */
-  async validateKey({ apiKey = null, provider = 'nim' } = {}) {
+  /** `provider` is `nebius`, `tavily`, or `github`. An empty `apiKey` tests the saved key. */
+  async validateKey({ apiKey = null, provider = 'nebius' } = {}) {
     try {
       const res = await authFetch('/api/test-key', jsonInit('POST', {
         api_key: (apiKey || '').trim(),
@@ -157,6 +157,36 @@ class ApiClient {
     const res = await authFetch('/api/keys/status');
     if (!res.ok) throw new Error(`Key status failed (${res.status}).`);
     return await res.json();
+  }
+
+  /** Allowlisted Nemotron catalog + currently selected model. */
+  async getModel() {
+    const res = await authFetch('/api/model');
+    if (!res.ok) throw new Error(`Model status failed (${res.status}).`);
+    return await res.json();
+  }
+
+  /**
+   * Persists a Nemotron model choice (`lightning` | `super` | `ultra`).
+   * Arbitrary IDs are rejected by the backend; there is no silent fallback.
+   */
+  async setModel(model) {
+    const res = await authFetch('/api/model', jsonInit('PUT', { model }));
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `Could not set model (${res.status}).`);
+    }
+    const data = await res.json();
+    if (this.lastHealth) {
+      this.lastHealth = {
+        ...this.lastHealth,
+        model: data.model,
+        model_id: data.model_id,
+        model_name: data.model_name,
+        models: data.models,
+      };
+    }
+    return data;
   }
 
   async sendChatStream(message, history = [], ...rest) {

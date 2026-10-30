@@ -12,10 +12,31 @@ export const REPLY_LENGTHS = {
   long: { label: 'Long', tokens: 1400 },
 };
 
+/** Allowlisted Nemotron models (must match backend `NemotronModel`). */
+export const NEMOTRON_MODELS = {
+  lightning: {
+    id: 'lightning',
+    label: 'Nemotron 3.5 Lightning',
+    description: 'Fast, everyday installation planning',
+  },
+  super: {
+    id: 'super',
+    label: 'Nemotron 3 Super',
+    description: 'Recommended default. Balanced reasoning and planning',
+  },
+  ultra: {
+    id: 'ultra',
+    label: 'Nemotron 3 Ultra',
+    description: 'Advanced reasoning for complicated, multi-stage setups',
+  },
+};
+
 export const DEFAULT_PREFS = {
   memoryTurns: 6, // recent messages sent word for word; older ones become compact notes
   replyLength: 'normal',
   includePcFacts: true,
+  /** Allowlisted slug only — never an arbitrary model ID. Default: Super. */
+  model: 'super',
 };
 
 function readJson(key) {
@@ -27,12 +48,21 @@ function readJson(key) {
   }
 }
 
+function sanitizePrefs(raw) {
+  const next = { ...DEFAULT_PREFS, ...raw };
+  next.memoryTurns = Number(next.memoryTurns) || DEFAULT_PREFS.memoryTurns;
+  if (!REPLY_LENGTHS[next.replyLength]) next.replyLength = DEFAULT_PREFS.replyLength;
+  next.includePcFacts = Boolean(next.includePcFacts);
+  if (!NEMOTRON_MODELS[next.model]) next.model = DEFAULT_PREFS.model;
+  return next;
+}
+
 export function getPrefs() {
-  return { ...DEFAULT_PREFS, ...readJson(KEY) };
+  return sanitizePrefs(readJson(KEY));
 }
 
 export function setPrefs(patch) {
-  const next = { ...getPrefs(), ...patch };
+  const next = sanitizePrefs({ ...getPrefs(), ...patch });
   localStorage.setItem(KEY, JSON.stringify(next));
   return next;
 }
