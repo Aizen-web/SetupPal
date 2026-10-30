@@ -1,3 +1,5 @@
+#[cfg(test)]
+pub mod mock;
 pub mod provider;
 pub mod sanitizer;
 

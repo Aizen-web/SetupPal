@@ -1013,6 +1013,40 @@
   border-radius: 3px;
 }
 
+.plan-folder-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.plan-folder-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plan-folder-label {
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.plan-folder-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.plan-folder-path.is-empty {
+  font-family: var(--font-ui);
+  color: var(--ink-soft);
+}
+
 .plan-trust-row {
   display: flex;
   align-items: flex-start;

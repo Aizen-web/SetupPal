@@ -7,6 +7,7 @@
 import { store } from '../state/store.js';
 import { sounds } from '../audio/sound-engine.js';
 import { bridge } from '../api/bridge.js';
+import { pickProjectFolder } from '../api/folder-picker.js';
 import { pixelVoice } from '../mascot/voicelines.js';
 import { createPixelSvg } from '../mascot/pixel.js';
 import { renderMessage } from './chat-message.js';
@@ -330,8 +331,18 @@ function renderPlanCard(plan) {
         }).join('')}
       </ol>
 
+      ${plan.needsProjectDir ? `
+        <div class="plan-folder-row">
+          <div class="plan-folder-text">
+            <span class="plan-folder-label">Project folder</span>
+            <span class="plan-folder-path ${plan.projectDir ? '' : 'is-empty'}" id="plan-folder-path">${plan.projectDir ? esc(plan.projectDir) : 'Pick the folder where npm packages should go'}</span>
+          </div>
+          <button type="button" class="btn-review-link" id="btn-pick-folder">${plan.projectDir ? 'Change' : 'Choose folder'}</button>
+        </div>
+      ` : ''}
+
       <div class="plan-actions-row">
-        <button id="btn-approve-plan" class="btn-approve" type="button" ${approvedCount === 0 && !heldId ? 'disabled' : ''}>${esc(approveLabel)}</button>
+        <button id="btn-approve-plan" class="btn-approve" type="button" ${(approvedCount === 0 && !heldId) || (plan.needsProjectDir && !plan.projectDir) ? 'disabled' : ''}>${esc(approveLabel)}</button>
         ${review ? `<button id="btn-review-yellow" class="btn-review-link" type="button">Review warnings</button>` : ''}
       </div>
 
@@ -585,6 +596,30 @@ function bindPlanCard(container, plan) {
         allowYellowSteps,
         startAtStepId,
       });
+    };
+  }
+
+  const btnPickFolder = container.querySelector('#btn-pick-folder');
+  if (btnPickFolder) {
+    btnPickFolder.onclick = async () => {
+      sounds.play('ui.click');
+      try {
+        const folder = await pickProjectFolder();
+        if (!folder) return;
+        store.setState(s => ({
+          ...s,
+          activePlan: s.activePlan ? { ...s.activePlan, projectDir: folder } : s.activePlan,
+        }));
+        renderChatView(container);
+      } catch (err) {
+        store.setState(s => ({
+          ...s,
+          terminalLogs: [
+            ...s.terminalLogs,
+            { id: Date.now() + Math.random(), text: `! folder picker failed: ${err?.message || err}`, type: 'error' },
+          ],
+        }));
+      }
     };
   }
 

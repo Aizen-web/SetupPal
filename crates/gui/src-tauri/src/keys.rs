@@ -6,6 +6,7 @@
 //! Resolution order for every lookup: keychain, then process environment, then a `.env` file.
 //! The `.env` file is read only in debug builds or when `SETUPPAL_DEV=1`.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -48,7 +49,9 @@ impl KeyName {
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|candidate| candidate.as_str() == name)
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == name)
     }
 
     /// Environment variables that may hold this secret, in priority order.
@@ -104,7 +107,9 @@ impl SecretStore for KeyringStore {
         match Self::entry(name)?.get_password() {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(KeyError(format!("Could not read from the OS keychain: {e}"))),
+            Err(e) => Err(KeyError(format!(
+                "Could not read from the OS keychain: {e}"
+            ))),
         }
     }
 
@@ -117,12 +122,15 @@ impl SecretStore for KeyringStore {
     fn delete(&self, name: KeyName) -> Result<(), KeyError> {
         match Self::entry(name)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(KeyError(format!("Could not remove from the OS keychain: {e}"))),
+            Err(e) => Err(KeyError(format!(
+                "Could not remove from the OS keychain: {e}"
+            ))),
         }
     }
 }
 
 /// In-memory store used by tests.
+#[cfg(test)]
 #[derive(Default)]
 pub struct MemoryStore {
     values: std::sync::Mutex<BTreeMap<KeyName, String>>,
@@ -182,18 +190,30 @@ pub struct Keys {
 impl Keys {
     pub fn new(store: Arc<dyn SecretStore>, dev_fallback: bool) -> Self {
         let dotenv_path = dev_fallback.then(find_dotenv).flatten();
-        Self { store, dev_fallback, dotenv_path }
+        Self {
+            store,
+            dev_fallback,
+            dotenv_path,
+        }
     }
 
     /// Test constructor that never looks at the real `.env` file.
     #[cfg(test)]
     pub fn without_dotenv(store: Arc<dyn SecretStore>) -> Self {
-        Self { store, dev_fallback: false, dotenv_path: None }
+        Self {
+            store,
+            dev_fallback: false,
+            dotenv_path: None,
+        }
     }
 
     #[cfg(test)]
     pub fn with_dotenv(store: Arc<dyn SecretStore>, path: PathBuf) -> Self {
-        Self { store, dev_fallback: true, dotenv_path: Some(path) }
+        Self {
+            store,
+            dev_fallback: true,
+            dotenv_path: Some(path),
+        }
     }
 
     pub fn dev_fallback(&self) -> bool {
@@ -205,12 +225,12 @@ impl Keys {
     }
 
     pub fn resolve(&self, name: KeyName) -> Option<String> {
-        self.from_keychain(name)
-            .or_else(|| self.from_environment(name))
-            .or_else(|| self.from_dotenv(name))
+        self.read_keychain(name)
+            .or_else(|| self.read_environment(name))
+            .or_else(|| self.read_dotenv(name))
     }
 
-    fn from_keychain(&self, name: KeyName) -> Option<String> {
+    fn read_keychain(&self, name: KeyName) -> Option<String> {
         match self.store.get(name) {
             Ok(value) => value.as_deref().and_then(normalize_api_key),
             Err(error) => {
@@ -220,16 +240,18 @@ impl Keys {
         }
     }
 
-    fn from_environment(&self, name: KeyName) -> Option<String> {
+    fn read_environment(&self, name: KeyName) -> Option<String> {
         name.env_names()
             .iter()
             .find_map(|var| std::env::var(var).ok().and_then(|v| normalize_api_key(&v)))
     }
 
-    fn from_dotenv(&self, name: KeyName) -> Option<String> {
+    fn read_dotenv(&self, name: KeyName) -> Option<String> {
         let path = self.dotenv_path.as_ref()?;
         let content = std::fs::read_to_string(path).ok()?;
-        name.env_names().iter().find_map(|var| dotenv_value(&content, var))
+        name.env_names()
+            .iter()
+            .find_map(|var| dotenv_value(&content, var))
     }
 
     pub fn save(&self, name: KeyName, value: &str) -> Result<(), KeyError> {
@@ -245,8 +267,14 @@ impl Keys {
         let mut configured = serde_json::Map::new();
         let mut in_keychain = serde_json::Map::new();
         for name in KeyName::ALL {
-            configured.insert(name.as_str().to_string(), self.resolve(name).is_some().into());
-            in_keychain.insert(name.as_str().to_string(), self.from_keychain(name).is_some().into());
+            configured.insert(
+                name.as_str().to_string(),
+                self.resolve(name).is_some().into(),
+            );
+            in_keychain.insert(
+                name.as_str().to_string(),
+                self.read_keychain(name).is_some().into(),
+            );
         }
         serde_json::json!({ "configured": configured, "in_keychain": in_keychain })
     }
@@ -267,7 +295,11 @@ impl KeyStore for Keys {
 /// Looks for `.env` in the working directory and a few parents (`tauri dev` runs from `src-tauri`).
 fn find_dotenv() -> Option<PathBuf> {
     let start = std::env::current_dir().ok()?;
-    start.ancestors().take(5).map(|dir| dir.join(".env")).find(|p| p.is_file())
+    start
+        .ancestors()
+        .take(5)
+        .map(|dir| dir.join(".env"))
+        .find(|p| p.is_file())
 }
 
 fn dotenv_value(content: &str, name: &str) -> Option<String> {
@@ -304,7 +336,10 @@ mod tests {
         for name in KeyName::ALL {
             assert_eq!(KeyName::parse(name.as_str()), Some(name));
         }
-        assert_eq!(KeyName::parse("tavily_api_key"), Some(KeyName::TavilyApiKey));
+        assert_eq!(
+            KeyName::parse("tavily_api_key"),
+            Some(KeyName::TavilyApiKey)
+        );
         assert_eq!(KeyName::parse("../etc"), None);
         assert_eq!(KeyName::parse(""), None);
     }
@@ -315,7 +350,10 @@ mod tests {
         let keys = Keys::without_dotenv(store.clone());
         assert_eq!(keys.resolve(KeyName::TavilyApiKey), None);
         keys.save(KeyName::TavilyApiKey, "tvly-test-value").unwrap();
-        assert_eq!(keys.resolve(KeyName::TavilyApiKey).as_deref(), Some("tvly-test-value"));
+        assert_eq!(
+            keys.resolve(KeyName::TavilyApiKey).as_deref(),
+            Some("tvly-test-value")
+        );
         keys.remove(KeyName::TavilyApiKey).unwrap();
         keys.remove(KeyName::TavilyApiKey).unwrap();
         assert_eq!(keys.resolve(KeyName::TavilyApiKey), None);
@@ -337,10 +375,16 @@ mod tests {
         std::fs::write(&path, "TAVILY_API_KEY=from-dotenv\n").unwrap();
         let keys = Keys::with_dotenv(memory(), path);
         if std::env::var_os("TAVILY_API_KEY").is_none() {
-            assert_eq!(keys.resolve(KeyName::TavilyApiKey).as_deref(), Some("from-dotenv"));
+            assert_eq!(
+                keys.resolve(KeyName::TavilyApiKey).as_deref(),
+                Some("from-dotenv")
+            );
         }
         keys.save(KeyName::TavilyApiKey, "from-keychain").unwrap();
-        assert_eq!(keys.resolve(KeyName::TavilyApiKey).as_deref(), Some("from-keychain"));
+        assert_eq!(
+            keys.resolve(KeyName::TavilyApiKey).as_deref(),
+            Some("from-keychain")
+        );
     }
 
     #[test]
@@ -354,7 +398,10 @@ mod tests {
     #[test]
     fn dotenv_parser_handles_quotes_export_bom_and_placeholders() {
         let content = "\u{feff}# comment\nexport NIM_API_KEY=\"quoted\"\nNEBIUS_API_KEY=nvapi-REPLACE_WITH_YOUR_KEY\nOTHER=1\n";
-        assert_eq!(dotenv_value(content, "NIM_API_KEY").as_deref(), Some("quoted"));
+        assert_eq!(
+            dotenv_value(content, "NIM_API_KEY").as_deref(),
+            Some("quoted")
+        );
         assert_eq!(dotenv_value(content, "NEBIUS_API_KEY"), None);
         assert_eq!(dotenv_value(content, "MISSING"), None);
     }
@@ -368,14 +415,21 @@ mod tests {
         assert_eq!(status["in_keychain"]["nim_api_key"], true);
         assert_eq!(status["configured"]["github_token"], false);
         assert!(!status.to_string().contains("super-secret"));
-        assert!(status["configured"].as_object().unwrap().values().all(|v| v.is_boolean()));
+        assert!(status["configured"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|v| v.is_boolean()));
     }
 
     #[test]
     fn provider_keys_come_from_the_store() {
         let keys = Keys::without_dotenv(memory());
         keys.save(KeyName::NebiusApiKey, "neb-key").unwrap();
-        assert_eq!(keys.api_key(ProviderKind::Nebius).as_deref(), Some("neb-key"));
+        assert_eq!(
+            keys.api_key(ProviderKind::Nebius).as_deref(),
+            Some("neb-key")
+        );
         assert_eq!(keys.api_key(ProviderKind::Nim), None);
     }
 

@@ -5,8 +5,7 @@ use tokio::process::Command;
 use crate::config::CoreError;
 
 pub const HKCU_ENV_KEY: &str = r"HKCU\Environment";
-pub const HKLM_ENV_KEY: &str =
-    r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+pub const HKLM_ENV_KEY: &str = r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
 
 /// Queries `reg.exe query` for both `HKLM` (System) and `HKCU` (User) `Path` values,
 /// merges them with the current process `PATH`, expands `%USERPROFILE%` / `%SystemRoot%`
@@ -66,7 +65,9 @@ async fn query_reg_path_value(reg_key: &str) -> Result<String, CoreError> {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     extract_reg_query_value(&stdout).ok_or_else(|| {
-        CoreError::Os(format!("could not parse Path value from reg output for {reg_key}"))
+        CoreError::Os(format!(
+            "could not parse Path value from reg output for {reg_key}"
+        ))
     })
 }
 
@@ -82,7 +83,10 @@ pub async fn query_registry_string(reg_key: &str, value: Option<&str>) -> Option
     if !out.status.success() {
         return None;
     }
-    extract_reg_value(&String::from_utf8_lossy(&out.stdout), value.unwrap_or("(Default)"))
+    extract_reg_value(
+        &String::from_utf8_lossy(&out.stdout),
+        value.unwrap_or("(Default)"),
+    )
 }
 
 /// Extracts the data of `value_name` from `reg.exe query` output lines of the form
@@ -137,9 +141,20 @@ pub fn parse_windows_path_string(raw: &str) -> Vec<PathBuf> {
 
 fn expand_windows_env_vars(input: &str) -> String {
     let mut result = input.to_string();
-    for var_name in ["SystemRoot", "windir", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
+    for var_name in [
+        "SystemRoot",
+        "windir",
+        "USERPROFILE",
+        "LOCALAPPDATA",
+        "APPDATA",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+    ] {
         let token = format!("%{var_name}%");
-        if result.to_ascii_lowercase().contains(&token.to_ascii_lowercase()) {
+        if result
+            .to_ascii_lowercase()
+            .contains(&token.to_ascii_lowercase())
+        {
             if let Ok(val) = std::env::var(var_name) {
                 result = replace_case_insensitive(&result, &token, &val);
             }
@@ -179,7 +194,11 @@ pub async fn detect_windows_gpu() -> Option<String> {
         .await
     {
         if out.status.success() {
-            let gpu = String::from_utf8_lossy(&out.stdout).lines().next()?.trim().to_string();
+            let gpu = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()?
+                .trim()
+                .to_string();
             if !gpu.is_empty() {
                 return Some(gpu);
             }
@@ -188,24 +207,63 @@ pub async fn detect_windows_gpu() -> Option<String> {
     None
 }
 
-pub async fn query_windows_free_disk(_target_dir: &Path) -> u64 {
-    if let Ok(out) = Command::new("wmic")
-        .args(["logicaldisk", "get", "FreeSpace"])
+/// Letter of the drive that holds `target_dir` (falling back to the system drive).
+fn drive_letter_for(target_dir: &Path) -> char {
+    let absolute = target_dir.canonicalize().unwrap_or_else(|_| {
+        if target_dir.is_absolute() {
+            target_dir.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| target_dir.to_path_buf())
+        }
+    });
+    let text = absolute.to_string_lossy().replace(r"\\?\", "");
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => letter.to_ascii_uppercase(),
+        _ => std::env::var("SystemDrive")
+            .ok()
+            .and_then(|d| d.chars().next())
+            .filter(char::is_ascii_alphabetic)
+            .map(|c| c.to_ascii_uppercase())
+            .unwrap_or('C'),
+    }
+}
+
+/// Free bytes on the drive that holds `target_dir`. Uses PowerShell because `wmic` is removed
+/// from current Windows 11 builds. Returns 0 only when the query itself fails.
+pub async fn query_windows_free_disk(target_dir: &Path) -> u64 {
+    let letter = drive_letter_for(target_dir);
+    let script = format!("(Get-PSDrive -Name {letter} -PSProvider FileSystem).Free");
+    match Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .await
     {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                if let Ok(bytes) = line.trim().parse::<u64>() {
-                    return bytes;
-                }
-            }
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(0),
+        _ => 0,
     }
-    0
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drive_letter_comes_from_the_path_and_is_always_a_letter() {
+        assert_eq!(drive_letter_for(Path::new(r"d:\projects")), 'D');
+        assert!(drive_letter_for(Path::new("relative")).is_ascii_uppercase());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn free_disk_is_reported_for_the_current_drive() {
+        let free = query_windows_free_disk(Path::new(".")).await;
+        assert!(free > 0, "the PowerShell query returned no free space");
+    }
+}
 /// Adds a directory to the User PATH in `HKCU\Environment`, ensures no duplicate entries,
 /// updates the Windows registry, and refreshes the current process PATH.
 /// Returns the previous raw User PATH string for transaction rollback purposes.
@@ -214,9 +272,9 @@ pub async fn add_to_windows_user_path(directory: &Path) -> Result<String, CoreEr
     let current_raw = query_reg_path_value(HKCU_ENV_KEY).await.unwrap_or_default();
 
     let mut entries = parse_windows_path_string(&current_raw);
-    let already_present = entries.iter().any(|p| {
-        p.to_string_lossy().eq_ignore_ascii_case(&dir_str)
-    });
+    let already_present = entries
+        .iter()
+        .any(|p| p.to_string_lossy().eq_ignore_ascii_case(&dir_str));
 
     if !already_present {
         entries.push(directory.to_path_buf());
@@ -227,7 +285,17 @@ pub async fn add_to_windows_user_path(directory: &Path) -> Result<String, CoreEr
             .join(";");
 
         let out = Command::new("reg")
-            .args(["add", HKCU_ENV_KEY, "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", &new_path_val, "/f"])
+            .args([
+                "add",
+                HKCU_ENV_KEY,
+                "/v",
+                "Path",
+                "/t",
+                "REG_EXPAND_SZ",
+                "/d",
+                &new_path_val,
+                "/f",
+            ])
             .output()
             .await?;
 
@@ -253,7 +321,17 @@ pub async fn restore_windows_user_path(previous_raw: &str) -> Result<(), CoreErr
         .join(";");
 
     let out = Command::new("reg")
-        .args(["add", HKCU_ENV_KEY, "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", &cleaned, "/f"])
+        .args([
+            "add",
+            HKCU_ENV_KEY,
+            "/v",
+            "Path",
+            "/t",
+            "REG_EXPAND_SZ",
+            "/d",
+            &cleaned,
+            "/f",
+        ])
         .output()
         .await?;
 

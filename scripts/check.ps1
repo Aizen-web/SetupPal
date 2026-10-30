@@ -8,7 +8,9 @@ try {
         @{ Name = "Rust tests"; Command = "cargo"; Args = @("test", "--workspace") },
         @{ Name = "Frontend build"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "build") },
         @{ Name = "Animation registry"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:animations") },
-        @{ Name = "Key migration"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:keys") }
+        @{ Name = "Key migration"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:keys") },
+        @{ Name = "Chat formatter"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:formatter") },
+        @{ Name = "Offline assets and CSP"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:offline") }
     )
 
     foreach ($check in $checks) {

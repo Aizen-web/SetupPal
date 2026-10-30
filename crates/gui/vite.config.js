@@ -8,7 +8,7 @@ export default defineConfig({
   clearScreen: false,
   server: {
     host: 'localhost',
-    port: 5173,
+    port: Number(process.env.SETUPPAL_DEV_PORT) || 5173,
     strictPort: true,
     open: false,
     watch: { ignored: ['**/src-tauri/**'] },
@@ -17,5 +17,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     target: 'es2021',
+    // Keep every asset (fonts included) a real file so the CSP can stay `'self'` only.
+    assetsInlineLimit: 0,
   },
 });

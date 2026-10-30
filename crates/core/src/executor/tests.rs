@@ -11,6 +11,7 @@ use crate::adapters::{AdapterError, AdapterRegistry};
 use crate::config::CoreError;
 use crate::events::EventBus;
 use crate::os::mock::MockOsProvider;
+use crate::os::OsProvider;
 use crate::safety::hash::compute_file_sha256;
 use crate::safety::{PlanSafetyReport, RiskRating, SafetyReport, SafetySignals};
 use crate::state::StateLogger;
@@ -18,10 +19,7 @@ use crate::types::{Plan, PlanSource, PlannedStep, Step};
 use crate::verifier::Verifier;
 
 fn write_temp(bytes: &[u8]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "setuppal-hash-test-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let dir = std::env::temp_dir().join(format!("setuppal-hash-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let path = dir.join("artifact.bin");
     let mut f = std::fs::File::create(&path).expect("create");
@@ -131,10 +129,8 @@ fn plan_report(steps: &[(&str, RiskRating)]) -> PlanSafetyReport {
 fn test_executor() -> Executor {
     let os = Arc::new(MockOsProvider::new());
     let events = EventBus::default();
-    let log_path = std::env::temp_dir().join(format!(
-        "setuppal-exec-test-{}.jsonl",
-        uuid::Uuid::new_v4()
-    ));
+    let log_path =
+        std::env::temp_dir().join(format!("setuppal-exec-test-{}.jsonl", uuid::Uuid::new_v4()));
     let state_logger = StateLogger::new(log_path, events.clone());
     let verifier = Verifier::new(os.clone(), events.clone());
     Executor::new(
@@ -236,4 +232,238 @@ async fn cancel_before_step_marks_cancelled() {
         .expect("summary");
     assert!(summary.cancelled);
     assert_eq!(summary.step_results[0].status, StepRunStatus::Cancelled);
+}
+
+fn executor_with(os: Arc<MockOsProvider>) -> (Executor, StateLogger) {
+    let events = EventBus::default();
+    let log_path =
+        std::env::temp_dir().join(format!("setuppal-exec-test-{}.jsonl", uuid::Uuid::new_v4()));
+    let state_logger = StateLogger::new(log_path, events.clone());
+    let verifier = Verifier::new(os.clone(), events.clone());
+    let executor = Executor::new(
+        AdapterRegistry::with_system_defaults(os.clone()),
+        os,
+        state_logger.clone(),
+        verifier,
+        events,
+    );
+    (executor, state_logger)
+}
+
+fn verify_binary_step(id: &str) -> PlannedStep {
+    PlannedStep {
+        id: id.to_string(),
+        description: format!("verify {id}"),
+        step: Step::RunVerifyCommand {
+            binary: crate::types::AllowedBinary::Git,
+            args: vec!["--version".to_string()],
+        },
+    }
+}
+
+#[tokio::test]
+async fn live_green_step_runs_verifies_and_is_recorded_for_undo() {
+    let os = Arc::new(MockOsProvider::new());
+    let (executor, logger) = executor_with(os.clone());
+    let plan = sample_plan(vec![sample_step("step-1")]);
+    let safety = plan_report(&[("step-1", RiskRating::Green)]);
+    let options = ExecutionOptions {
+        dry_run: false,
+        auto_approve_green: true,
+        ..ExecutionOptions::default()
+    };
+    let summary = executor
+        .execute_plan(&plan, &safety, &options)
+        .await
+        .expect("summary");
+    assert!(summary.overall_passed, "{summary:?}");
+    assert!(summary.step_results[0].executed);
+
+    let records = logger.read_all_transactions().expect("log");
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].dry_run);
+    assert!(
+        records[0].rollback_data.is_some(),
+        "a PATH change must be undoable"
+    );
+
+    let dyn_os: Arc<dyn crate::os::OsProvider> = os.clone();
+    logger
+        .rollback_transaction(&records[0], &dyn_os)
+        .await
+        .expect("undo");
+    let path = os.refresh_and_get_path().await.expect("path");
+    assert!(!path.contains(&PathBuf::from("C:\\Tools\\Sample")));
+}
+
+#[tokio::test]
+async fn approved_green_step_runs_without_auto_approve() {
+    let (executor, _) = executor_with(Arc::new(MockOsProvider::new()));
+    let plan = sample_plan(vec![sample_step("step-1")]);
+    let safety = plan_report(&[("step-1", RiskRating::Green)]);
+    let options = ExecutionOptions {
+        dry_run: true,
+        auto_approve_green: false,
+        approved_step_ids: HashSet::from(["step-1".to_string()]),
+        ..ExecutionOptions::default()
+    };
+    let summary = executor
+        .execute_plan(&plan, &safety, &options)
+        .await
+        .expect("summary");
+    assert!(summary.halted_at_step_id.is_none());
+    assert!(summary.step_results[0].executed);
+}
+
+#[tokio::test]
+async fn a_held_step_stops_the_run_before_later_steps() {
+    let (executor, _) = executor_with(Arc::new(MockOsProvider::new()));
+    let plan = sample_plan(vec![
+        sample_step("step-1"),
+        sample_step("step-2"),
+        sample_step("step-3"),
+    ]);
+    let safety = plan_report(&[
+        ("step-1", RiskRating::Green),
+        ("step-2", RiskRating::Yellow),
+        ("step-3", RiskRating::Green),
+    ]);
+    let options = ExecutionOptions {
+        dry_run: true,
+        auto_approve_green: true,
+        ..ExecutionOptions::default()
+    };
+    let summary = executor
+        .execute_plan(&plan, &safety, &options)
+        .await
+        .expect("summary");
+    assert_eq!(summary.halted_at_step_id.as_deref(), Some("step-2"));
+    assert!(summary.step_results[0].executed);
+    assert_eq!(summary.step_results[1].status, StepRunStatus::Held);
+    assert!(summary
+        .step_results
+        .iter()
+        .all(|r| r.step_id != "step-3" || !r.executed));
+    assert!(!summary.overall_passed);
+}
+
+#[tokio::test]
+async fn approving_the_held_step_resumes_without_rerunning_earlier_steps() {
+    let (executor, logger) = executor_with(Arc::new(MockOsProvider::new()));
+    let plan = sample_plan(vec![sample_step("step-1"), sample_step("step-2")]);
+    let safety = plan_report(&[
+        ("step-1", RiskRating::Green),
+        ("step-2", RiskRating::Yellow),
+    ]);
+    let options = ExecutionOptions {
+        dry_run: false,
+        auto_approve_green: true,
+        allow_yellow_steps: HashSet::from(["step-2".to_string()]),
+        start_at_step_id: Some("step-2".to_string()),
+        ..ExecutionOptions::default()
+    };
+    let summary = executor
+        .execute_plan(&plan, &safety, &options)
+        .await
+        .expect("summary");
+    assert!(summary.halted_at_step_id.is_none());
+    let records = logger.read_all_transactions().expect("log");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].step_id, "step-2");
+}
+
+#[tokio::test]
+async fn a_blocked_red_step_is_not_recorded_as_a_change() {
+    let (executor, logger) = executor_with(Arc::new(MockOsProvider::new()));
+    let plan = sample_plan(vec![sample_step("step-1")]);
+    let safety = plan_report(&[("step-1", RiskRating::Red)]);
+    let options = ExecutionOptions {
+        dry_run: false,
+        auto_approve_green: true,
+        ..ExecutionOptions::default()
+    };
+    let summary = executor
+        .execute_plan(&plan, &safety, &options)
+        .await
+        .expect("summary");
+    assert_eq!(summary.step_results[0].status, StepRunStatus::Blocked);
+    assert!(logger.read_all_transactions().expect("log").is_empty());
+}
+
+#[tokio::test]
+async fn failing_verification_makes_the_run_fail_honestly() {
+    let os = Arc::new(
+        MockOsProvider::new()
+            .with_binary("git", "C:/mock/git.exe")
+            .on(
+                "git",
+                &["--version"],
+                crate::os::mock::fail(1, "git is broken"),
+            ),
+    );
+    let (executor, _) = executor_with(os);
+    let plan = sample_plan(vec![verify_binary_step("step-1")]);
+    let safety = plan_report(&[("step-1", RiskRating::Green)]);
+    let options = ExecutionOptions {
+        dry_run: false,
+        auto_approve_green: true,
+        ..ExecutionOptions::default()
+    };
+    let summary = executor
+        .execute_plan(&plan, &safety, &options)
+        .await
+        .expect("summary");
+    assert!(!summary.overall_passed);
+    assert!(!summary.step_results[0].succeeded());
+}
+
+#[tokio::test]
+async fn passing_verification_makes_the_run_pass() {
+    let os = Arc::new(
+        MockOsProvider::new()
+            .with_binary("git", "C:/mock/git.exe")
+            .on(
+                "git",
+                &["--version"],
+                crate::os::mock::ok("git version 2.50.0"),
+            ),
+    );
+    let (executor, _) = executor_with(os);
+    let plan = sample_plan(vec![verify_binary_step("step-1")]);
+    let safety = plan_report(&[("step-1", RiskRating::Green)]);
+    let options = ExecutionOptions {
+        dry_run: false,
+        auto_approve_green: true,
+        ..ExecutionOptions::default()
+    };
+    let summary = executor
+        .execute_plan(&plan, &safety, &options)
+        .await
+        .expect("summary");
+    assert!(summary.overall_passed, "{summary:?}");
+}
+
+#[test]
+fn trusted_categories_cover_only_their_own_step_kinds() {
+    use crate::executor::TrustCategory;
+    use crate::types::{AdapterKind, Ecosystem};
+    let options = ExecutionOptions {
+        trusted_categories: HashSet::from([TrustCategory::VerifiedWinget]),
+        ..ExecutionOptions::default()
+    };
+    let winget = Step::InstallPackage {
+        ecosystem: Ecosystem::Winget,
+        package_id: "Git.Git".to_string(),
+        version: None,
+        source_adapter: AdapterKind::Winget,
+    };
+    let npm = Step::InstallPackage {
+        ecosystem: Ecosystem::Npm,
+        package_id: "typescript".to_string(),
+        version: None,
+        source_adapter: AdapterKind::Npm,
+    };
+    assert!(options.is_step_trusted(&winget));
+    assert!(!options.is_step_trusted(&npm));
+    assert!(!options.is_step_trusted(&sample_step("x").step));
 }

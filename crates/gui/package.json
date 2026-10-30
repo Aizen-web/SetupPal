@@ -10,14 +10,20 @@
     "build:app": "tauri build",
     "build": "vite build",
     "check:animations": "node ./scripts/check-animations.js",
-    "check:keys": "node ./scripts/check-keys.js"
+    "check:keys": "node ./scripts/check-keys.js",
+    "check:offline": "node ./scripts/check-offline.js",
+    "check:formatter": "node ./scripts/check-formatter.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "vite": "^8.3.5"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/pixelify-sans": "^5.3.0",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.8.4",
     "canvas-confetti": "^1.9.4",
     "lucide": "^1.61.0"
   }

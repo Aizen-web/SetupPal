@@ -207,6 +207,16 @@ pub fn classify_winget(id: &str, info: Option<&WingetShowInfo>) -> (Installabili
             Vec::new(),
         );
     }
+    // Models sometimes invent IDs such as `Steam.Steam`; the brand name in the ID is enough.
+    if let Some(name) = launcher_or_drm_match(&id.replace(['.', '-', '_'], " ")) {
+        return (
+            Installability::ManualOnly {
+                reason: ManualReason::LauncherOrDrm,
+                detail: format!("{name} is a game launcher that needs your account to install and run."),
+            },
+            Vec::new(),
+        );
+    }
     if is_store_product_id(id) {
         return (
             Installability::ManualOnly {
@@ -541,6 +551,8 @@ mod tests {
         assert_eq!(launcher_or_drm_match("RiotGames.Valorant.EU"), Some("Riot Client"));
         assert_eq!(launcher_or_drm_match("Fortnite"), Some("Epic Games Launcher"));
         assert_eq!(launcher_or_drm_match("set up a steamroller"), None);
+        let (invented, _) = classify_winget("Steam.Steam", None);
+        assert!(matches!(invented, Installability::ManualOnly { .. }));
         assert_eq!(launcher_or_drm_match("Modded Minecraft Java with Fabric"), None);
     }
 

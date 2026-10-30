@@ -25,13 +25,18 @@ pub struct AuthState {
 // Deliberately not `Debug`-derived, so the token can never end up in a log line.
 impl std::fmt::Debug for AuthState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AuthState").field("host", &self.host).finish_non_exhaustive()
+        f.debug_struct("AuthState")
+            .field("host", &self.host)
+            .finish_non_exhaustive()
     }
 }
 
 impl AuthState {
     pub fn new(token: String, port: u16) -> Self {
-        Self { token: token.into(), host: format!("127.0.0.1:{port}").into() }
+        Self {
+            token: token.into(),
+            host: format!("127.0.0.1:{port}").into(),
+        }
     }
 
     fn token_matches(&self, presented: &str) -> bool {
@@ -74,24 +79,32 @@ pub async fn require_auth(State(auth): State<AuthState>, request: Request, next:
     next.run(request).await
 }
 
-/// Exact origins allowed to call the API from the webview.
+/// Exact origins allowed to call the API from the webview. Debug builds also allow the Vite dev
+/// server: port 5173, or `SETUPPAL_DEV_PORT` when 5173 is taken by something else.
 pub fn allowed_origins(debug_build: bool) -> Vec<HeaderValue> {
-    let mut origins = vec!["http://tauri.localhost", "tauri://localhost"];
+    let mut origins: Vec<String> = vec![
+        "http://tauri.localhost".to_string(),
+        "tauri://localhost".to_string(),
+    ];
     if debug_build {
-        origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"]);
+        let port = std::env::var("SETUPPAL_DEV_PORT")
+            .ok()
+            .and_then(|p| p.trim().parse::<u16>().ok())
+            .unwrap_or(5173);
+        origins.push(format!("http://localhost:{port}"));
+        origins.push(format!("http://127.0.0.1:{port}"));
     }
-    origins.into_iter().map(HeaderValue::from_static).collect()
+    origins
+        .iter()
+        .filter_map(|origin| HeaderValue::from_str(origin).ok())
+        .collect()
 }
 
 pub fn cors_layer(debug_build: bool) -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed_origins(debug_build)))
         .allow_methods([Method::GET, Method::POST, Method::DELETE])
-        .allow_headers([
-            header::AUTHORIZATION,
-            header::CONTENT_TYPE,
-            header::ACCEPT,
-        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
 }
 
 /// Wraps every route in auth, with CORS outside it so preflight requests (which carry no
@@ -142,8 +155,12 @@ mod tests {
 
     #[tokio::test]
     async fn valid_token_and_host_pass() {
-        let (status, body) =
-            status_and_body(request(Some("127.0.0.1:40123"), Some("Bearer 0123456789abcdef"), None)).await;
+        let (status, body) = status_and_body(request(
+            Some("127.0.0.1:40123"),
+            Some("Bearer 0123456789abcdef"),
+            None,
+        ))
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, "ok");
     }
@@ -157,8 +174,16 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_token_wrong_scheme_and_prefix_tokens_are_401() {
-        for auth in ["Bearer nope", "Bearer ", "Bearer 0123456789abcde", "Bearer 0123456789abcdefX", "Basic 0123456789abcdef", "0123456789abcdef"] {
-            let (status, body) = status_and_body(request(Some("127.0.0.1:40123"), Some(auth), None)).await;
+        for auth in [
+            "Bearer nope",
+            "Bearer ",
+            "Bearer 0123456789abcde",
+            "Bearer 0123456789abcdefX",
+            "Basic 0123456789abcdef",
+            "0123456789abcdef",
+        ] {
+            let (status, body) =
+                status_and_body(request(Some("127.0.0.1:40123"), Some(auth), None)).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{auth}");
             assert!(body.is_empty());
         }
@@ -166,7 +191,13 @@ mod tests {
 
     #[tokio::test]
     async fn rebinding_hosts_are_rejected_even_with_the_right_token() {
-        for host in [None, Some("evil.example:40123"), Some("localhost:40123"), Some("127.0.0.1:1"), Some("127.0.0.1")] {
+        for host in [
+            None,
+            Some("evil.example:40123"),
+            Some("localhost:40123"),
+            Some("127.0.0.1:1"),
+            Some("127.0.0.1"),
+        ] {
             let (status, body) =
                 status_and_body(request(host, Some("Bearer 0123456789abcdef"), None)).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{host:?}");
@@ -188,20 +219,41 @@ mod tests {
     #[tokio::test]
     async fn cors_allows_only_exact_webview_origins() {
         let allowed = app()
-            .oneshot(request(Some("127.0.0.1:40123"), Some("Bearer 0123456789abcdef"), Some("http://tauri.localhost")))
+            .oneshot(request(
+                Some("127.0.0.1:40123"),
+                Some("Bearer 0123456789abcdef"),
+                Some("http://tauri.localhost"),
+            ))
             .await
             .unwrap();
         assert_eq!(
-            allowed.headers().get("access-control-allow-origin").unwrap(),
+            allowed
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap(),
             "http://tauri.localhost"
         );
 
-        for origin in ["https://example.com", "http://tauri.localhost.evil.com", "http://localhost:5173"] {
+        for origin in [
+            "https://example.com",
+            "http://tauri.localhost.evil.com",
+            "http://localhost:5173",
+        ] {
             let denied = app()
-                .oneshot(request(Some("127.0.0.1:40123"), Some("Bearer 0123456789abcdef"), Some(origin)))
+                .oneshot(request(
+                    Some("127.0.0.1:40123"),
+                    Some("Bearer 0123456789abcdef"),
+                    Some(origin),
+                ))
                 .await
                 .unwrap();
-            assert!(denied.headers().get("access-control-allow-origin").is_none(), "{origin}");
+            assert!(
+                denied
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .is_none(),
+                "{origin}"
+            );
         }
     }
 
@@ -214,23 +266,40 @@ mod tests {
                 .header("host", "127.0.0.1:40123")
                 .header("origin", origin)
                 .header("access-control-request-method", "POST")
-                .header("access-control-request-headers", "authorization,content-type")
+                .header(
+                    "access-control-request-headers",
+                    "authorization,content-type",
+                )
                 .body(Body::empty())
                 .unwrap()
         };
-        let ok = app().oneshot(preflight("http://tauri.localhost")).await.unwrap();
+        let ok = app()
+            .oneshot(preflight("http://tauri.localhost"))
+            .await
+            .unwrap();
         assert!(ok.status().is_success());
-        assert_eq!(ok.headers().get("access-control-allow-origin").unwrap(), "http://tauri.localhost");
+        assert_eq!(
+            ok.headers().get("access-control-allow-origin").unwrap(),
+            "http://tauri.localhost"
+        );
 
-        let bad = app().oneshot(preflight("https://example.com")).await.unwrap();
+        let bad = app()
+            .oneshot(preflight("https://example.com"))
+            .await
+            .unwrap();
         assert!(bad.headers().get("access-control-allow-origin").is_none());
     }
 
     #[test]
     fn debug_origins_only_exist_in_debug_builds() {
-        let release: Vec<_> = allowed_origins(false).iter().map(|v| v.to_str().unwrap().to_string()).collect();
+        let release: Vec<_> = allowed_origins(false)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
         assert_eq!(release, vec!["http://tauri.localhost", "tauri://localhost"]);
-        assert!(allowed_origins(true).iter().any(|v| v == "http://localhost:5173"));
+        assert!(allowed_origins(true)
+            .iter()
+            .any(|v| v == "http://localhost:5173"));
     }
 
     #[test]

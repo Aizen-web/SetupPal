@@ -23,6 +23,10 @@ Production Dependencies:
     Use: High-performance confetti celebration bursts on task/plan completion
   - lucide: ^1.61.0
     Use: Modern clean iconography for security verdict chips, tools & navigation
+  - @fontsource/inter, @fontsource/jetbrains-mono, @fontsource/pixelify-sans
+    Use: Fonts bundled locally (no remote font loading; the CSP allows only 'self')
+  - @tauri-apps/plugin-dialog: ^2
+    Use: Native folder picker for npm project folders
 
 Development Dependencies:
   - vite: ^8.3.5
@@ -42,7 +46,7 @@ To install GUI dependencies:
 Crates in workspace:
   - crates/core (Core domain models, zero-trust safety radar, OSV.dev client)
   - crates/cli (Command-line zero-trust runner)
-  - crates/gui/src-tauri (Desktop Tauri IPC bindings)
+  - crates/gui/src-tauri (Desktop Tauri IPC bindings); also tauri-plugin-dialog and tauri-plugin-single-instance
 
 Dependencies:
   - tokio: 1.38 (features: ["full"])
@@ -89,12 +93,16 @@ To build/test Rust workspace:
 --------------------------------------------------------------------------------
 4. EXTERNAL CLOUD APIS & SERVICE INTEGRATIONS
 --------------------------------------------------------------------------------
-- Nebius Token Factory / AI Studio (OpenAI-compatible NVIDIA NIM endpoint):
-    Base URL: https://api.studio.nebius.ai/v1
-    Env variables: NIM_API_KEY, NIM_BASE_URL, NIM_MODEL
-    Models:
-      * nvidia/Llama-3.1-Nemotron-70B-Instruct (Recommended for safety & planning)
-      * Qwen/Qwen2.5-Coder-32B-Instruct (Recommended for code generation & fix)
+- AI providers (OpenAI-compatible chat completions; one fixed model per provider, no model picker):
+    * Nebius Token Factory (production): https://api.tokenfactory.nebius.com/v1
+        Env variables: NEBIUS_API_KEY, NEBIUS_BASE_URL (optional override)
+        Pinned model: nvidia/Nemotron-3_5-Lightning
+    * NVIDIA NIM (testing): https://integrate.api.nvidia.com/v1
+        Env variables: NIM_API_KEY (or NVIDIA_API_KEY), NIM_BASE_URL (optional override)
+        Pinned model: nvidia/nemotron-3.5-bolt-e4b
+    * Selection: SETUPPAL_PROVIDER=nebius|nim. When unset, Nebius is used if its key exists, otherwise NIM.
+    * Desktop app: keys are saved in Windows Credential Manager (service "SetupPal") from the
+      Accounts screen. Env variables and .env are read only in debug builds or with SETUPPAL_DEV=1.
 - OSV.dev API (Open Source Vulnerability database):
     Base URL: https://api.osv.dev/v1/query
     Auth: None (Public Zero-Trust REST API)

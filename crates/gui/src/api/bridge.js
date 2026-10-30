@@ -27,6 +27,9 @@ export function toActivePlan(data) {
     title: plan.goal,
     subtitle: plan.summary,
     status: 'ready',
+    needsProjectDir: plan.steps.some(s =>
+      s.step?.action === 'install_package' && s.step?.params?.ecosystem === 'npm'),
+    projectDir: null,
     tasks: plan.steps.map((s, i) => {
       const report = stepReport(s.id);
       const meta = metaList.find(m => m.step_id === s.id) || {};
@@ -792,6 +795,7 @@ export class BackendBridge {
         approvedStepIds: greenIds,
         allowYellowSteps: yellowIds,
         startAtStepId,
+        projectDir: active?.projectDir || null,
         trustedCategories,
       });
 

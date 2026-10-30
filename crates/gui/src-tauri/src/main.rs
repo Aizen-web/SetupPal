@@ -31,10 +31,10 @@ use uuid::Uuid;
 
 use installer_core::llm::{ProviderClient, ProviderKind, ResolvedProvider};
 use installer_core::{
-    check_plan, first_manual, manual_guide, apply_to_safety_report, AllowedBinary, CoreConfig,
-    EventBus, ExecutionOptions, FailureContext, Healer, LlmClient, PlanSafetyReport, Planner,
-    PlatformOsProvider, RecipeStore, RiskRating, SafetyEngine, StateLogger, SystemProfile,
-    SystemScanner, TrustCategory, OsProvider, Plan,
+    apply_to_safety_report, check_plan, first_manual, manual_guide, AllowedBinary, CoreConfig,
+    EventBus, ExecutionOptions, FailureContext, Healer, LlmClient, OsProvider, Plan,
+    PlanSafetyReport, Planner, PlatformOsProvider, RecipeStore, RiskRating, SafetyEngine,
+    StateLogger, SystemProfile, SystemScanner, TrustCategory,
 };
 use intent::{IntentStreamFilter, SetupIntent};
 use keys::{normalize_api_key, KeyName, Keys};
@@ -71,7 +71,9 @@ struct BackendInfo {
 // Not derived: a `Debug` impl on this type would put the token in logs.
 impl std::fmt::Debug for BackendInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BackendInfo").field("api_base", &self.api_base).finish_non_exhaustive()
+        f.debug_struct("BackendInfo")
+            .field("api_base", &self.api_base)
+            .finish_non_exhaustive()
     }
 }
 
@@ -108,7 +110,10 @@ fn build_app_state(keys: Arc<Keys>) -> anyhow::Result<AppState> {
         events.clone(),
     ));
     let recipes = RecipeStore::load_from_dir_or_embedded(&config.recipes_dir)?;
-    let llm = Arc::new(ProviderClient::with_key_store(config.clone(), keys.clone())?);
+    let llm = Arc::new(ProviderClient::with_key_store(
+        config.clone(),
+        keys.clone(),
+    )?);
     let planner = Arc::new(Planner::new(recipes.clone(), llm.clone(), events.clone()));
     let state_logger = StateLogger::new(config.state_log_path.clone(), events.clone());
 
@@ -159,17 +164,33 @@ fn main() {
         .init();
 
     tauri::Builder::default()
+        // Must be registered first: a second launch hands control to the running window and exits,
+        // so two copies never fight over the keychain, the state log, or each other's plans.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![backend_info])
         .setup(|app| {
             use tauri::Manager;
             info!("Initializing SetupPal Zero-Trust Core...");
 
-            let keys = Arc::new(Keys::new(Arc::new(keys::KeyringStore), keys::dev_fallback_enabled()));
+            let keys = Arc::new(Keys::new(
+                Arc::new(keys::KeyringStore),
+                keys::dev_fallback_enabled(),
+            ));
             let state = build_app_state(keys)?;
 
-            let listener = tauri::async_runtime::block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))?;
+            let listener =
+                tauri::async_runtime::block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))?;
             let port = listener.local_addr()?.port();
-            let token = auth::generate_token().map_err(|e| anyhow::anyhow!("no secure random source: {e}"))?;
+            let token = auth::generate_token()
+                .map_err(|e| anyhow::anyhow!("no secure random source: {e}"))?;
 
             let router = auth::secure(
                 api_router(state),
@@ -184,7 +205,10 @@ fn main() {
                 }
             });
 
-            app.manage(BackendInfo { api_base: format!("http://127.0.0.1:{port}"), token });
+            app.manage(BackendInfo {
+                api_base: format!("http://127.0.0.1:{port}"),
+                token,
+            });
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -211,9 +235,7 @@ fn provider_status(llm: &ProviderClient) -> serde_json::Value {
     })
 }
 
-async fn health_handler(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn health_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
     let has_tavily_key = state.keys.resolve(KeyName::TavilyApiKey).is_some();
     let has_github_token = state.keys.resolve(KeyName::GithubToken).is_some();
 
@@ -246,9 +268,7 @@ async fn doctor_handler(
     Ok(Json(profile))
 }
 
-async fn recipes_handler(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn recipes_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
     let recipes = state.recipes.list();
     Json(serde_json::json!({
         "count": recipes.len(),
@@ -336,7 +356,12 @@ pub fn inspect_minecraft_system(profile: &SystemProfile) -> MinecraftInspection 
         .installed_tools
         .iter()
         .find(|t| t.binary == AllowedBinary::Java)
-        .map(|t| (Some(t.version_output.clone()), Some(t.path.to_string_lossy().to_string())))
+        .map(|t| {
+            (
+                Some(t.version_output.clone()),
+                Some(t.path.to_string_lossy().to_string()),
+            )
+        })
         .unwrap_or((None, None));
 
     MinecraftInspection {
@@ -351,20 +376,30 @@ pub fn inspect_minecraft_system(profile: &SystemProfile) -> MinecraftInspection 
     }
 }
 
-pub fn create_metadata_for_plan(plan: &Plan, safety_report: &PlanSafetyReport) -> Vec<serde_json::Value> {
-    plan.steps.iter().map(|s| {
-        let (domain, url) = s.step.source_display();
-        let report = safety_report.step_reports.iter().find(|r| r.step_id == s.id);
-        let (verdict_title, verdict_desc) = report.map(|r| r.user_facing_translation())
-            .unwrap_or(("Verified source", "Passed security checks.".to_string()));
-        serde_json::json!({
-            "step_id": s.id,
-            "source_domain": domain,
-            "source_url": url,
-            "verdict_title": verdict_title,
-            "verdict_desc": verdict_desc,
+pub fn create_metadata_for_plan(
+    plan: &Plan,
+    safety_report: &PlanSafetyReport,
+) -> Vec<serde_json::Value> {
+    plan.steps
+        .iter()
+        .map(|s| {
+            let (domain, url) = s.step.source_display();
+            let report = safety_report
+                .step_reports
+                .iter()
+                .find(|r| r.step_id == s.id);
+            let (verdict_title, verdict_desc) = report
+                .map(|r| r.user_facing_translation())
+                .unwrap_or(("Verified source", "Passed security checks.".to_string()));
+            serde_json::json!({
+                "step_id": s.id,
+                "source_domain": domain,
+                "source_url": url,
+                "verdict_title": verdict_title,
+                "verdict_desc": verdict_desc,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -479,7 +514,10 @@ async fn test_service_key(state: &AppState, service: &str, pasted: &str) -> Json
         })
     };
     let Some(key) = normalize_api_key(pasted).or_else(|| state.keys.resolve(name)) else {
-        return respond(false, format!("No {label} key to test. Paste one, or save it first."));
+        return respond(
+            false,
+            format!("No {label} key to test. Paste one, or save it first."),
+        );
     };
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -495,15 +533,30 @@ async fn test_service_key(state: &AppState, service: &str, pasted: &str) -> Json
             .bearer_auth(&key)
             .json(&serde_json::json!({ "query": "ping", "max_results": 1 }))
     } else {
-        client.get("https://api.github.com/rate_limit").bearer_auth(&key)
+        client
+            .get("https://api.github.com/rate_limit")
+            .bearer_auth(&key)
     };
     match request.send().await {
-        Ok(response) if response.status().is_success() => respond(true, format!("{label} key works.")),
-        Ok(response) if matches!(response.status(), StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => {
-            respond(false, format!("HTTP {}: {label} rejected this key.", response.status()))
+        Ok(response) if response.status().is_success() => {
+            respond(true, format!("{label} key works."))
+        }
+        Ok(response)
+            if matches!(
+                response.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ) =>
+        {
+            respond(
+                false,
+                format!("HTTP {}: {label} rejected this key.", response.status()),
+            )
         }
         Ok(response) => respond(false, format!("HTTP {} from {label}.", response.status())),
-        Err(error) => respond(false, format!("Network request failed: {}", error.without_url())),
+        Err(error) => respond(
+            false,
+            format!("Network request failed: {}", error.without_url()),
+        ),
     }
 }
 
@@ -526,20 +579,24 @@ async fn save_key_handler(
         .keys
         .save(name, &value)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "name": name.as_str(), "saved": true })))
+    Ok(Json(
+        serde_json::json!({ "name": name.as_str(), "saved": true }),
+    ))
 }
 
 async fn delete_key_handler(
     State(state): State<AppState>,
     AxumPath(name): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let name = KeyName::parse(&name)
-        .ok_or((StatusCode::BAD_REQUEST, "Unknown key name.".to_string()))?;
+    let name =
+        KeyName::parse(&name).ok_or((StatusCode::BAD_REQUEST, "Unknown key name.".to_string()))?;
     state
         .keys
         .remove(name)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "name": name.as_str(), "removed": true })))
+    Ok(Json(
+        serde_json::json!({ "name": name.as_str(), "removed": true }),
+    ))
 }
 
 /// Booleans only: never a key, a mask, or a prefix.
@@ -584,7 +641,11 @@ Manual setup guide\n\
 If out of scope, start with **Manual setup guide**. Say SetupPal only does unattended terminal setup and why this needs a manual install. Give short numbered steps. End with \"SetupPal can install instead:\" and 2 to 4 options.\n\
 \n\
 Ending a reply\n\
-When the user has agreed on what to install, end with one fenced setuppal-intent JSON block (`kind` install with `goal`, or `kind` manual with `item` and `reason`). Never output that block while still asking a question.\n\
+When the user has agreed on what to install, end the reply with one fenced block, written exactly like this:\n\
+```setuppal-intent\n\
+{\"kind\":\"install\",\"goal\":\"typescript\"}\n\
+```\n\
+For an out-of-scope item use {\"kind\":\"manual\",\"item\":\"Steam\",\"reason\":\"needs a store login\"}. Never output the block while still asking a question.\n\
 \n\
 Style\n\
 Plain words, short replies, markdown allowed, bold the key point. Don't introduce yourself unless asked. Never claim you installed or checked anything. Never send an empty reply.";
@@ -607,7 +668,13 @@ fn format_host_facts(
         .installed_tools
         .iter()
         .map(|t| {
-            let ver = t.version_output.lines().next().unwrap_or("").trim().replace('"', "'");
+            let ver = t
+                .version_output
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .replace('"', "'");
             let ver = if ver.len() > 44 {
                 format!("{}...", &ver[..ver.floor_char_boundary(44)])
             } else {
@@ -636,9 +703,18 @@ fn format_host_facts(
         .collect::<Vec<_>>()
         .join(" ");
     let blob = format!("{} {}", user_prompt.to_ascii_lowercase(), recent);
-    let launcher_requested = ["minecraft", "bedrock", "steam", "riot", "epic", "launcher", "optifine", "roblox"]
-        .iter()
-        .any(|k| blob.contains(k));
+    let launcher_requested = [
+        "minecraft",
+        "bedrock",
+        "steam",
+        "riot",
+        "epic",
+        "launcher",
+        "optifine",
+        "roblox",
+    ]
+    .iter()
+    .any(|k| blob.contains(k));
 
     if launcher_requested {
         out.push_str("\n- Note: the user mentioned software that may need a GUI launcher, store login, or DRM. If it does, reply with a Manual setup guide. Parts that install from the command line (for example Java or Fabric for Minecraft Java) can still be set up.");
@@ -716,19 +792,31 @@ fn build_context(raw: &[ChatMessageItem], user_prompt: &str, keep_recent: usize)
     let memory_note = if lines.is_empty() {
         None
     } else {
-        let head = if trimmed_any { "(oldest notes dropped)\n" } else { "" };
+        let head = if trimmed_any {
+            "(oldest notes dropped)\n"
+        } else {
+            ""
+        };
         Some(format!("{}{}", head, lines.join("\n")))
     };
 
     let recent = recent
         .iter()
         .map(|m| ChatMessageItem {
-            role: if m.role == "user" { "user".into() } else { "assistant".into() },
+            role: if m.role == "user" {
+                "user".into()
+            } else {
+                "assistant".into()
+            },
             content: clip(&m.content, if m.role == "user" { 700 } else { 900 }),
         })
         .collect();
 
-    PromptContext { memory_note, recent, compacted: older.len() }
+    PromptContext {
+        memory_note,
+        recent,
+        compacted: older.len(),
+    }
 }
 
 type ChatSseSender = mpsc::Sender<Result<Event, Infallible>>;
@@ -739,7 +827,10 @@ async fn chat_stream_handler(
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
     let raw_msg = req.message.trim().to_string();
     if raw_msg.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "Message cannot be empty.".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Message cannot be empty.".to_string(),
+        ));
     }
 
     let provider = state
@@ -847,7 +938,8 @@ async fn send_chat_event(
     event_name: &str,
     payload: serde_json::Value,
 ) -> Result<(), String> {
-    let data = serde_json::to_string(&payload).map_err(|_| "Could not encode stream event.".to_string())?;
+    let data = serde_json::to_string(&payload)
+        .map_err(|_| "Could not encode stream event.".to_string())?;
     sender
         .send(Ok(Event::default().event(event_name).data(data)))
         .await
@@ -874,7 +966,7 @@ fn build_chat_messages(
     }
     messages.push(serde_json::json!({
         "role": "user",
-        "content": format!("Facts about this PC:\n{host_facts}\n\nUser message:\n{user_prompt}")
+        "content": format!("PC facts (background for you only; never repeat or list them unless asked):\n{host_facts}\n\nUser message (answer this):\n{user_prompt}")
     }));
     messages
 }
@@ -918,8 +1010,8 @@ async fn call_ai_chat_stream(
                 Ok(response) if response.status().is_success() => break response,
                 Ok(response) => {
                     let status = response.status();
-                    let retryable = status == StatusCode::TOO_MANY_REQUESTS
-                        || status.is_server_error();
+                    let retryable =
+                        status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
                     if !retryable || attempt >= 3 {
                         return Err(format!(
                             "{}: {}",
@@ -1022,7 +1114,12 @@ async fn consume_chat_sse_line(
         {
             let forward = filter.push(text);
             if !forward.is_empty() {
-                send_chat_event(sender, "message.delta", serde_json::json!({ "text": forward })).await?;
+                send_chat_event(
+                    sender,
+                    "message.delta",
+                    serde_json::json!({ "text": forward }),
+                )
+                .await?;
             }
         }
         return Ok(false);
@@ -1152,6 +1249,33 @@ fn resolve_auto_approve_green(req: &ExecuteRequest) -> bool {
     }
 }
 
+/// Folder every relative step path resolves against. Plans with npm installs need a folder the
+/// user picked: it must exist and sit inside their profile. Other plans run in the backend's own
+/// working directory, so an explicit but invalid folder is still an error, never a silent fallback.
+fn resolve_working_dir(plan: &Plan, project_dir: Option<&str>) -> Result<PathBuf, String> {
+    let needs_project = plan.steps.iter().any(|s| {
+        matches!(
+            s.step,
+            installer_core::Step::InstallPackage {
+                ecosystem: installer_core::Ecosystem::Npm,
+                ..
+            }
+        )
+    });
+    let requested = project_dir.map(str::trim).filter(|p| !p.is_empty());
+    match requested {
+        Some(dir) => {
+            let profile = installer_core::paths::user_profile_dir()
+                .ok_or_else(|| "Could not locate your user profile folder.".to_string())?;
+            installer_core::paths::validate_project_dir(std::path::Path::new(dir), &profile)
+                .map_err(|e| e.to_string())
+        }
+        None if needs_project => {
+            Err("This plan installs npm packages. Choose a project folder first.".to_string())
+        }
+        None => Ok(std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+    }
+}
 async fn execute_handler(
     State(state): State<AppState>,
     Json(req): Json<ExecuteRequest>,
@@ -1170,10 +1294,7 @@ async fn execute_handler(
         match guard.get(id) {
             Some((p, s)) => (p.clone(), s.clone()),
             None => {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    format!("Unknown plan_id `{id}`."),
-                ));
+                return Err((StatusCode::NOT_FOUND, format!("Unknown plan_id `{id}`.")));
             }
         }
     } else if let Some(p) = req.custom_plan.clone() {
@@ -1190,11 +1311,11 @@ async fn execute_handler(
             .insert(p.plan_id.clone(), (p.clone(), s.clone()));
         (p, s)
     } else {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "plan_id is required.".to_string(),
-        ));
+        return Err((StatusCode::BAD_REQUEST, "plan_id is required.".to_string()));
     };
+
+    let working_dir = resolve_working_dir(&plan, req.project_dir.as_deref())
+        .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
 
     // Fresh safety verdicts right before execution.
     let mut safety_report = state
@@ -1222,13 +1343,6 @@ async fn execute_handler(
     }
 
     info!("Executing plan '{}': {}", plan.plan_id, plan.goal);
-
-    let working_dir = req
-        .project_dir
-        .as_deref()
-        .map(PathBuf::from)
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let options = ExecutionOptions {
         dry_run: req.dry_run.unwrap_or(false),
@@ -1258,7 +1372,10 @@ async fn execute_handler(
     };
 
     let verifier = installer_core::Verifier::new(state.os_provider.clone(), state.events.clone());
-    let adapters = installer_core::AdapterRegistry::with_github_token(state.os_provider.clone(), state.keys.provider(KeyName::GithubToken));
+    let adapters = installer_core::AdapterRegistry::with_github_token(
+        state.os_provider.clone(),
+        state.keys.provider(KeyName::GithubToken),
+    );
     let executor = installer_core::Executor::new(
         adapters,
         state.os_provider.clone(),
@@ -1311,12 +1428,7 @@ async fn execute_handler(
                 failed_step
                     .error
                     .clone()
-                    .or_else(|| {
-                        failed_step
-                            .verification
-                            .as_ref()
-                            .map(|v| v.stderr.clone())
-                    })
+                    .or_else(|| failed_step.verification.as_ref().map(|v| v.stderr.clone()))
                     .unwrap_or_default(),
                 profile,
                 successful,
@@ -1519,15 +1631,13 @@ async fn events_handler(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.events.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
-        Ok(agent_event) => {
-            match serde_json::to_string(&agent_event) {
-                Ok(json) => Some(Ok(Event::default().data(json))),
-                Err(e) => {
-                    error!("Failed to serialize AgentEvent: {}", e);
-                    None
-                }
+        Ok(agent_event) => match serde_json::to_string(&agent_event) {
+            Ok(json) => Some(Ok(Event::default().data(json))),
+            Err(e) => {
+                error!("Failed to serialize AgentEvent: {}", e);
+                None
             }
-        }
+        },
         Err(_) => None,
     });
 
@@ -1577,7 +1687,10 @@ mod provider_selection_tests {
         assert_eq!(status["provider"], "nim");
         assert_eq!(status["model"], CoreConfig::NIM_MODEL);
         assert_eq!(status["provider_ready"], true);
-        assert_eq!(llm.resolve().expect("resolves").model, CoreConfig::NIM_MODEL);
+        assert_eq!(
+            llm.resolve().expect("resolves").model,
+            CoreConfig::NIM_MODEL
+        );
         assert_eq!(llm.model_name(), CoreConfig::NIM_MODEL);
     }
 
@@ -1619,7 +1732,10 @@ mod prompt_tests {
     use super::*;
 
     fn message(role: &str, content: &str) -> ChatMessageItem {
-        ChatMessageItem { role: role.to_string(), content: content.to_string() }
+        ChatMessageItem {
+            role: role.to_string(),
+            content: content.to_string(),
+        }
     }
 
     #[test]
@@ -1657,6 +1773,71 @@ mod prompt_tests {
         assert_eq!(messages[0]["content"], STATIC_SYSTEM_PROMPT);
         let last = messages.last().expect("user turn");
         assert_eq!(last["role"], "user");
-        assert!(last["content"].as_str().unwrap_or_default().ends_with("User message:\nhi"));
+        assert!(last["content"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("User message (answer this):\nhi"));
+    }
+}
+
+#[cfg(test)]
+mod project_dir_tests {
+    use super::*;
+    use installer_core::{AdapterKind, Ecosystem, PlanSource, PlannedStep, Step};
+
+    fn plan_with(ecosystem: Ecosystem, adapter: AdapterKind) -> Plan {
+        Plan {
+            plan_id: "p".to_string(),
+            goal: "g".to_string(),
+            summary: "s".to_string(),
+            source: PlanSource::Llm {
+                model: "m".to_string(),
+            },
+            steps: vec![PlannedStep {
+                id: "step-1".to_string(),
+                description: "install".to_string(),
+                step: Step::InstallPackage {
+                    ecosystem,
+                    package_id: "typescript".to_string(),
+                    version: None,
+                    source_adapter: adapter,
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn npm_plans_require_a_project_folder() {
+        let plan = plan_with(Ecosystem::Npm, AdapterKind::Npm);
+        let err = resolve_working_dir(&plan, None).expect_err("needs a folder");
+        assert!(err.contains("Choose a project folder"));
+        assert!(resolve_working_dir(&plan, Some("   ")).is_err());
+    }
+
+    #[test]
+    fn non_npm_plans_do_not_need_a_folder() {
+        let plan = plan_with(Ecosystem::Winget, AdapterKind::Winget);
+        assert!(resolve_working_dir(&plan, None).is_ok());
+    }
+
+    #[test]
+    fn explicit_folders_must_exist_and_stay_inside_the_profile() {
+        let plan = plan_with(Ecosystem::Npm, AdapterKind::Npm);
+        let profile = installer_core::paths::user_profile_dir().expect("profile");
+        let inside = tempfile::tempdir_in(&profile).expect("temp dir in profile");
+        assert!(resolve_working_dir(&plan, inside.path().to_str()).is_ok());
+
+        let missing = inside.path().join("missing");
+        assert!(resolve_working_dir(&plan, missing.to_str()).is_err());
+
+        let outside = if cfg!(windows) { "C:\\Windows" } else { "/" };
+        let err = resolve_working_dir(&plan, Some(outside)).expect_err("outside the profile");
+        assert!(err.contains("inside your user profile"));
+    }
+
+    #[test]
+    fn an_invalid_folder_is_an_error_even_for_non_npm_plans() {
+        let plan = plan_with(Ecosystem::Winget, AdapterKind::Winget);
+        assert!(resolve_working_dir(&plan, Some("Z:\\definitely\\not\\here")).is_err());
     }
 }

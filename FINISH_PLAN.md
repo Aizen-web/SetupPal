@@ -47,6 +47,8 @@ These decisions are fixed. If a task seems to conflict with one, the decision wi
 
 ### 2.2 What is broken or missing
 
+> **Status (Phase 7 complete):** every row below was fixed in Phases 0-7, except the items listed in [A.4](#a4-known-limitations-still-open). The table is kept as the record of what was wrong. Phase 7 also added: fonts bundled locally with a `'self'`-only CSP (`check:offline`), a project-folder picker for npm plans, a single-instance guard, `docs/E2E_CHECKLIST.md`, and `docs/DEMO.md`.
+
 | Area | Problem | Evidence |
 |---|---|---|
 | Core UI loop | `store.activePlan` is never set from a real plan, so the plan card and task panel never appear. The `plan_generated` handler only plays a voice line and reads the wrong field (`payload.steps`; the event payload is `{ plan }`). Approve falls back to a hardcoded goal. | [bridge.js](crates/gui/src/api/bridge.js) lines 137-139 and 515 (`"Web and TypeScript development stack"`) |
@@ -730,11 +732,18 @@ This appendix keeps what is still true from the retired `AUDIT.md`, `CHANGES.md`
 - Browser checks used the frontend-only Vite preview. Backend health returned 502 there because the Rust backend was not running, so native launch and backend-dependent flows were never validated end to end. Chat was checked in Chill and Hacker at 900x600, 1280x720, and 1920x1080 CSS pixels with no horizontal overflow; the Settings key visibility toggle worked; History, Downloads, and Accounts rendered SVG icons. No screenshots were saved.
 - No live provider requests were ever recorded. Nebius streaming, latency, model availability, and chat quality are untested, as is live Tavily behavior beyond source verification.
 
+- **Phase 7 validation:** `scripts/check.ps1` passes: 139 core + 36 GUI Rust tests (175, no network or keys, using `MockOsProvider` and `MockLlmClient`), frontend build, 20 animation states, key-migration, chat-formatter, and offline-assets checks. Clippy has no new warnings and the touched files are `rustfmt` clean (unrelated files still differ under `cargo fmt --all --check`).
+- **Phase 7 real-app run** (`tauri dev`, Vite on a free port via `SETUPPAL_DEV_PORT`, webview driven over CDP): launch and token handshake, Accounts keychain save and remove, a recipe plan with dry-run execute, the manual-guide path, and History with undo were exercised. A real chat turn ran against NIM with a key supplied from the environment. Results per row are in `docs/E2E_CHECKLIST.md`. Not run: the NSIS installer on a clean account, real (non-dry-run) installs with the Nebius provider, and the live Esc-cancel timing on a real winget install.
+
 ### A.3 Key-rotation warning
 
 A full-history pattern scan found NVIDIA- and Tavily-shaped credential values in committed revisions of `.env.example`. Blanking the current file does not remove the historical copies. Both keys must be rotated (P0.4). `gitleaks` was not installed, so that scan was a targeted provider-pattern search, not a full gitleaks report. Keep real values only in the ignored `.env` (dev) or the OS keychain (P5.4).
 
 ### A.4 Known limitations still open
+
+- The pinned Nebius model ID (`nvidia/Nemotron-3_5-Lightning`) is not confirmed against a live Nebius account.
+- The small NIM model sometimes emits an unfenced manual-guide JSON object, which shows in the reply and produces no intent. The dry-run log is not labelled as a dry run.
+- The leaked NIM and Tavily keys in git history must still be rotated by the owner (A.3).
 
 - No full contrast, interaction-state, or accessibility audit has been done on every page and viewport (P6.7 covers the known gaps; an audit is still needed).
 - Not every registered mascot animation has been reviewed for distinct timing, pivots, and overlap, and no performance profiling has been done.

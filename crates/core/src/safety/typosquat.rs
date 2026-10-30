@@ -182,7 +182,10 @@ pub fn detect_typosquat(ecosystem: Ecosystem, requested_package: &str) -> Option
     // PEP 503 canonicalization for PyPI packages (e.g. scikit_learn vs scikit-learn are identical)
     if ecosystem == Ecosystem::PyPI && requested_package.is_ascii() {
         let canon_req = canonicalize_pypi_name(&req_norm);
-        if corpus.iter().any(|&popular| canonicalize_pypi_name(popular) == canon_req) {
+        if corpus
+            .iter()
+            .any(|&popular| canonicalize_pypi_name(popular) == canon_req)
+        {
             return None;
         }
     }
@@ -206,7 +209,9 @@ pub fn detect_typosquat(ecosystem: Ecosystem, requested_package: &str) -> Option
 
         // winget publisher namespaces are moderated, so `Python.Python.3.13` is a sibling
         // of `Python.Python.3.12`, not a lookalike. Only other publishers can squat a name.
-        if ecosystem == Ecosystem::Winget && winget_publisher(&req_norm) == winget_publisher(&pop_norm) {
+        if ecosystem == Ecosystem::Winget
+            && winget_publisher(&req_norm) == winget_publisher(&pop_norm)
+        {
             continue;
         }
 
@@ -231,4 +236,58 @@ pub fn detect_typosquat(ecosystem: Ecosystem, requested_package: &str) -> Option
     }
 
     best_match
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_and_two_edit_typos_are_flagged_with_the_real_package() {
+        let one = detect_typosquat(Ecosystem::PyPI, "reqwests").expect("flagged");
+        assert_eq!(one.similar_popular_package, "requests");
+        assert_eq!(one.edit_distance, 1);
+        let two = detect_typosquat(Ecosystem::PyPI, "colormaa").expect("flagged");
+        assert_eq!(two.similar_popular_package, "colorama");
+        assert_eq!(two.edit_distance, 2);
+        assert!(detect_typosquat(Ecosystem::Npm, "lodasch").is_some());
+    }
+
+    #[test]
+    fn exact_popular_names_and_unrelated_names_are_clean() {
+        assert!(detect_typosquat(Ecosystem::PyPI, "requests").is_none());
+        assert!(detect_typosquat(Ecosystem::PyPI, "Requests").is_none());
+        assert!(detect_typosquat(Ecosystem::Npm, "left-pad-but-different").is_none());
+        assert!(detect_typosquat(Ecosystem::Cargo, "serde").is_none());
+    }
+
+    #[test]
+    fn short_names_are_never_flagged() {
+        assert!(detect_typosquat(Ecosystem::PyPI, "bla").is_none());
+    }
+
+    #[test]
+    fn cyrillic_lookalikes_are_caught_by_homoglyph_folding() {
+        let squat = detect_typosquat(Ecosystem::PyPI, "r\u{0435}quests").expect("flagged");
+        assert_eq!(squat.similar_popular_package, "requests");
+        assert_eq!(normalize_homoglyphs("r\u{0435}quests"), "requests");
+    }
+
+    #[test]
+    fn pypi_names_are_compared_after_pep_503_canonicalization() {
+        assert_eq!(canonicalize_pypi_name("Scikit__Learn"), "scikit-learn");
+        assert!(detect_typosquat(Ecosystem::PyPI, "scikit_learn").is_none());
+    }
+
+    #[test]
+    fn winget_siblings_from_the_same_publisher_are_not_lookalikes() {
+        assert!(detect_typosquat(Ecosystem::Winget, "Python.Python.3.13").is_none());
+        assert!(detect_typosquat(Ecosystem::Winget, "Gitt.Git").is_some());
+    }
+
+    #[test]
+    fn ecosystems_without_a_corpus_never_match() {
+        assert!(top_packages_for_ecosystem(Ecosystem::GitHub).is_empty());
+        assert!(detect_typosquat(Ecosystem::Vendor, "anything-at-all").is_none());
+    }
 }

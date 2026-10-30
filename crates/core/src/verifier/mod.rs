@@ -58,7 +58,10 @@ pub fn verify_fabric_profile(minecraft_dir: &Path, mc_version: &str) -> Verifica
         },
         None => VerificationResult::failed(
             format!("verify_fabric_profile {}", versions.display()),
-            format!("No fabric-loader-*{suffix} folder in {}", versions.display()),
+            format!(
+                "No fabric-loader-*{suffix} folder in {}",
+                versions.display()
+            ),
         ),
     }
 }
@@ -203,7 +206,10 @@ impl Verifier {
         metadata: &PackageMetadata,
         ctx: &ExecutionContext,
     ) -> Result<VerificationResult, CoreError> {
-        let mut result = adapter.verify(metadata, ctx).await.map_err(CoreError::Adapter)?;
+        let mut result = adapter
+            .verify(metadata, ctx)
+            .await
+            .map_err(CoreError::Adapter)?;
         if !result.passed {
             return Ok(result);
         }
@@ -229,7 +235,9 @@ impl Verifier {
             passed: version.passed,
             command_run: format!("{}; {}", result.command_run, version.command_run),
             exit_code: version.exit_code,
-            stdout: format!("{}\n{}", result.stdout, version.stdout).trim().to_string(),
+            stdout: format!("{}\n{}", result.stdout, version.stdout)
+                .trim()
+                .to_string(),
             stderr: version.stderr,
         })
     }
@@ -263,7 +271,8 @@ impl Verifier {
         binary: AllowedBinary,
         args: &[String],
     ) -> Result<VerificationResult, CoreError> {
-        self.verify_binary_command_in_env(step_id, binary, args, None).await
+        self.verify_binary_command_in_env(step_id, binary, args, None)
+            .await
     }
 
     /// Like `verify_binary_command`, but `python` and `pip` resolve inside `isolated_env`
@@ -328,21 +337,27 @@ impl Verifier {
     ) -> Result<VerificationResult, CoreError> {
         let paths = self.os_provider.refresh_and_get_path().await?;
         let dir_str = directory.to_string_lossy();
-        let found = paths.iter().any(|p| {
-            p.to_string_lossy().eq_ignore_ascii_case(&dir_str)
-        });
+        let found = paths
+            .iter()
+            .any(|p| p.to_string_lossy().eq_ignore_ascii_case(&dir_str));
 
         Ok(VerificationResult {
             passed: found,
             command_run: format!("check_path {}", directory.display()),
             exit_code: if found { Some(0) } else { Some(1) },
             stdout: if found {
-                format!("Directory is present in active PATH: {}", directory.display())
+                format!(
+                    "Directory is present in active PATH: {}",
+                    directory.display()
+                )
             } else {
                 String::new()
             },
             stderr: if !found {
-                format!("Directory not found in refreshed PATH: {}", directory.display())
+                format!(
+                    "Directory not found in refreshed PATH: {}",
+                    directory.display()
+                )
             } else {
                 String::new()
             },
@@ -380,7 +395,10 @@ impl Verifier {
     /// 3. Generates a modern C++20 program in a temporary directory.
     /// 4. Compiles it into an executable using `-std=c++20`.
     /// 5. Executes the resulting binary and asserts expected output.
-    pub async fn verify_cpp_toolchain(&self, step_id: &str) -> Result<VerificationResult, CoreError> {
+    pub async fn verify_cpp_toolchain(
+        &self,
+        step_id: &str,
+    ) -> Result<VerificationResult, CoreError> {
         self.events.emit(AgentEvent::VerificationStarted {
             step_id: step_id.to_string(),
         });
@@ -468,10 +486,7 @@ int main() {
         }
 
         // Run the compiled binary
-        let run_out = self
-            .os_provider
-            .run_command(&exe_path, &[], &paths)
-            .await?;
+        let run_out = self.os_provider.run_command(&exe_path, &[], &paths).await?;
 
         let passed = run_out.exit_code == Some(0)
             && run_out
@@ -492,5 +507,352 @@ int main() {
         });
 
         Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::adapters::{CargoAdapter, NpmAdapter, PyPIAdapter, WingetAdapter};
+    use crate::os::mock::{fail, ok, MockOsProvider};
+    use crate::types::AdapterKind;
+
+    fn verifier(os: MockOsProvider) -> (Verifier, Arc<MockOsProvider>) {
+        let os = Arc::new(os);
+        (Verifier::new(os.clone(), EventBus::default()), os)
+    }
+
+    fn ctx() -> ExecutionContext {
+        ExecutionContext::new(false, PathBuf::from("."), None)
+    }
+
+    #[test]
+    fn binary_mapping_covers_known_winget_ids_only() {
+        assert_eq!(
+            binary_for_package(Ecosystem::Winget, "Git.Git"),
+            Some(AllowedBinary::Git)
+        );
+        assert_eq!(
+            binary_for_package(Ecosystem::Winget, "OpenJS.NodeJS.LTS"),
+            Some(AllowedBinary::Node)
+        );
+        assert_eq!(
+            binary_for_package(Ecosystem::Winget, "Python.Python.3.12"),
+            Some(AllowedBinary::Python)
+        );
+        assert_eq!(
+            binary_for_package(Ecosystem::Winget, "Rustlang.Rustup"),
+            Some(AllowedBinary::Rustc)
+        );
+        assert_eq!(binary_for_package(Ecosystem::Winget, "VideoLAN.VLC"), None);
+        assert_eq!(binary_for_package(Ecosystem::Npm, "git.git"), None);
+    }
+
+    #[tokio::test]
+    async fn binary_command_passes_runs_and_reports_the_real_output() {
+        let (v, os) = verifier(
+            MockOsProvider::new()
+                .with_binary("rustc", "C:/mock/rustc.exe")
+                .on("rustc", &["--version"], ok("rustc 1.90.0")),
+        );
+        let result = v
+            .verify_binary_command("s", AllowedBinary::Rustc, &["--version".to_string()])
+            .await
+            .expect("verify");
+        assert!(result.passed);
+        assert_eq!(result.stdout, "rustc 1.90.0");
+        assert_eq!(os.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn binary_command_fails_when_missing_from_path_or_nonzero() {
+        let (v, os) = verifier(MockOsProvider::new());
+        let missing = v
+            .verify_binary_command("s", AllowedBinary::Node, &["--version".to_string()])
+            .await
+            .expect("verify");
+        assert!(!missing.passed);
+        assert!(missing.stderr.contains("not found in active PATH"));
+        assert!(os.calls().is_empty());
+
+        let (v, _) = verifier(
+            MockOsProvider::new()
+                .with_binary("node", "C:/mock/node.exe")
+                .on("node", &["--version"], fail(3, "boom")),
+        );
+        let broken = v
+            .verify_binary_command("s", AllowedBinary::Node, &["--version".to_string()])
+            .await
+            .expect("verify");
+        assert!(!broken.passed);
+        assert_eq!(broken.exit_code, Some(3));
+    }
+
+    #[tokio::test]
+    async fn java_uses_its_own_version_flag() {
+        let (v, os) = verifier(
+            MockOsProvider::new()
+                .with_binary("java", "C:/mock/java.exe")
+                .on("java", &["-version"], ok("openjdk 21")),
+        );
+        let result = v
+            .verify_binary_command(
+                "s",
+                AllowedBinary::Java,
+                &[AllowedBinary::Java.version_flag().to_string()],
+            )
+            .await
+            .expect("verify");
+        assert!(result.passed);
+        assert_eq!(os.calls()[0].args, vec!["-version"]);
+    }
+
+    #[tokio::test]
+    async fn path_step_verifies_against_the_refreshed_path_case_insensitively() {
+        let (v, _) = verifier(MockOsProvider::new().with_path_entry("C:\\Tools\\Bin"));
+        let on = v
+            .verify_directory_on_path("s", Path::new("c:\\tools\\bin"))
+            .await
+            .expect("verify");
+        assert!(on.passed);
+        let off = v
+            .verify_directory_on_path("s", Path::new("C:\\Other"))
+            .await
+            .expect("verify");
+        assert!(!off.passed);
+    }
+
+    #[tokio::test]
+    async fn hash_step_accepts_matching_and_rejects_changed_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("a.bin");
+        std::fs::write(&file, b"hello").expect("write");
+        let digest = crate::safety::hash::compute_file_sha256(&file).expect("digest");
+        let (v, _) = verifier(MockOsProvider::new());
+        assert!(
+            v.verify_hash_step("s", &file, &digest)
+                .await
+                .expect("verify")
+                .passed
+        );
+        std::fs::write(&file, b"tampered").expect("write");
+        let result = v
+            .verify_hash_step("s", &file, &digest)
+            .await
+            .expect("verify");
+        assert!(!result.passed);
+        assert!(result.stderr.contains("verification failed"));
+    }
+
+    #[tokio::test]
+    async fn winget_package_needs_to_be_listed_and_then_runs_its_version_check() {
+        let os = MockOsProvider::new()
+            .with_binary("winget", "C:/mock/winget.exe")
+            .with_binary("git", "C:/mock/git.exe")
+            .on(
+                "winget",
+                &["list"],
+                ok("Name Id Version\nGit Git.Git 2.50.0"),
+            )
+            .on("git", &["--version"], ok("git version 2.50.0"));
+        let (v, os) = verifier(os);
+        let adapter = WingetAdapter::new(os.clone());
+        let meta = PackageMetadata::bare(AdapterKind::Winget, "Git.Git", "latest");
+        let result = v
+            .verify_installed_package(Ecosystem::Winget, &adapter, &meta, &ctx())
+            .await
+            .expect("verify");
+        assert!(result.passed);
+        assert!(result.stdout.contains("git version 2.50.0"));
+        assert_eq!(os.calls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn winget_package_not_listed_fails_without_running_the_tool() {
+        let os = MockOsProvider::new()
+            .with_binary("winget", "C:/mock/winget.exe")
+            .with_binary("git", "C:/mock/git.exe")
+            .on("winget", &["list"], fail(1, "No installed package found"));
+        let (v, os) = verifier(os);
+        let adapter = WingetAdapter::new(os.clone());
+        let meta = PackageMetadata::bare(AdapterKind::Winget, "Git.Git", "latest");
+        let result = v
+            .verify_installed_package(Ecosystem::Winget, &adapter, &meta, &ctx())
+            .await
+            .expect("verify");
+        assert!(!result.passed);
+        assert_eq!(os.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn winget_package_installed_but_not_yet_on_path_says_so() {
+        let os = MockOsProvider::new()
+            .with_binary("winget", "C:/mock/winget.exe")
+            .on("winget", &["list"], ok("Rustup Rustlang.Rustup 1.28"));
+        let (v, os) = verifier(os);
+        let adapter = WingetAdapter::new(os);
+        let meta = PackageMetadata::bare(AdapterKind::Winget, "Rustlang.Rustup", "latest");
+        let result = v
+            .verify_installed_package(Ecosystem::Winget, &adapter, &meta, &ctx())
+            .await
+            .expect("verify");
+        assert!(result.passed);
+        assert!(result.stdout.contains("not on PATH yet"));
+    }
+
+    #[tokio::test]
+    async fn pypi_package_verifies_with_pip_show() {
+        let os = MockOsProvider::new()
+            .with_binary("python", "C:/mock/python.exe")
+            .on(
+                "python",
+                &["-m", "pip", "show", "numpy"],
+                ok("Name: numpy\nVersion: 2.1.1"),
+            );
+        let (v, os) = verifier(os);
+        let adapter = PyPIAdapter::new(os);
+        let meta = PackageMetadata::bare(AdapterKind::PyPI, "numpy", "2.1.1");
+        let good = v
+            .verify_installed_package(Ecosystem::PyPI, &adapter, &meta, &ctx())
+            .await
+            .expect("verify");
+        assert!(good.passed);
+
+        let (v, os) = verifier(MockOsProvider::new().with_binary("python", "C:/mock/python.exe"));
+        let adapter = PyPIAdapter::new(os);
+        let bad = v
+            .verify_installed_package(Ecosystem::PyPI, &adapter, &meta, &ctx())
+            .await
+            .expect("verify");
+        assert!(!bad.passed);
+    }
+
+    #[tokio::test]
+    async fn npm_package_must_appear_in_ls_output() {
+        let os = MockOsProvider::new()
+            .with_binary("npm", "C:/mock/npm.cmd")
+            .on("npm", &["ls"], ok("app@1.0.0\n`-- typescript@5.6.2"));
+        let (v, os) = verifier(os);
+        let adapter = NpmAdapter::new(os);
+        let meta = PackageMetadata::bare(AdapterKind::Npm, "typescript", "5.6.2");
+        assert!(
+            v.verify_installed_package(Ecosystem::Npm, &adapter, &meta, &ctx())
+                .await
+                .expect("verify")
+                .passed
+        );
+    }
+
+    #[tokio::test]
+    async fn cargo_package_must_appear_in_install_list() {
+        let os = MockOsProvider::new()
+            .with_binary("cargo", "C:/mock/cargo.exe")
+            .on(
+                "cargo",
+                &["install", "--list"],
+                ok("ripgrep v14.1.0:\n    rg.exe\n"),
+            );
+        let (v, os) = verifier(os);
+        let adapter = CargoAdapter::new(os);
+        let present = PackageMetadata::bare(AdapterKind::Cargo, "ripgrep", "14.1.0");
+        let absent = PackageMetadata::bare(AdapterKind::Cargo, "bat", "0.24.0");
+        assert!(
+            v.verify_installed_package(Ecosystem::Cargo, &adapter, &present, &ctx())
+                .await
+                .expect("verify")
+                .passed
+        );
+        assert!(
+            !v.verify_installed_package(Ecosystem::Cargo, &adapter, &absent, &ctx())
+                .await
+                .expect("verify")
+                .passed
+        );
+    }
+
+    #[tokio::test]
+    async fn install_step_without_a_registered_adapter_fails_honestly() {
+        let (v, _) = verifier(MockOsProvider::new());
+        let step = PlannedStep {
+            id: "s".to_string(),
+            description: "install".to_string(),
+            step: Step::InstallPackage {
+                ecosystem: Ecosystem::Winget,
+                package_id: "Git.Git".to_string(),
+                version: None,
+                source_adapter: AdapterKind::Winget,
+            },
+        };
+        let result = v.verify_step(&step).await.expect("verify");
+        assert!(!result.passed);
+        assert!(result.stderr.contains("adapter is available"));
+    }
+
+    #[tokio::test]
+    async fn download_and_env_steps_check_the_filesystem() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let present = dir.path().join("a.zip");
+        std::fs::write(&present, b"x").expect("write");
+        let (v, _) = verifier(MockOsProvider::new());
+        let step = |dest: PathBuf| PlannedStep {
+            id: "s".to_string(),
+            description: "download".to_string(),
+            step: Step::DownloadArtifact {
+                adapter: AdapterKind::OfficialVendorUrl,
+                id: "https://example.invalid/a.zip".to_string(),
+                version: "1".to_string(),
+                destination: dest,
+                expected_sha256: None,
+            },
+        };
+        assert!(v.verify_step(&step(present)).await.expect("verify").passed);
+        assert!(
+            !v.verify_step(&step(dir.path().join("missing.zip")))
+                .await
+                .expect("verify")
+                .passed
+        );
+
+        let env_step = PlannedStep {
+            id: "e".to_string(),
+            description: "dir".to_string(),
+            step: Step::CreateIsolatedEnv {
+                kind: IsolationKind::IsolatedDirectory,
+                path: dir.path().to_path_buf(),
+            },
+        };
+        assert!(v.verify_step(&env_step).await.expect("verify").passed);
+    }
+
+    #[tokio::test]
+    async fn venv_needs_a_working_interpreter() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (v, _) = verifier(MockOsProvider::new());
+        let missing = v.verify_venv(dir.path()).await.expect("verify");
+        assert!(!missing.passed);
+        assert!(missing.stderr.contains("missing"));
+
+        let python = venv_python(dir.path());
+        std::fs::create_dir_all(python.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&python, b"").expect("write");
+        let (v, _) = verifier(MockOsProvider::new().on_fn(|_, _, _| Some(ok("Python 3.12.1"))));
+        assert!(v.verify_venv(dir.path()).await.expect("verify").passed);
+    }
+
+    #[test]
+    fn fabric_profile_is_found_by_loader_and_minecraft_version() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let none = verify_fabric_profile(dir.path(), "1.21.1");
+        assert!(!none.passed);
+        std::fs::create_dir_all(
+            dir.path()
+                .join("versions")
+                .join("fabric-loader-0.16.5-1.21.1"),
+        )
+        .expect("mkdir");
+        assert!(verify_fabric_profile(dir.path(), "1.21.1").passed);
+        assert!(!verify_fabric_profile(dir.path(), "1.20.4").passed);
     }
 }

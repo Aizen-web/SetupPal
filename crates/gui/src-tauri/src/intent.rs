@@ -45,7 +45,7 @@ impl SetupIntent {
         match self {
             SetupIntent::Install { goal, items } => {
                 let len = goal.chars().count();
-                if len < 3 || len > 300 {
+                if !(3..=300).contains(&len) {
                     return Err(IntentParseError::Validation("goal length"));
                 }
                 if items.len() > 20 {
@@ -58,12 +58,17 @@ impl SetupIntent {
                     if item.id.as_ref().is_some_and(|v| v.chars().count() > 120) {
                         return Err(IntentParseError::Validation("item id length"));
                     }
-                    if item.version.as_ref().is_some_and(|v| v.chars().count() > 40) {
+                    if item
+                        .version
+                        .as_ref()
+                        .is_some_and(|v| v.chars().count() > 40)
+                    {
                         return Err(IntentParseError::Validation("item version length"));
                     }
                     if let Some(eco) = item.ecosystem.as_deref() {
                         match eco {
-                            "winget" | "npm" | "pypi" | "cargo" | "modrinth" | "github" | "vendor" => {}
+                            "winget" | "npm" | "pypi" | "cargo" | "modrinth" | "github"
+                            | "vendor" => {}
                             _ => return Err(IntentParseError::Validation("ecosystem")),
                         }
                     }
@@ -187,7 +192,6 @@ impl IntentStreamFilter {
         };
         (visible, intent)
     }
-
 }
 
 fn trim_trailing_blank_lines(s: &str) -> String {
@@ -199,13 +203,14 @@ fn parse_intent_json(raw: &str) -> Result<SetupIntent, IntentParseError> {
     if trimmed.is_empty() {
         return Err(IntentParseError::Empty);
     }
-    let intent: SetupIntent =
-        serde_json::from_str(trimmed).map_err(|_| IntentParseError::Json)?;
+    let intent: SetupIntent = serde_json::from_str(trimmed).map_err(|_| IntentParseError::Json)?;
     intent.validate()?;
     Ok(intent)
 }
 
-/// Strip a complete intent fence from a finished reply (non-streaming helper / tests).
+/// Strip a complete intent fence from a finished reply. Production code streams through
+/// `IntentStreamFilter`; this one-shot form keeps the tests short.
+#[cfg(test)]
 pub fn split_intent_block(reply: &str) -> (String, Result<Option<SetupIntent>, IntentParseError>) {
     let mut filter = IntentStreamFilter::new();
     let _ = filter.push(reply);
@@ -277,12 +282,9 @@ fn find_fence_decision(hold: &str) -> FenceDecision {
             };
         }
 
-        if after.starts_with(FENCE_OPEN) {
-            let after_tag = &after[FENCE_OPEN.len()..];
+        if let Some(after_tag) = after.strip_prefix(FENCE_OPEN) {
             // Require end-of-tag boundary: EOF, whitespace, or newline.
-            if after_tag.is_empty()
-                || after_tag.starts_with(|c: char| c.is_whitespace())
-            {
+            if after_tag.is_empty() || after_tag.starts_with(|c: char| c.is_whitespace()) {
                 return FenceDecision::IsIntent { open_at: at };
             }
             // ```setuppal-intentional — not our fence.
@@ -331,7 +333,10 @@ mod tests {
 
     #[test]
     fn block_at_end_is_stripped_and_parsed() {
-        let reply = format!("Here is the plan.\n\n```setuppal-intent\n{}\n```", install_json());
+        let reply = format!(
+            "Here is the plan.\n\n```setuppal-intent\n{}\n```",
+            install_json()
+        );
         let (visible, intent) = split_intent_block(&reply);
         assert_eq!(visible, "Here is the plan.");
         let intent = intent.expect("parse ok").expect("has intent");

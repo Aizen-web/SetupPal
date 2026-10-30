@@ -1,9 +1,9 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 use crate::config::CoreError;
 use crate::events::{AgentEvent, EventBus};
@@ -143,7 +143,9 @@ impl StateLogger {
     /// Checks whether a transaction with the given ID has already been rolled back.
     pub fn is_transaction_rolled_back(&self, tx_id: &str) -> Result<bool, CoreError> {
         let all = self.read_all_transactions()?;
-        Ok(all.iter().any(|t| t.rolled_back_tx_id.as_deref() == Some(tx_id)))
+        Ok(all
+            .iter()
+            .any(|t| t.rolled_back_tx_id.as_deref() == Some(tx_id)))
     }
 
     /// Retrieves all active transactions that have not been rolled back and are not themselves undo rollbacks.
@@ -167,7 +169,10 @@ impl StateLogger {
     }
 
     /// Finds a transaction by its unique ID.
-    pub fn get_transaction_by_id(&self, tx_id: &str) -> Result<Option<TransactionRecord>, CoreError> {
+    pub fn get_transaction_by_id(
+        &self,
+        tx_id: &str,
+    ) -> Result<Option<TransactionRecord>, CoreError> {
         let all = self.read_all_transactions()?;
         Ok(all.into_iter().find(|t| t.tx_id == tx_id))
     }
@@ -180,7 +185,10 @@ impl StateLogger {
         os_provider: &Arc<dyn OsProvider>,
     ) -> Result<String, CoreError> {
         if self.is_transaction_rolled_back(&tx.tx_id)? {
-            let msg = format!("Transaction {} was already rolled back previously.", tx.tx_id);
+            let msg = format!(
+                "Transaction {} was already rolled back previously.",
+                tx.tx_id
+            );
             self.events.emit(AgentEvent::RollbackCompleted {
                 tx_id: tx.tx_id.clone(),
                 success: true,
@@ -204,7 +212,11 @@ impl StateLogger {
                 format!(
                     "Restored previous User PATH (removed directory {}) [Post-Undo Verified: {}]",
                     added_directory.display(),
-                    if verified { "Passed" } else { "Pending terminal reload" }
+                    if verified {
+                        "Passed"
+                    } else {
+                        "Pending terminal reload"
+                    }
                 )
             }
             Some(RollbackData::FileDownload { destination }) => {
@@ -217,7 +229,10 @@ impl StateLogger {
                         if verified { "Passed" } else { "Failed" }
                     )
                 } else {
-                    format!("Downloaded artifact already removed: {} [Post-Undo Verified: Passed]", destination.display())
+                    format!(
+                        "Downloaded artifact already removed: {} [Post-Undo Verified: Passed]",
+                        destination.display()
+                    )
                 }
             }
             Some(RollbackData::IsolatedEnv { path }) => {
@@ -230,14 +245,21 @@ impl StateLogger {
                         if verified { "Passed" } else { "Failed" }
                     )
                 } else {
-                    format!("Isolated directory already removed: {} [Post-Undo Verified: Passed]", path.display())
+                    format!(
+                        "Isolated directory already removed: {} [Post-Undo Verified: Passed]",
+                        path.display()
+                    )
                 }
             }
             Some(RollbackData::CreatedPaths { paths }) => {
                 if tx.dry_run {
                     format!(
                         "[Dry Run] Would delete: {}",
-                        paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+                        paths
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     )
                 } else {
                     for p in paths {
@@ -246,7 +268,11 @@ impl StateLogger {
                     let verified = paths.iter().all(|p| !p.exists());
                     format!(
                         "Deleted {} [Post-Undo Verified: {}]",
-                        paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "),
+                        paths
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
                         if verified { "Passed" } else { "Failed" }
                     )
                 }
@@ -285,20 +311,32 @@ impl StateLogger {
                                     format!("Successfully uninstalled package {} ({}) [Post-Undo Verified: Passed]", package_id, ecosystem)
                                 }
                                 Ok(out) => {
-                                    format!("Executed uninstall command for {} (exit {:?}): {}", package_id, out.exit_code, out.stderr)
+                                    format!(
+                                        "Executed uninstall command for {} (exit {:?}): {}",
+                                        package_id, out.exit_code, out.stderr
+                                    )
                                 }
                                 Err(e) => {
                                     format!("Failed executing uninstall for {}: {e}", package_id)
                                 }
                             }
                         } else {
-                            format!("Uninstall binary '{}' not found on PATH. Manual command: {}", bin_name, cmd_str)
+                            format!(
+                                "Uninstall binary '{}' not found on PATH. Manual command: {}",
+                                bin_name, cmd_str
+                            )
                         }
                     } else {
-                        format!("Package rollback recorded for {} ({})", package_id, ecosystem)
+                        format!(
+                            "Package rollback recorded for {} ({})",
+                            package_id, ecosystem
+                        )
                     }
                 } else {
-                    format!("Package rollback recorded for {} (no uninstall command)", package_id)
+                    format!(
+                        "Package rollback recorded for {} (no uninstall command)",
+                        package_id
+                    )
                 }
             }
             None => {
@@ -346,9 +384,18 @@ impl StateLogger {
 
         let mut md = String::new();
         md.push_str("# SetupPal Security & Environment Audit Report\n\n");
-        md.push_str(&format!("- **Generated At:** {}\n", Utc::now().to_rfc3339()));
-        md.push_str(&format!("- **Total Transactions Recorded:** {}\n", transactions.len()));
-        md.push_str(&format!("- **Ledger Storage Path:** `{}`\n\n", self.log_file_path.display()));
+        md.push_str(&format!(
+            "- **Generated At:** {}\n",
+            Utc::now().to_rfc3339()
+        ));
+        md.push_str(&format!(
+            "- **Total Transactions Recorded:** {}\n",
+            transactions.len()
+        ));
+        md.push_str(&format!(
+            "- **Ledger Storage Path:** `{}`\n\n",
+            self.log_file_path.display()
+        ));
         md.push_str("---\n\n");
         md.push_str("## Transaction History\n\n");
 
@@ -397,7 +444,9 @@ impl StateLogger {
         html.push_str("<meta charset=\"UTF-8\">\n<title>SetupPal Audit Report</title>\n");
         html.push_str("<style>\n");
         html.push_str("body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; padding: 30px; line-height: 1.6; }\n");
-        html.push_str("h1 { color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 10px; }\n");
+        html.push_str(
+            "h1 { color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 10px; }\n",
+        );
         html.push_str(".meta { background: #161b22; padding: 15px; border-radius: 6px; border: 1px solid #30363d; margin-bottom: 25px; }\n");
         html.push_str("table { width: 100%; border-collapse: collapse; margin-top: 15px; background: #161b22; border-radius: 6px; overflow: hidden; }\n");
         html.push_str("th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #30363d; font-size: 14px; }\n");
@@ -408,13 +457,21 @@ impl StateLogger {
         html.push_str("</style>\n</head>\n<body>\n");
         html.push_str("<h1>SetupPal Security & Environment Audit Report</h1>\n");
         html.push_str("<div class=\"meta\">\n");
-        html.push_str(&format!("<p><strong>Generated At:</strong> {} UTC</p>\n", Utc::now().to_rfc3339()));
+        html.push_str(&format!(
+            "<p><strong>Generated At:</strong> {} UTC</p>\n",
+            Utc::now().to_rfc3339()
+        ));
         html.push_str(&format!("<p><strong>Total Transactions Recorded:</strong> <span class=\"badge-tx\">{}</span></p>\n", transactions.len()));
-        html.push_str(&format!("<p><strong>Ledger Storage Path:</strong> <code>{}</code></p>\n", self.log_file_path.display()));
+        html.push_str(&format!(
+            "<p><strong>Ledger Storage Path:</strong> <code>{}</code></p>\n",
+            self.log_file_path.display()
+        ));
         html.push_str("</div>\n");
 
         if transactions.is_empty() {
-            html.push_str("<p><em>No transactions have been recorded in the state ledger yet.</em></p>\n");
+            html.push_str(
+                "<p><em>No transactions have been recorded in the state ledger yet.</em></p>\n",
+            );
         } else {
             html.push_str("<table>\n<thead>\n<tr>\n");
             html.push_str("<th>Status</th><th>Timestamp (UTC)</th><th>Plan ID</th><th>Action Summary</th><th>Changes Made</th><th>Rollback Command</th>\n");
@@ -430,16 +487,357 @@ impl StateLogger {
 
                 html.push_str("<tr>\n");
                 html.push_str(&format!("<td><span style=\"background:{badge_color};color:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;\">{}</span></td>\n", status_label));
-                html.push_str(&format!("<td><code>{}</code></td>\n", tx.timestamp.format("%Y-%m-%d %H:%M:%S")));
+                html.push_str(&format!(
+                    "<td><code>{}</code></td>\n",
+                    tx.timestamp.format("%Y-%m-%d %H:%M:%S")
+                ));
                 html.push_str(&format!("<td><code>{}</code></td>\n", tx.plan_id));
-                html.push_str(&format!("<td><strong>{}</strong></td>\n", tx.action_summary));
+                html.push_str(&format!(
+                    "<td><strong>{}</strong></td>\n",
+                    tx.action_summary
+                ));
                 html.push_str(&format!("<td>{}</td>\n", tx.changes_made.join(", ")));
-                html.push_str(&format!("<td><code>{}</code></td>\n", tx.rollback_hint.as_deref().unwrap_or("N/A")));
+                html.push_str(&format!(
+                    "<td><code>{}</code></td>\n",
+                    tx.rollback_hint.as_deref().unwrap_or("N/A")
+                ));
                 html.push_str("</tr>\n");
             }
             html.push_str("</tbody>\n</table>\n");
         }
         html.push_str("</body>\n</html>\n");
         Ok(html)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::os::mock::{ok, MockOsProvider};
+
+    fn logger() -> (StateLogger, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let logger = StateLogger::new(dir.path().join("state.jsonl"), EventBus::default());
+        (logger, dir)
+    }
+
+    fn tx(id: &str, dry_run: bool, rollback: Option<RollbackData>) -> TransactionRecord {
+        TransactionRecord {
+            tx_id: id.to_string(),
+            timestamp: Utc::now(),
+            plan_id: "plan-1".to_string(),
+            goal: "goal".to_string(),
+            step_id: "step-1".to_string(),
+            action_summary: format!("action {id}"),
+            step: Step::AddToUserPath {
+                directory: PathBuf::from("C:\\Tools"),
+            },
+            dry_run,
+            changes_made: Vec::new(),
+            rollback_hint: Some("hint".to_string()),
+            rollback_data: rollback,
+            rolled_back_tx_id: None,
+        }
+    }
+
+    fn os(mock: MockOsProvider) -> (Arc<MockOsProvider>, Arc<dyn OsProvider>) {
+        let mock = Arc::new(mock);
+        let dynamic: Arc<dyn OsProvider> = mock.clone();
+        (mock, dynamic)
+    }
+
+    #[test]
+    fn records_round_trip_and_latest_is_the_last_active_one() {
+        let (log, _dir) = logger();
+        assert!(log.read_all_transactions().expect("empty").is_empty());
+        log.record_transaction(&tx("a", false, None))
+            .expect("write a");
+        log.record_transaction(&tx("b", false, None))
+            .expect("write b");
+        assert_eq!(log.read_all_transactions().expect("read").len(), 2);
+        assert_eq!(
+            log.get_latest_transaction()
+                .expect("latest")
+                .expect("some")
+                .tx_id,
+            "b"
+        );
+        assert!(log.get_transaction_by_id("a").expect("find").is_some());
+        assert!(log.get_transaction_by_id("zzz").expect("find").is_none());
+    }
+
+    #[test]
+    fn corrupt_log_lines_are_an_error_not_silently_skipped() {
+        let (log, _dir) = logger();
+        std::fs::write(log.log_path(), "{not json}\n").expect("write");
+        let err = log.read_all_transactions().expect_err("corrupt");
+        assert!(err
+            .to_string()
+            .contains("Corrupt state log entry at line 1"));
+    }
+
+    #[tokio::test]
+    async fn path_backup_restores_the_previous_user_path() {
+        let (log, _dir) = logger();
+        let (mock, os) = os(MockOsProvider::new().with_path_entry("C:\\Existing"));
+        let added = PathBuf::from("C:\\Tools");
+        let previous = mock.add_to_user_path(&added).await.expect("add");
+        assert!(mock
+            .refresh_and_get_path()
+            .await
+            .expect("path")
+            .contains(&added));
+
+        let record = tx(
+            "p",
+            false,
+            Some(RollbackData::PathBackup {
+                previous_path: previous,
+                added_directory: added.clone(),
+            }),
+        );
+        log.record_transaction(&record).expect("write");
+        let message = log
+            .rollback_transaction(&record, &os)
+            .await
+            .expect("rollback");
+
+        assert!(message.contains("Post-Undo Verified: Passed"), "{message}");
+        let path = mock.refresh_and_get_path().await.expect("path");
+        assert!(!path.contains(&added));
+        assert!(path.contains(&PathBuf::from("C:\\Existing")));
+    }
+
+    #[tokio::test]
+    async fn file_download_rollback_deletes_the_file_and_tolerates_a_missing_one() {
+        let (log, dir) = logger();
+        let (_, os) = os(MockOsProvider::new());
+        let file = dir.path().join("artifact.bin");
+        std::fs::write(&file, b"payload").expect("write");
+        let record = tx(
+            "f",
+            false,
+            Some(RollbackData::FileDownload {
+                destination: file.clone(),
+            }),
+        );
+        let message = log
+            .rollback_transaction(&record, &os)
+            .await
+            .expect("rollback");
+        assert!(!file.exists());
+        assert!(message.contains("Deleted downloaded artifact"));
+
+        let again = tx(
+            "f2",
+            false,
+            Some(RollbackData::FileDownload { destination: file }),
+        );
+        let message = log
+            .rollback_transaction(&again, &os)
+            .await
+            .expect("rollback");
+        assert!(message.contains("already removed"));
+    }
+
+    #[tokio::test]
+    async fn isolated_env_rollback_removes_the_directory_tree() {
+        let (log, dir) = logger();
+        let (_, os) = os(MockOsProvider::new());
+        let env = dir.path().join("venv");
+        std::fs::create_dir_all(env.join("Scripts")).expect("mkdir");
+        std::fs::write(env.join("Scripts").join("python.exe"), b"x").expect("write");
+        let record = tx(
+            "e",
+            false,
+            Some(RollbackData::IsolatedEnv { path: env.clone() }),
+        );
+        let message = log
+            .rollback_transaction(&record, &os)
+            .await
+            .expect("rollback");
+        assert!(!env.exists());
+        assert!(message.contains("Cleaned up isolated environment"));
+    }
+
+    #[tokio::test]
+    async fn created_paths_rollback_removes_files_and_folders_unless_dry_run() {
+        let (log, dir) = logger();
+        let (_, os) = os(MockOsProvider::new());
+        let file = dir.path().join("mod.jar");
+        let folder = dir.path().join("tool");
+        std::fs::write(&file, b"x").expect("write");
+        std::fs::create_dir_all(&folder).expect("mkdir");
+        let paths = vec![file.clone(), folder.clone()];
+
+        let dry = tx(
+            "d",
+            true,
+            Some(RollbackData::CreatedPaths {
+                paths: paths.clone(),
+            }),
+        );
+        let message = log
+            .rollback_transaction(&dry, &os)
+            .await
+            .expect("dry rollback");
+        assert!(message.starts_with("[Dry Run] Would delete"));
+        assert!(file.exists() && folder.exists());
+
+        let live = tx("l", false, Some(RollbackData::CreatedPaths { paths }));
+        let message = log
+            .rollback_transaction(&live, &os)
+            .await
+            .expect("rollback");
+        assert!(message.contains("Post-Undo Verified: Passed"));
+        assert!(!file.exists() && !folder.exists());
+    }
+
+    #[tokio::test]
+    async fn package_rollback_runs_the_exact_uninstall_argv() {
+        let (log, _dir) = logger();
+        let (mock, os) = os(MockOsProvider::new()
+            .with_binary("winget", "C:\\Windows\\winget.exe")
+            .on("winget", &["uninstall"], ok("done")));
+        let data = RollbackData::PackageInstall {
+            ecosystem: "winget".to_string(),
+            package_id: "Git.Git".to_string(),
+            uninstall_command: None,
+            uninstall_argv: Some(vec![
+                "winget".into(),
+                "uninstall".into(),
+                "--id".into(),
+                "Git.Git".into(),
+                "--exact".into(),
+            ]),
+        };
+        let record = tx("pkg", false, Some(data));
+        let message = log
+            .rollback_transaction(&record, &os)
+            .await
+            .expect("rollback");
+        assert!(
+            message.contains("Successfully uninstalled package Git.Git"),
+            "{message}"
+        );
+        let calls = mock.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].args,
+            vec!["uninstall", "--id", "Git.Git", "--exact"]
+        );
+    }
+
+    #[tokio::test]
+    async fn package_rollback_reports_failures_and_missing_binaries_honestly() {
+        let (log, _dir) = logger();
+        let data = |argv: &[&str]| RollbackData::PackageInstall {
+            ecosystem: "winget".to_string(),
+            package_id: "Foo.Bar".to_string(),
+            uninstall_command: None,
+            uninstall_argv: Some(argv.iter().map(|s| s.to_string()).collect()),
+        };
+
+        let (_, os_failing) = os(MockOsProvider::new()
+            .with_binary("winget", "C:\\Windows\\winget.exe")
+            .on(
+                "winget",
+                &["uninstall"],
+                crate::os::mock::fail(1, "no such package"),
+            ));
+        let message = log
+            .rollback_transaction(
+                &tx(
+                    "fail",
+                    false,
+                    Some(data(&["winget", "uninstall", "--id", "Foo.Bar"])),
+                ),
+                &os_failing,
+            )
+            .await
+            .expect("rollback");
+        assert!(
+            message.contains("exit Some(1)") && message.contains("no such package"),
+            "{message}"
+        );
+
+        let (mock_missing, os_missing) = os(MockOsProvider::new());
+        let message = log
+            .rollback_transaction(
+                &tx("missing", false, Some(data(&["winget", "uninstall"]))),
+                &os_missing,
+            )
+            .await
+            .expect("rollback");
+        assert!(message.contains("not found on PATH"), "{message}");
+        assert!(mock_missing.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn package_rollback_in_dry_run_never_runs_a_command() {
+        let (log, _dir) = logger();
+        let (mock, os) = os(MockOsProvider::new().with_binary("winget", "C:\\Windows\\winget.exe"));
+        let data = RollbackData::PackageInstall {
+            ecosystem: "winget".to_string(),
+            package_id: "Git.Git".to_string(),
+            uninstall_command: Some("winget uninstall --id Git.Git".to_string()),
+            uninstall_argv: None,
+        };
+        let message = log
+            .rollback_transaction(&tx("dry", true, Some(data)), &os)
+            .await
+            .expect("rollback");
+        assert!(message.starts_with("[Dry Run] Would uninstall Git.Git"));
+        assert!(mock.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rollback_without_data_says_so_and_still_records_the_undo() {
+        let (log, _dir) = logger();
+        let (_, os) = os(MockOsProvider::new());
+        let record = tx("none", false, None);
+        log.record_transaction(&record).expect("write");
+        let message = log
+            .rollback_transaction(&record, &os)
+            .await
+            .expect("rollback");
+        assert!(message.contains("No rollback data attached"));
+        assert!(message.contains("hint"));
+        assert!(log.is_transaction_rolled_back("none").expect("check"));
+    }
+
+    #[tokio::test]
+    async fn rollback_is_idempotent_and_hides_the_transaction_from_active_list() {
+        let (log, dir) = logger();
+        let (_, os) = os(MockOsProvider::new());
+        let file = dir.path().join("a.bin");
+        std::fs::write(&file, b"x").expect("write");
+        let first = tx(
+            "one",
+            false,
+            Some(RollbackData::FileDownload { destination: file }),
+        );
+        log.record_transaction(&first).expect("write");
+        log.record_transaction(&tx("two", false, None))
+            .expect("write");
+
+        log.rollback_transaction(&first, &os)
+            .await
+            .expect("rollback");
+        let again = log
+            .rollback_transaction(&first, &os)
+            .await
+            .expect("second rollback");
+        assert!(again.contains("already rolled back"));
+
+        let all = log.read_all_transactions().expect("read");
+        assert_eq!(all.iter().filter(|t| t.tx_id == "undo-one").count(), 1);
+        let active: Vec<_> = log
+            .get_active_transactions()
+            .expect("active")
+            .into_iter()
+            .map(|t| t.tx_id)
+            .collect();
+        assert_eq!(active, vec!["two"]);
     }
 }

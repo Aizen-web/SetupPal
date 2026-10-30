@@ -255,7 +255,10 @@ mod tests {
 
     #[test]
     fn blank_provider_value_counts_as_unset() {
-        assert_eq!(select_provider(Some("  "), false).unwrap(), ProviderKind::Nim);
+        assert_eq!(
+            select_provider(Some("  "), false).unwrap(),
+            ProviderKind::Nim
+        );
     }
 
     #[test]

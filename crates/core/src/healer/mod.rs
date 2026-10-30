@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::config::CoreError;
 use crate::events::{AgentEvent, EventBus};
@@ -129,10 +129,7 @@ impl Healer {
             .await?;
 
         // 3. Mandatory Zero-Trust Safety Gate
-        let safety_report = self
-            .safety_engine
-            .evaluate_plan(&remediation_plan)
-            .await?;
+        let safety_report = self.safety_engine.evaluate_plan(&remediation_plan).await?;
 
         // 4. Emit SelfHealPlanProposed event
         self.events.emit(AgentEvent::SelfHealPlanProposed {
@@ -171,5 +168,202 @@ impl Healer {
             .await?;
 
         Ok(Some(summary))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::adapters::AdapterRegistry;
+    use crate::llm::mock::{llm_plan, sample_profile, verify_step, MockLlmClient, RecordedLlmCall};
+    use crate::os::mock::MockOsProvider;
+    use crate::safety::osv::OsvClient;
+    use crate::safety::VulnerabilitySummary;
+    use crate::state::StateLogger;
+    use crate::types::{AllowedBinary, Ecosystem, PlanSource, Step};
+    use crate::verifier::Verifier;
+
+    struct CleanOsv;
+
+    #[async_trait]
+    impl OsvClient for CleanOsv {
+        async fn query_package(
+            &self,
+            _ecosystem: Ecosystem,
+            _package_name: &str,
+            _version: Option<&str>,
+        ) -> Result<Vec<VulnerabilitySummary>, CoreError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn engine(events: &EventBus) -> Arc<SafetyEngine> {
+        Arc::new(SafetyEngine::new(
+            AdapterRegistry::new(),
+            Arc::new(CleanOsv),
+            None,
+            events.clone(),
+        ))
+    }
+
+    fn failure(attempt: u8) -> FailureContext {
+        FailureContext::new(
+            "step-2",
+            Some(1),
+            "partial output",
+            "Access is denied",
+            sample_profile(),
+            vec![verify_step("step-1", AllowedBinary::Git)],
+            attempt,
+        )
+    }
+
+    fn executor(os: Arc<MockOsProvider>, events: &EventBus) -> Executor {
+        let log =
+            std::env::temp_dir().join(format!("setuppal-heal-{}.jsonl", uuid::Uuid::new_v4()));
+        Executor::new(
+            AdapterRegistry::with_system_defaults(os.clone()),
+            os.clone(),
+            StateLogger::new(log, events.clone()),
+            Verifier::new(os, events.clone()),
+            events.clone(),
+        )
+    }
+
+    fn green_fix() -> Plan {
+        llm_plan("fix", vec![verify_step("fix-1", AllowedBinary::Git)])
+    }
+
+    fn red_fix() -> Plan {
+        llm_plan(
+            "fix",
+            vec![crate::types::PlannedStep {
+                id: "fix-1".to_string(),
+                description: "Verify a download".to_string(),
+                step: Step::VerifyHash {
+                    file_path: PathBuf::from("installer.exe"),
+                    expected_sha256: "0".repeat(64),
+                },
+            }],
+        )
+    }
+
+    #[test]
+    fn diagnostic_text_carries_the_real_failure() {
+        let text = failure(1).formatted_diagnostic();
+        assert!(text.contains("Failed Step: step-2"));
+        assert!(text.contains("Access is denied"));
+        assert!(text.contains("partial output"));
+        assert!(text.contains("step-1"));
+    }
+
+    #[tokio::test]
+    async fn remediation_goes_through_the_model_then_the_safety_gate() {
+        let events = EventBus::default();
+        let mut rx = events.subscribe();
+        let llm = Arc::new(MockLlmClient::new().with_remediation(green_fix()));
+        let healer = Healer::new(llm.clone(), engine(&events), events.clone());
+
+        let (plan, report) = healer
+            .diagnose_and_propose("install git", &failure(1))
+            .await
+            .expect("no error")
+            .expect("a proposal");
+
+        assert_eq!(
+            plan.source,
+            PlanSource::Healer {
+                failed_step_id: "step-2".to_string(),
+                attempt: 1
+            }
+        );
+        assert_eq!(report.overall_rating, RiskRating::Green);
+        match &llm.calls()[0] {
+            RecordedLlmCall::Remediation {
+                failed_step_id,
+                diagnostic,
+                attempt,
+                ..
+            } => {
+                assert_eq!(failed_step_id, "step-2");
+                assert!(diagnostic.contains("Access is denied"));
+                assert_eq!(*attempt, 1);
+            }
+            other => panic!("unexpected call {other:?}"),
+        }
+        let (mut triggered, mut proposed) = (false, false);
+        while let Ok(event) = rx.try_recv() {
+            triggered |= matches!(event, AgentEvent::SelfHealTriggered { .. });
+            proposed |= matches!(event, AgentEvent::SelfHealPlanProposed { .. });
+        }
+        assert!(triggered && proposed);
+    }
+
+    #[tokio::test]
+    async fn attempts_past_the_limit_do_not_call_the_model() {
+        let events = EventBus::default();
+        let llm = Arc::new(MockLlmClient::new().with_remediation(green_fix()));
+        let healer = Healer::new(llm.clone(), engine(&events), events).with_max_attempts(1);
+        let proposal = healer
+            .diagnose_and_propose("g", &failure(2))
+            .await
+            .expect("no error");
+        assert!(proposal.is_none());
+        assert!(llm.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn model_failure_is_reported_not_hidden() {
+        let events = EventBus::default();
+        let llm = Arc::new(MockLlmClient::new().with_remediation_error("rate limited"));
+        let healer = Healer::new(llm, engine(&events), events);
+        let err = healer
+            .diagnose_and_propose("g", &failure(1))
+            .await
+            .expect_err("llm error");
+        assert!(err.to_string().contains("rate limited"));
+    }
+
+    #[tokio::test]
+    async fn red_remediation_is_blocked_and_never_executed() {
+        let events = EventBus::default();
+        let os = Arc::new(MockOsProvider::new());
+        let llm = Arc::new(MockLlmClient::new().with_remediation(red_fix()));
+        let healer = Healer::new(llm, engine(&events), events.clone());
+        let options = ExecutionOptions {
+            dry_run: true,
+            auto_approve_green: true,
+            ..ExecutionOptions::default()
+        };
+        let outcome = healer
+            .recover_and_execute(&executor(os.clone(), &events), "g", &failure(1), &options)
+            .await
+            .expect("no error");
+        assert!(outcome.is_none());
+        assert!(os.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn green_remediation_executes_through_the_executor() {
+        let events = EventBus::default();
+        let os = Arc::new(MockOsProvider::new());
+        let llm = Arc::new(MockLlmClient::new().with_remediation(green_fix()));
+        let healer = Healer::new(llm, engine(&events), events.clone());
+        let options = ExecutionOptions {
+            dry_run: true,
+            auto_approve_green: true,
+            ..ExecutionOptions::default()
+        };
+        let summary = healer
+            .recover_and_execute(&executor(os, &events), "g", &failure(1), &options)
+            .await
+            .expect("no error")
+            .expect("ran");
+        assert_eq!(summary.step_results.len(), 1);
+        assert!(summary.step_results[0].executed);
     }
 }
