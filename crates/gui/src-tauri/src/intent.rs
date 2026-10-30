@@ -107,7 +107,9 @@ pub struct IntentStreamFilter {
     hold: String,
     capturing: bool,
     intent_body: String,
-    /// Visible reply with the intent fence removed (or never present).
+    /// Second stage: finds unfenced `{"kind":...}` objects the model forgot to fence.
+    loose: LooseJsonFilter,
+    /// Visible reply with every intent removed (or never present).
     visible: String,
 }
 
@@ -118,6 +120,14 @@ impl IntentStreamFilter {
 
     /// Feed a provider delta. Returns the slice that is safe to show the user.
     pub fn push(&mut self, chunk: &str) -> String {
+        let fenced_safe = self.push_fenced(chunk);
+        let shown = self.loose.push(&fenced_safe);
+        self.visible.push_str(&shown);
+        shown
+    }
+
+    /// First stage: hold back a trailing `setuppal-intent` fence.
+    fn push_fenced(&mut self, chunk: &str) -> String {
         if chunk.is_empty() {
             return String::new();
         }
@@ -144,7 +154,6 @@ impl IntentStreamFilter {
                 FenceDecision::NeedMore => break,
                 FenceDecision::NotIntent { release_up_to } => {
                     forward.push_str(&self.hold[..release_up_to]);
-                    self.visible.push_str(&self.hold[..release_up_to]);
                     self.full.push_str(&self.hold[..release_up_to]);
                     self.hold = self.hold[release_up_to..].to_string();
                     if release_up_to == 0 {
@@ -154,7 +163,6 @@ impl IntentStreamFilter {
                 }
                 FenceDecision::IsIntent { open_at } => {
                     forward.push_str(&self.hold[..open_at]);
-                    self.visible.push_str(&self.hold[..open_at]);
                     self.full.push_str(&self.hold[..open_at]);
                     let after_open = &self.hold[open_at + FENCE_OPEN.len()..];
                     // Consume optional newline right after the language tag.
@@ -176,21 +184,197 @@ impl IntentStreamFilter {
         forward
     }
 
-    /// Flush remaining hold buffer and parse any captured intent JSON.
+    /// Flush remaining hold buffers and parse any captured intent JSON.
     pub fn finish(mut self) -> (String, Result<Option<SetupIntent>, IntentParseError>) {
         if !self.capturing && !self.hold.is_empty() {
-            // Incomplete fence marker at EOF — show it (not a real intent block).
-            self.visible.push_str(&self.hold);
-            self.full.push_str(&self.hold);
-            self.hold.clear();
+            // Incomplete fence marker at EOF: show it (not a real intent block).
+            let rest = std::mem::take(&mut self.hold);
+            self.full.push_str(&rest);
+            let shown = self.loose.push(&rest);
+            self.visible.push_str(&shown);
         }
+        let (tail, loose_json) = std::mem::take(&mut self.loose).finish();
+        self.visible.push_str(&tail);
         let visible = trim_trailing_blank_lines(&self.visible);
-        let intent = if self.intent_body.trim().is_empty() && !self.capturing {
-            Ok(None)
-        } else {
+        let intent = if !self.intent_body.trim().is_empty() || self.capturing {
             parse_intent_json(&self.intent_body).map(Some)
+        } else if let Some(json) = loose_json {
+            parse_intent_json(&json).map(Some)
+        } else {
+            Ok(None)
         };
         (visible, intent)
+    }
+}
+
+/// Second stage. Holds back a line-start `{...}` object whose `kind` is `install` or `manual`
+/// and drops it only when nothing but whitespace follows. Anything else (code blocks, other
+/// JSON, text after it) is released unchanged.
+#[derive(Debug)]
+struct LooseJsonFilter {
+    at_line_start: bool,
+    in_code: bool,
+    fence_probe: String,
+    /// Text held back since a candidate `{` (empty when not holding).
+    pending: String,
+    depth: u32,
+    in_string: bool,
+    escaped: bool,
+    /// True once the first non-space character after the opening brace has been checked.
+    key_checked: bool,
+    /// The object closed and is a known intent; waiting to see if only whitespace follows.
+    closed: bool,
+    trailing_ws: String,
+}
+
+impl Default for LooseJsonFilter {
+    fn default() -> Self {
+        Self {
+            at_line_start: true,
+            in_code: false,
+            fence_probe: String::new(),
+            pending: String::new(),
+            depth: 0,
+            in_string: false,
+            escaped: false,
+            key_checked: false,
+            closed: false,
+            trailing_ws: String::new(),
+        }
+    }
+}
+
+/// Longest object we hold back before deciding it is ordinary text.
+const MAX_LOOSE_JSON_CHARS: usize = 4000;
+
+fn is_known_intent_json(raw: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_owned))
+        .is_some_and(|k| k == "install" || k == "manual")
+}
+
+impl LooseJsonFilter {
+    fn push(&mut self, text: &str) -> String {
+        let mut out = String::new();
+        for c in text.chars() {
+            self.step(c, &mut out);
+        }
+        out
+    }
+
+    /// Give the held text back to the user as ordinary reply text.
+    fn release(&mut self, out: &mut String) {
+        out.push_str(&self.pending);
+        out.push_str(&self.trailing_ws);
+        self.pending.clear();
+        self.trailing_ws.clear();
+        self.depth = 0;
+        self.in_string = false;
+        self.escaped = false;
+        self.key_checked = false;
+        self.closed = false;
+        self.at_line_start = false;
+    }
+
+    fn step(&mut self, c: char, out: &mut String) {
+        if self.closed {
+            if c.is_whitespace() {
+                self.trailing_ws.push(c);
+            } else {
+                // Text follows the object, so it was not a trailing intent.
+                self.release(out);
+                self.step_plain(c, out);
+            }
+            return;
+        }
+        if self.pending.is_empty() {
+            self.step_plain(c, out);
+            return;
+        }
+        self.pending.push(c);
+        if self.pending.chars().count() > MAX_LOOSE_JSON_CHARS {
+            self.release(out);
+            return;
+        }
+        if !self.key_checked && !c.is_whitespace() {
+            self.key_checked = true;
+            if c != '"' {
+                // Not a JSON key, so this is not an intent object.
+                self.release(out);
+                return;
+            }
+        }
+        if self.in_string {
+            if self.escaped {
+                self.escaped = false;
+            } else if c == '\\' {
+                self.escaped = true;
+            } else if c == '"' {
+                self.in_string = false;
+            }
+            return;
+        }
+        match c {
+            '"' => self.in_string = true,
+            '{' => self.depth += 1,
+            '}' => {
+                self.depth -= 1;
+                if self.depth == 0 {
+                    if is_known_intent_json(&self.pending) {
+                        self.closed = true;
+                    } else {
+                        self.release(out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn step_plain(&mut self, c: char, out: &mut String) {
+        if c == '\n' {
+            self.at_line_start = true;
+            self.fence_probe.clear();
+            out.push(c);
+            return;
+        }
+        if self.at_line_start {
+            if c == ' ' || c == '\t' || c == '\r' {
+                out.push(c);
+                return;
+            }
+            if c == '`' {
+                self.fence_probe.push('`');
+                out.push(c);
+                if self.fence_probe == "```" {
+                    self.in_code = !self.in_code;
+                    self.fence_probe.clear();
+                    self.at_line_start = false;
+                }
+                return;
+            }
+            self.fence_probe.clear();
+            self.at_line_start = false;
+            if c == '{' && !self.in_code {
+                self.pending.push('{');
+                self.depth = 1;
+                return;
+            }
+        }
+        out.push(c);
+    }
+
+    /// Returns text still owed to the user plus the stripped intent JSON, if any.
+    fn finish(mut self) -> (String, Option<String>) {
+        let mut out = String::new();
+        if self.closed {
+            return (out, Some(self.pending.trim().to_string()));
+        }
+        if !self.pending.is_empty() {
+            self.release(&mut out);
+        }
+        (out, None)
     }
 }
 
@@ -397,6 +581,119 @@ mod tests {
         assert_eq!(visible, reply);
         assert_eq!(out, reply);
         assert_eq!(intent, Ok(None));
+    }
+
+    fn stream_chars(reply: &str) -> (String, String, Result<Option<SetupIntent>, IntentParseError>) {
+        let mut filter = IntentStreamFilter::new();
+        let mut forwarded = String::new();
+        let mut buf = [0u8; 4];
+        for ch in reply.chars() {
+            forwarded.push_str(&filter.push(ch.encode_utf8(&mut buf)));
+        }
+        let (visible, intent) = filter.finish();
+        (forwarded, visible, intent)
+    }
+
+    #[test]
+    fn unfenced_install_json_at_end_is_stripped_and_parsed() {
+        let reply = format!("Sounds good, installing it.\n\n{}", install_json());
+        let (forwarded, visible, intent) = stream_chars(&reply);
+        assert_eq!(visible, "Sounds good, installing it.");
+        assert!(!forwarded.contains('{'), "raw JSON leaked into deltas: {forwarded}");
+        assert!(matches!(intent, Ok(Some(SetupIntent::Install { .. }))));
+    }
+
+    #[test]
+    fn unfenced_manual_json_is_stripped_and_parsed() {
+        let body = r#"{"kind":"manual","item":"Steam","reason":"Needs a store login","alternatives":["7-Zip"]}"#;
+        let reply = format!("**Manual setup guide**\n1. Download Steam.\n{body}\n");
+        let (forwarded, visible, intent) = stream_chars(&reply);
+        assert_eq!(visible, "**Manual setup guide**\n1. Download Steam.");
+        assert!(!forwarded.contains("\"kind\""));
+        assert!(matches!(intent, Ok(Some(SetupIntent::Manual { .. }))));
+    }
+
+    #[test]
+    fn unfenced_json_works_in_a_single_chunk_and_with_braces_in_strings() {
+        let body = r#"{"kind":"install","goal":"a } tricky { goal \"quoted\""}"#;
+        let (visible, intent) = split_intent_block(&format!("Ok.\n{body}"));
+        assert_eq!(visible, "Ok.");
+        match intent.expect("parse ok").expect("intent") {
+            SetupIntent::Install { goal, .. } => assert!(goal.contains("tricky")),
+            _ => panic!("expected install"),
+        }
+    }
+
+    #[test]
+    fn unfenced_json_with_unknown_kind_or_no_kind_is_left_alone() {
+        for body in [
+            r#"{"kind":"other","goal":"x"}"#,
+            r#"{"name":"demo","version":"1"}"#,
+            "{}",
+            "{not json at all}",
+        ] {
+            let reply = format!("Example:\n{body}");
+            let (forwarded, visible, intent) = stream_chars(&reply);
+            assert_eq!(visible, reply, "body {body}");
+            assert_eq!(forwarded.trim_end(), reply, "body {body}");
+            assert_eq!(intent, Ok(None));
+        }
+    }
+
+    #[test]
+    fn unfenced_json_followed_by_more_text_is_not_stripped() {
+        let reply = format!("Config looks like:\n{}\nThat is all.", install_json());
+        let (_, visible, intent) = stream_chars(&reply);
+        assert_eq!(visible, reply);
+        assert_eq!(intent, Ok(None));
+    }
+
+    #[test]
+    fn json_inside_a_code_block_is_never_stripped() {
+        let reply = format!("Here:\n```json\n{}\n```", install_json());
+        let (forwarded, visible, intent) = stream_chars(&reply);
+        assert_eq!(visible, reply);
+        // The closing fence is held until the stream ends, then flushed into `visible`.
+        assert!(forwarded.contains(install_json()));
+        assert_eq!(intent, Ok(None));
+    }
+
+    #[test]
+    fn inline_json_mid_line_is_not_stripped() {
+        let reply = format!("Use {} as the payload", install_json());
+        let (_, visible, intent) = stream_chars(&reply);
+        assert_eq!(visible, reply);
+        assert_eq!(intent, Ok(None));
+    }
+
+    #[test]
+    fn unterminated_json_is_shown_not_swallowed() {
+        let reply = "Plan:\n{\"kind\":\"install\",\"goal\":\"typescri";
+        let (_, visible, intent) = stream_chars(reply);
+        assert_eq!(visible, reply);
+        assert_eq!(intent, Ok(None));
+    }
+
+    #[test]
+    fn invalid_unfenced_intent_is_stripped_without_an_intent() {
+        let (visible, intent) =
+            split_intent_block("Almost.\n{\"kind\":\"install\",\"goal\":\"ab\"}");
+        assert_eq!(visible, "Almost.");
+        assert!(matches!(intent, Err(IntentParseError::Validation(_))));
+    }
+
+    #[test]
+    fn fenced_intent_wins_and_plain_fences_still_pass_through() {
+        let reply = format!(
+            "Run:\n```powershell\nwinget install Git.Git\n```\nDone.\n\n```setuppal-intent\n{}\n```",
+            install_json()
+        );
+        let (_, visible, intent) = stream_chars(&reply);
+        assert_eq!(
+            visible,
+            "Run:\n```powershell\nwinget install Git.Git\n```\nDone."
+        );
+        assert!(matches!(intent, Ok(Some(SetupIntent::Install { .. }))));
     }
 
     #[test]

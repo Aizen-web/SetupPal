@@ -2432,3 +2432,5 @@
   .setting-row { flex-direction: column; align-items: flex-start; }
   .top-nav-left .speech-bubble { display: none; }
 }
+
+.dry-run-badge { background: var(--warning-soft, rgba(233, 185, 73, 0.18)); color: var(--warning, #e9b949); font-weight: 600; }

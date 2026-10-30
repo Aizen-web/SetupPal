@@ -278,7 +278,7 @@ function renderPlanCard(plan) {
           <h2 class="plan-title" id="plan-card-title">${esc(plan.title)}</h2>
           ${plan.subtitle ? `<p class="plan-subtitle">${esc(plan.subtitle)}</p>` : ''}
         </div>
-        <span class="plan-meta">${esc(meta)}</span>
+        <span class="plan-meta">${plan.dryRun ? '<span class="chip-tag dry-run-badge">Dry run: nothing is installed</span> ' : ''}${esc(meta)}</span>
       </div>
 
       <ol class="plan-steps-list">
@@ -365,7 +365,7 @@ function renderTerminal(state, isWorking) {
           <span class="dot dot-yellow"></span>
           <span class="dot dot-green"></span>
         </div>
-        <div class="terminal-title">Run log${plan?.title ? ` · ${esc(plan.title)}` : ''}</div>
+        <div class="terminal-title">Run log${plan?.dryRun ? ' · DRY RUN (nothing is installed)' : ''}${plan?.title ? ` · ${esc(plan.title)}` : ''}</div>
       </div>
       <div class="terminal-log-list" id="terminal-log-output" role="log" aria-label="Run log">
         ${logs.length === 0 ? `

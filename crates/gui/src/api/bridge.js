@@ -11,6 +11,7 @@ import { refreshKeyStatus } from '../state/key-status.js';
 import { sounds } from '../audio/sound-engine.js';
 import { pixelVoice } from '../mascot/voicelines.js';
 import confetti from 'canvas-confetti';
+import { labelRunText, runSummaryText, scanLogEntry } from './run-log.js';
 
 /** Map `/api/plan` (or remediation) JSON into the UI `activePlan` shape. */
 export function toActivePlan(data) {
@@ -78,6 +79,8 @@ export class BackendBridge {
     this.isBackendOnline = false;
     this.activeExecutionPlan = null;
     this.activeRunId = null;
+    /** True while the current run is a dry run (set from step_execution_started). */
+    this.runDryRun = false;
     this.chatControllers = new Map();
     this.chatQueues = new Map();
     this._connectionPromise = new Promise(resolve => {
@@ -149,19 +152,10 @@ export class BackendBridge {
 
       case 'scan_completed':
         if (payload?.profile) {
-          const tools = payload.profile.installed_tools || [];
-          if (tools.length) {
-            store.setState(s => ({
-              ...s,
-              terminalLogs: [
-                ...s.terminalLogs,
-                {
-                  id: Date.now() + Math.random(),
-                  text: `~ detected ${tools.length} installed tool${tools.length === 1 ? '' : 's'}`,
-                  type: 'info',
-                },
-              ],
-            }));
+          // The backend scans on every chat turn; log it once per conversation unless facts change.
+          const entry = scanLogEntry(store.getState().terminalLogs, payload.profile);
+          if (entry) {
+            store.setState(s => ({ ...s, terminalLogs: [...s.terminalLogs, entry] }));
           }
           store.setMascotState('idle', pixelVoice.line('idle'));
         }
@@ -214,6 +208,7 @@ export class BackendBridge {
         break;
 
       case 'step_execution_started':
+        this.runDryRun = Boolean(payload?.dry_run);
         sounds.play('task.start');
         store.beginRun();
         pixelVoice.trigger('step_progress');
@@ -225,10 +220,10 @@ export class BackendBridge {
           });
           return {
             ...s,
-            activePlan: { ...s.activePlan, status: 'running', tasks },
+            activePlan: { ...s.activePlan, status: 'running', tasks, dryRun: this.runDryRun },
             terminalLogs: [
               ...s.terminalLogs,
-              { id: Date.now() + Math.random(), text: `> [${payload?.step_id}] ${payload?.description}`, type: 'info' }
+              { id: Date.now() + Math.random(), text: labelRunText(`> [${payload?.step_id}] ${payload?.description}`, this.runDryRun), type: 'info' }
             ]
           };
         });
@@ -262,7 +257,9 @@ export class BackendBridge {
             activePlan: { ...s.activePlan, tasks },
             terminalLogs: [
               ...s.terminalLogs,
-              { id: Date.now() + Math.random(), text: `✓ [${payload?.step_id}] completed & verified cleanly`, type: 'green' }
+              { id: Date.now() + Math.random(), text: (payload?.receipt?.dry_run ?? this.runDryRun)
+                ? labelRunText(`✓ [${payload?.step_id}] simulated only: nothing was installed or changed`, true)
+                : `✓ [${payload?.step_id}] completed & verified cleanly`, type: 'green' }
             ]
           };
         });
@@ -282,7 +279,7 @@ export class BackendBridge {
             activePlan: s.activePlan ? { ...s.activePlan, tasks } : s.activePlan,
             terminalLogs: [
               ...s.terminalLogs,
-              { id: Date.now() + Math.random(), text: `⛔ BLOCKED: ${payload?.reason}`, type: 'error' }
+              { id: Date.now() + Math.random(), text: labelRunText(`⛔ BLOCKED: ${payload?.reason}`, this.runDryRun), type: 'error' }
             ]
           };
         });
@@ -301,7 +298,7 @@ export class BackendBridge {
             activePlan: s.activePlan ? { ...s.activePlan, tasks, status: 'failed' } : s.activePlan,
             terminalLogs: [
               ...s.terminalLogs,
-              { id: Date.now() + Math.random(), text: `✗ [${payload?.step_id}] ${payload?.error || 'failed'}`, type: 'error' }
+              { id: Date.now() + Math.random(), text: labelRunText(`✗ [${payload?.step_id}] ${payload?.error || 'failed'}`, this.runDryRun), type: 'error' }
             ]
           };
         });
@@ -742,6 +739,7 @@ export class BackendBridge {
     approvedStepIds = null,
     allowYellowSteps = null,
     startAtStepId = null,
+    dryRun = false,
   } = {}) {
     sounds.play('ui.click');
     pixelVoice.trigger('plan_approve');
@@ -790,7 +788,7 @@ export class BackendBridge {
       const result = await apiClient.executePlan({
         runId,
         planId,
-        dryRun: false,
+        dryRun,
         autoApproveGreen,
         approvedStepIds: greenIds,
         allowYellowSteps: yellowIds,
@@ -856,6 +854,33 @@ export class BackendBridge {
         });
         store.endRun();
         pixelVoice.trigger('warning_held');
+        this.refreshHistory();
+        return result;
+      }
+
+      const ranDry = Boolean(result?.dry_run ?? summary?.dry_run);
+      if (passed && ranDry) {
+        // A simulation: say so plainly and skip the celebration.
+        sounds.play('task.done');
+        const line = runSummaryText({ dryRun: true, passed: true, headline: result?.headline });
+        store.setState(s => ({
+          ...s,
+          activePlan: s.activePlan ? { ...s.activePlan, status: 'completed', dryRun: true } : s.activePlan,
+          terminalLogs: [...s.terminalLogs, { id: Date.now() + 99, text: line, type: 'yellow' }],
+          chatMessages: [
+            ...s.chatMessages,
+            {
+              id: 'a_' + Date.now(),
+              sender: 'assistant',
+              text: `**Dry run only.** ${escChat(result?.headline || line)}`,
+              options: [],
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              planAttached: false,
+            },
+          ],
+        }));
+        store.endRun();
+        store.setMascotState('idle', pixelVoice.line('idle'));
         this.refreshHistory();
         return result;
       }

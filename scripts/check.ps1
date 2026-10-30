@@ -10,6 +10,7 @@ try {
         @{ Name = "Animation registry"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:animations") },
         @{ Name = "Key migration"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:keys") },
         @{ Name = "Chat formatter"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:formatter") },
+        @{ Name = "Run log"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:run-log") },
         @{ Name = "Offline assets and CSP"; Command = "npm.cmd"; Args = @("--prefix", "crates/gui", "run", "check:offline") }
     )
 

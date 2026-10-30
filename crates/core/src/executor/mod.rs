@@ -124,6 +124,35 @@ pub struct PlanExecutionSummary {
     pub cancelled: bool,
 }
 
+impl PlanExecutionSummary {
+    /// One line the UI shows above the results. Dry runs are always called out so nobody
+    /// mistakes a simulation for a real install.
+    pub fn headline(&self) -> String {
+        let steps = self.step_results.len();
+        let plural = if steps == 1 { "" } else { "s" };
+        if self.dry_run {
+            let outcome = if self.cancelled {
+                "cancelled"
+            } else if self.halted_at_step_id.is_some() {
+                "paused for approval"
+            } else if self.overall_passed {
+                "finished"
+            } else {
+                "found a problem"
+            };
+            format!("DRY RUN {outcome}: {steps} step{plural} simulated. Nothing was installed or changed on this PC.")
+        } else if self.cancelled {
+            format!("Run cancelled after {steps} step{plural}.")
+        } else if self.halted_at_step_id.is_some() {
+            format!("Run paused for approval after {steps} step{plural}.")
+        } else if self.overall_passed {
+            format!("Run finished: {steps} step{plural} completed and verified.")
+        } else {
+            format!("Run failed after {steps} step{plural}.")
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StepExecutionResult {
     pub step_id: String,

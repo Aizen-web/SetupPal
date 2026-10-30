@@ -467,3 +467,53 @@ fn trusted_categories_cover_only_their_own_step_kinds() {
     assert!(!options.is_step_trusted(&npm));
     assert!(!options.is_step_trusted(&sample_step("x").step));
 }
+
+#[tokio::test]
+async fn dry_run_summary_headline_says_dry_run_and_nothing_changed() {
+    let plan = sample_plan(vec![sample_step("step-1")]);
+    let safety = plan_report(&[("step-1", RiskRating::Green)]);
+    let options = ExecutionOptions {
+        dry_run: true,
+        auto_approve_green: true,
+        ..ExecutionOptions::default()
+    };
+    let executor = test_executor();
+    let mut events = executor.events.subscribe();
+    let summary = executor
+        .execute_plan(&plan, &safety, &options)
+        .await
+        .expect("summary");
+    assert!(summary.dry_run);
+    let headline = summary.headline();
+    assert!(headline.starts_with("DRY RUN"), "{headline}");
+    assert!(headline.contains("Nothing was installed"), "{headline}");
+
+    let mut saw_started = false;
+    while let Ok(event) = events.try_recv() {
+        if let crate::events::AgentEvent::StepExecutionStarted { dry_run, .. } = event {
+            assert!(dry_run, "dry run steps must announce dry_run: true");
+            saw_started = true;
+        }
+    }
+    assert!(saw_started);
+}
+
+#[test]
+fn live_summary_headline_never_mentions_dry_run() {
+    let mut summary = super::PlanExecutionSummary {
+        plan_id: "p".into(),
+        goal: "g".into(),
+        dry_run: false,
+        step_results: vec![],
+        overall_passed: true,
+        toolchain_verification: None,
+        halted_at_step_id: None,
+        cancelled: false,
+    };
+    assert!(!summary.headline().to_ascii_lowercase().contains("dry run"));
+    summary.overall_passed = false;
+    assert!(summary.headline().starts_with("Run failed"));
+    summary.dry_run = true;
+    summary.halted_at_step_id = Some("s".into());
+    assert!(summary.headline().starts_with("DRY RUN paused"));
+}

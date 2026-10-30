@@ -620,7 +620,7 @@ fn describe_provider_status(status: StatusCode, model: &str) -> String {
 }
 
 /// Reported in the context viewer so a reply can be traced to the prompt that produced it.
-const PROMPT_VERSION: &str = "v22-intent-block";
+const PROMPT_VERSION: &str = "v23-intent-fence-strict";
 
 const STATIC_SYSTEM_PROMPT: &str = "\
 Role\n\
@@ -641,11 +641,11 @@ Manual setup guide\n\
 If out of scope, start with **Manual setup guide**. Say SetupPal only does unattended terminal setup and why this needs a manual install. Give short numbered steps. End with \"SetupPal can install instead:\" and 2 to 4 options.\n\
 \n\
 Ending a reply\n\
-When the user has agreed on what to install, end the reply with one fenced block, written exactly like this:\n\
+When the user has agreed on what to install, end the reply with one fenced block, written exactly like this, with the three backticks and the word setuppal-intent on their own lines:\n\
 ```setuppal-intent\n\
 {\"kind\":\"install\",\"goal\":\"typescript\"}\n\
 ```\n\
-For an out-of-scope item use {\"kind\":\"manual\",\"item\":\"Steam\",\"reason\":\"needs a store login\"}. Never output the block while still asking a question.\n\
+For an out-of-scope item use the same fence with {\"kind\":\"manual\",\"item\":\"Steam\",\"reason\":\"needs a store login\"}. Never write that JSON without the fence, and never output the block while still asking a question.\n\
 \n\
 Style\n\
 Plain words, short replies, markdown allowed, bold the key point. Don't introduce yourself unless asked. Never claim you installed or checked anything. Never send an empty reply.";
@@ -1510,6 +1510,9 @@ async fn execute_handler(
         "plan": plan,
         "safety": safety_report,
         "summary": summary,
+        "dry_run": summary.dry_run,
+        "mode": if summary.dry_run { "dry_run" } else { "live" },
+        "headline": summary.headline(),
         "remediation": remediation,
         "run_id": run_id,
     })))
